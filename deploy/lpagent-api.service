@@ -1,0 +1,19 @@
+[Unit]
+Description=LP Agent API (Aquarius analytics)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/lpagent
+Environment=RPC_URL=http://127.0.0.1:8003
+Environment=DATABASE_PATH=/opt/lpagent/data/lpagent.db
+Environment=INDEXER_DB_PATH=/opt/lpagent/data/pool-indexer.db
+Environment=BIND=0.0.0.0:3301
+Environment=RUST_LOG=info
+ExecStart=/opt/lpagent/target/release/api-server
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

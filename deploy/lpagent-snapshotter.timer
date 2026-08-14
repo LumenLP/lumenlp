@@ -1,0 +1,11 @@
+[Unit]
+Description=Run LP Agent snapshotter every 5 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Persistent=true
+Unit=lpagent-snapshotter.service
+
+[Install]
+WantedBy=timers.target

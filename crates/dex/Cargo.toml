@@ -1,0 +1,21 @@
+[package]
+name = "dex"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Multi-DEX LP clients for Stellar (Aquarius, Sushi, Phoenix, Soroswap, Comet)"
+
+[dependencies]
+metrics = { path = "../metrics" }
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+stellar-strkey = "0.0.13"
+stellar-xdr = { version = "23.0.0", features = ["curr", "serde", "base64"] }
+base64 = "0.22"
+hex = "0.4"
+rusqlite = { version = "0.32", features = ["bundled"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }

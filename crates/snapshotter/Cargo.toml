@@ -1,0 +1,18 @@
+[package]
+name = "snapshotter"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "snapshotter"
+path = "src/main.rs"
+
+[dependencies]
+dex = { path = "../dex" }
+metrics = { path = "../metrics" }
+anyhow.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

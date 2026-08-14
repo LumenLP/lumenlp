@@ -1,0 +1,16 @@
+.superpowers/
+.wrangler/
+node_modules/
+apps/web/node_modules/
+apps/web/.next/
+apps/web/out/
+target/
+.env
+.env.*
+!.env.example
+*.db
+*.sqlite
+data/
+.DS_Store
+.worktrees
+thirdparty

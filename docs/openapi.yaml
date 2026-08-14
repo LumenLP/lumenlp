@@ -1,0 +1,278 @@
+openapi: 3.0.3
+info:
+  title: LumenLP API
+  description: |
+    Stellar LP strategy toolchain — pools, positions, Copy LP queue, multi-DEX venue matrix.
+    No custody; drafts and analytics only unless the user signs.
+  version: 0.1.0
+servers:
+  - url: https://api.lumenlp.xyz
+    description: Production
+  - url: http://127.0.0.1:3301
+    description: Local
+paths:
+  /health:
+    get:
+      summary: Liveness
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+  /v1/venues:
+    get:
+      summary: Multi-DEX support matrix (DexAdaptor registry)
+      responses:
+        "200":
+          description: Venue rows with capabilities
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  venues:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/VenueRow"
+                  note:
+                    type: string
+  /v1/indexer/status:
+    get:
+      summary: Indexer cursor and counts
+      responses:
+        "200":
+          description: Indexer status
+  /v1/pools:
+    get:
+      summary: Ranked pools
+      parameters:
+        - in: query
+          name: limit
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Pool list
+  /v1/pools/{address}:
+    get:
+      summary: Pool detail
+      parameters:
+        - $ref: "#/components/parameters/PoolAddress"
+      responses:
+        "200":
+          description: Pool detail
+  /v1/positions:
+    get:
+      summary: Positions for an account
+      parameters:
+        - in: query
+          name: address
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Positions
+  /v1/lp/profile:
+    get:
+      summary: LP leader profile (positions + 7d/30d liquidity activity)
+      description: |
+        Scout Copy leaders: open Aquarius LP portfolio (XLM/USD), unclaimed fees,
+        first/last activity, and indexed deposit/withdraw/claim windows (7d + 30d).
+        Claimed fees are an earnings proxy — not full PnL.
+      parameters:
+        - in: query
+          name: address
+          required: true
+          schema:
+            type: string
+            description: Stellar G… account to analyze
+      responses:
+        "200":
+          description: Profile payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LpProfile"
+        "400":
+          description: Missing or invalid address
+  /v1/lp/leaders:
+    get:
+      summary: Ranked LP actors by claimed fees (Copy scouting board)
+      parameters:
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            default: 25
+        - in: query
+          name: window_days
+          schema:
+            type: integer
+            default: 30
+      responses:
+        "200":
+          description: Leader board
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  window_days: { type: integer }
+                  leaders:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/LeaderBoardRow"
+                  honesty: { type: string }
+  /v1/copy/sessions:
+    get:
+      summary: List copy sessions for follower
+      parameters:
+        - in: query
+          name: follower
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Sessions
+    post:
+      summary: Create copy session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCopySession"
+      responses:
+        "200":
+          description: Session created
+  /v1/copy/sessions/{id}/ops:
+    get:
+      summary: List copy ops (reconciles on read)
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+        - in: query
+          name: status
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Ops queue
+  /v1/copy/ops/{id}:
+    get:
+      summary: Get one copy op (scaled amounts)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Copy op
+        "404":
+          description: Not found
+components:
+  parameters:
+    PoolAddress:
+      name: address
+      in: path
+      required: true
+      schema:
+        type: string
+    SessionId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+  schemas:
+    VenueRow:
+      type: object
+      properties:
+        venue_id:
+          type: string
+          enum: [aquarius, sushi_v3, phoenix, soroswap_amm, comet, classic]
+        name:
+          type: string
+        status:
+          type: string
+          enum: [production, scaffold, deferred]
+        capabilities:
+          type: object
+          properties:
+            list_pools: { type: boolean }
+            positions: { type: boolean }
+            liquidity_events: { type: boolean }
+            quotes: { type: boolean }
+            draft_ops: { type: boolean }
+            copy_scale: { type: boolean }
+        notes:
+          type: string
+    CreateCopySession:
+      type: object
+      required: [follower_address, leader_address, coefficient]
+      properties:
+        follower_address: { type: string }
+        leader_address: { type: string }
+        coefficient: { type: number }
+        include_claims: { type: boolean }
+    LpProfile:
+      type: object
+      properties:
+        address: { type: string }
+        venue_id: { type: string }
+        first_activity_at: { type: integer, nullable: true }
+        last_activity_at: { type: integer, nullable: true }
+        portfolio:
+          type: object
+          properties:
+            net_worth_xlm: { type: number }
+            net_worth_usd: { type: number, nullable: true }
+            fees_unclaimed_xlm: { type: number }
+            fees_unclaimed_usd: { type: number, nullable: true }
+            il_est_avg: { type: number, nullable: true }
+            position_count: { type: integer }
+            cl_in_range: { type: integer }
+            cl_out_of_range: { type: integer }
+        windows:
+          type: object
+          properties:
+            "7d":
+              $ref: "#/components/schemas/ActivityWindow"
+            "30d":
+              $ref: "#/components/schemas/ActivityWindow"
+        activity_30d:
+          $ref: "#/components/schemas/ActivityWindow"
+        honesty: { type: string }
+        note: { type: string, nullable: true }
+    ActivityWindow:
+      type: object
+      properties:
+        event_count: { type: integer }
+        deposit_count: { type: integer }
+        withdraw_count: { type: integer }
+        claim_count: { type: integer }
+        deposit_quote_xlm: { type: number }
+        withdraw_quote_xlm: { type: number }
+        claim_quote_xlm: { type: number }
+        claim_quote_usd: { type: number, nullable: true }
+        distinct_pools: { type: integer }
+        net_liquidity_quote_xlm: { type: number }
+        avg_deposit_quote_xlm: { type: number, nullable: true }
+    LeaderBoardRow:
+      type: object
+      properties:
+        address: { type: string }
+        claim_quote_xlm: { type: number }
+        claim_quote_usd: { type: number, nullable: true }
+        deposit_quote_xlm: { type: number }
+        claim_count: { type: integer }
+        deposit_count: { type: integer }
+        distinct_pools: { type: integer }

@@ -1,0 +1,8 @@
+[package]
+name = "metrics"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Pure LP math: TVL, fee APR, CP/stable/CL value and IL"
+
+[dependencies]

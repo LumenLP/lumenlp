@@ -1,0 +1,14 @@
+[Unit]
+Description=LP Agent snapshotter (one Aquarius ingest cycle)
+After=network.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/lpagent
+Environment=RPC_URL=http://127.0.0.1:8003
+Environment=DATABASE_PATH=/opt/lpagent/data/lpagent.db
+Environment=SNAPSHOT_TOP_N=40
+Environment=RUST_LOG=info
+ExecStart=/opt/lpagent/target/release/snapshotter
+Nice=10

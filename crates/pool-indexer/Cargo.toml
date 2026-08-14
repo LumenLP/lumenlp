@@ -1,0 +1,24 @@
+[package]
+name = "pool-indexer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "pool-indexer"
+path = "src/main.rs"
+
+[dependencies]
+dex = { path = "../dex" }
+metrics = { path = "../metrics" }
+anyhow.workspace = true
+base64 = "0.22"
+serde.workspace = true
+serde_json.workspace = true
+stellar-strkey = "0.0.13"
+stellar-xdr = { version = "23.0.0", features = ["curr", "serde", "base64"] }
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
