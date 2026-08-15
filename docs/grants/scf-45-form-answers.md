@@ -22,13 +22,13 @@ This is a user-facing Stellar DeFi product. It is not only an analytics API and 
 
 Use the public GitHub URL after confirming the repository is accessible:
 
-`https://github.com/[GITHUB_OWNER]/[GITHUB_REPOSITORY]/blob/main/docs/architecture.md`
+`https://github.com/LumenLP/lumenlp/blob/main/docs/architecture.md`
 
 The document must be public and should describe the current RPC/indexer/API architecture, Copy Engine, Soroban Policy, relayer, trust boundaries, and LumAgg boundary.
 
 ### GitHub URL
 
-`https://github.com/[GITHUB_OWNER]/[GITHUB_REPOSITORY]`
+`https://github.com/LumenLP/lumenlp`
 
 ### Video URL
 
@@ -44,15 +44,15 @@ Do not present the future automatic execution as already live. Label the current
 
 ## Products & Services
 
-LumenLP Copy LP Studio is a non-custodial automation product for Stellar liquidity providers. It starts with Aquarius and connects pool discovery, observable LP behavior, and automated liquidity operations in one workflow.
+LumenLP Copy LP Studio is a non-custodial automation product for Stellar liquidity providers. It connects pool discovery across Stellar DEXes, observable LP behavior, and automated liquidity operations in one workflow. Aquarius is the first supported venue, with the architecture designed to extend to other Stellar DEX pools.
 
-Users can compare Aquarius pools using TVL, liquidity, fees, Fee/TVL, and recent activity. They can then inspect Leader profiles showing claimed fees, deposits, withdrawals, pools touched, current exposure, and source on-chain events. These metrics are presented as observable data signals rather than guaranteed profit or complete PnL.
+Users can compare Stellar DEX pools using TVL, liquidity, fees, Fee/TVL, and recent activity. They can then inspect Leader profiles showing claimed fees, deposits, withdrawals, pools touched, current exposure, and source on-chain events. These metrics are presented as observable data signals rather than guaranteed profit or complete PnL.
 
-After selecting a Leader, a user configures a copy coefficient and safety limits. LumenLP creates copy intents for supported Aquarius LP actions, initially deposits, withdrawals, and fee claims. The final product will execute these operations through a Soroban policy-controlled account and a LumenLP relayer. The policy limits allowed pools and entrypoints, maximum amount per operation, daily exposure, slippage, expiry, and replay. Users can pause or disarm the policy and LumenLP never stores their private keys or operates a custodial vault.
+After selecting a Leader, a user configures a copy coefficient and safety limits. LumenLP creates copy intents for supported LP actions across integrated Stellar DEX pools, initially deposits, withdrawals, and fee claims. The final product will execute these operations through a Soroban policy-controlled account and a LumenLP relayer. The policy limits allowed pools and entrypoints, maximum amount per operation, daily exposure, slippage, expiry, and replay. Users can pause or disarm the policy and LumenLP never stores their private keys or operates a custodial vault.
 
-Leader swaps are not mirrored because a swap may be a fee exit, a position adjustment, or an unrelated trade. Optional fee-token conversion is handled as a separate, explicitly authorized LumAgg flow.
+Leader swaps are not mirrored because a swap may be a fee exit, a position adjustment, or an unrelated trade. Copy LP focuses on verifiable liquidity actions rather than arbitrary wallet activity.
 
-The current mainnet product already includes Aquarius pool discovery, snapshots, event indexing, Leader profiles, and a user-reviewed scaled Copy LP queue. The Build Award will turn this working MVP into a testnet-validated and limited-mainnet automated product.
+The current mainnet product already includes pool discovery, snapshots, event indexing, Leader profiles, and a user-reviewed scaled Copy LP queue, with Aquarius as the first production venue. The Build Award will turn this working MVP into a testnet-validated and limited-mainnet automated product that can expand across Stellar DEX pools.
 
 ## Traction Evidence
 

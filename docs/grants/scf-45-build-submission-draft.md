@@ -334,7 +334,7 @@ The budget should be tied to completed, verifiable deliverables rather than gene
 - Website: https://lumenlp.xyz
 - API health: https://api.lumenlp.xyz/health
 - API venues: https://api.lumenlp.xyz/v1/venues
-- Repository: `[PUBLIC_REPOSITORY_URL]`
+- Repository: https://github.com/LumenLP/lumenlp
 - Architecture: `docs/architecture.md`
 - API specification: `docs/openapi.yaml`
 

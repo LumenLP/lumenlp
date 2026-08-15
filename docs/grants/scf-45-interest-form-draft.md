@@ -7,7 +7,7 @@
 - **Project name:** LumenLP
 - **Website:** https://lumenlp.xyz
 - **API:** https://api.lumenlp.xyz
-- **Repository:** [PUBLIC_REPOSITORY_URL]
+- **Repository:** https://github.com/LumenLP/lumenlp
 - **Primary contact:** [NAME]
 - **Contact email:** [EMAIL]
 - **Team / legal entity:** [TEAM_OR_ENTITY]

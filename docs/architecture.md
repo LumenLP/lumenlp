@@ -64,7 +64,7 @@ The production services run on `88.198.16.144`. The web application is staticall
 ## Repository Structure
 
 ```text
-lpagent/
+lumenlp/
 ├── apps/web/                  Next.js reference web application
 ├── crates/
 │   ├── api-server/             Axum API and application orchestration
@@ -195,6 +195,116 @@ Leader rankings use observable indexed activity such as:
 - event frequency and recency.
 
 These are data signals, not a promise of profit. Unless cost basis and complete history are available, the UI must not label them as complete PnL, win rate, or guaranteed earnings.
+
+## Planned Stellar Integration
+
+LumenLP is a Stellar-specific application. Its core workflow integrates directly with Stellar mainnet contracts and Soroban infrastructure rather than importing generic DeFi data from an external chain.
+
+### Aquarius AMM integration
+
+Aquarius is the first and current production venue. LumenLP integrates with Aquarius in four ways:
+
+1. **Pool discovery**
+   - Read the Aquarius router through Soroban RPC.
+   - Discover pool addresses from the router's token-set catalogue.
+   - Read each pool's token list, pool type, fee configuration, reserves, and total shares.
+   - Support the current Aquarius pool families: constant-product AMM, stable pools, and concentrated liquidity pools where the required state is available.
+
+2. **Pool analytics**
+   - Hydrate pool state from contract simulation and RPC reads.
+   - Build an XLM-normalized price book from native-XLM and connected pool paths.
+   - Compute TVL from on-chain reserves and the price book.
+   - Persist periodic snapshots for historical TVL, fee, Fee/TVL, and activity windows.
+
+3. **Liquidity event indexing**
+   - Scan Aquarius contract events with Soroban RPC `getEvents`.
+   - Parse deposit, withdrawal, claim, reserve-update, and trade events.
+   - Persist source ledger, transaction hash, contract, event topics, actor, token amounts, and event kind.
+   - Use the indexed actor field to build Leader profiles and Copy LP source events.
+
+4. **LP operation execution**
+   - Generate or execute only declared Aquarius LP entrypoints: deposit, withdrawal, and fee claim in the initial automation scope.
+   - Add concentrated-liquidity open, close, and adjust operations only after reliable range and position identifiers are available.
+   - Do not mirror arbitrary Leader swaps.
+
+### Soroban RPC integration
+
+Soroban RPC is the source of truth for the current Stellar implementation:
+
+- `getHealth` determines the available ledger range and RPC retention boundary.
+- `getLatestLedger` advances the indexer cursor.
+- `getEvents` supplies Aquarius contract events in bounded ledger ranges.
+- Contract simulation and read calls hydrate pool state, reserves, fees, shares, and positions.
+- Transaction simulation and submission are used by the future policy-controlled execution path.
+
+The production server uses the local RPC endpoint on `88.198.16.144`. The indexer stores its cursor and never assumes that public RPC can provide history outside its retention window. If an event is older than the available RPC range, LumenLP marks the data as unavailable rather than inventing history.
+
+### Soroban Policy and automated execution
+
+The grant-funded automation layer will use Soroban authorization to constrain what LumenLP can execute for a follower account.
+
+The policy will restrict:
+
+- Aquarius contract addresses and allowed pool addresses;
+- allowed entrypoints: deposit, withdrawal, and claim;
+- copy coefficient and integer amount scaling rules;
+- maximum quote value per operation;
+- maximum quote value per UTC day;
+- slippage, nonce, and intent expiry;
+- pause, resume, and disarm state.
+
+The execution sequence is:
+
+```text
+Aquarius event on Stellar
+        │ observed by LumenLP Indexer
+        ▼
+Copy Engine creates source-linked intent
+        │ leader amounts × configured coefficient
+        ▼
+Soroban Policy checks permissions and limits
+        │ fail closed if any check fails
+        ▼
+LumenLP Relayer submits the approved transaction
+        ▼
+Aquarius contract executes the LP operation
+        ▼
+LumenLP records ledger, transaction hash, and final status
+```
+
+The relayer is not a custodian and cannot widen the policy. The user can pause or disarm the policy and retains the ultimate account authority. The current production fallback is a user-reviewed transaction draft while this policy layer is developed and tested.
+
+### LumAgg integration boundary
+
+LumAgg is the separate Stellar DEX aggregator used for optional conversion of claimed fee tokens. It is not used to mirror Leader swaps.
+
+The planned flow is:
+
+```text
+Aquarius fee claim
+        ▼
+Claimed fee tokens in follower account
+        ▼
+User explicitly authorizes LumAgg quote and swap
+        ▼
+LumAgg route executes with independent amount and slippage limits
+```
+
+The Copy LP policy will not automatically grant unrestricted LumAgg or swap-router permissions. This separation prevents a Leader's unrelated swap activity from becoming an automatic follower trade.
+
+### Stellar integration deliverables
+
+The planned integration will be delivered in this order:
+
+1. Mainnet Aquarius event and actor attribution hardening.
+2. User-reviewed Aquarius Copy LP operations linked to source events.
+3. Soroban Policy implementation and testnet registration / disarm flow.
+4. LumenLP Relayer for policy-approved deposit, withdrawal, and claim operations on testnet.
+5. On-chain monitoring plan and threat model covering relayer, policy, replay, actor attribution, RPC, and Aquarius contract risks.
+6. Limited mainnet launch with conservative limits and public transaction history.
+7. Optional, separately authorized LumAgg fee-token conversion.
+
+This integration plan is specific to Stellar contracts, Soroban RPC, Aquarius pool behavior, Stellar account authorization, and LumAgg. It is not a generic multi-chain or off-chain analytics integration.
 
 ## Copy LP Architecture
 
