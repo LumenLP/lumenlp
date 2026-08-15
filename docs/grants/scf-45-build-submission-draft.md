@@ -22,7 +22,7 @@ Discover pools
     → Aquarius deposit / withdraw / claim
 ```
 
-LumenLP does not mirror arbitrary swaps. Optional fee-token conversion is handled as a separate, explicitly authorized LumAgg flow.
+LumenLP does not mirror arbitrary swaps. Optional fee-token conversion is handled as a separate, explicitly authorized DEX aggregator flow, using an aggregator such as Soroswap or LumAgg.
 
 ## One-Line Description
 
@@ -109,7 +109,7 @@ LumenLP is built directly around Stellar and Soroban primitives:
 - Aquarius contracts as the first production venue;
 - Soroban policies for scoped automation;
 - Stellar wallets for user authorization;
-- LumAgg for separately authorized fee-token conversion.
+- A DEX aggregator such as Soroswap or LumAgg for separately authorized fee-token conversion.
 
 The product is designed to increase the usability and retention of Stellar liquidity, not merely to display market data.
 
@@ -182,61 +182,61 @@ The system fails closed when actor attribution, source event metadata, token pri
 
 ## Scope of This Award
 
-### Milestone 1: Production data and Copy LP foundation
+The current Aquarius analytics, event indexer, snapshots, Leader profiles, and user-reviewed Copy LP queue are the working MVP and are not counted as new grant deliverables. The milestones below describe the work that remains to turn that MVP into an automated, multi-venue Stellar product.
+
+### Milestone 1: DEX expansion and automation foundation
 
 **Deliverables**
 
-- Harden Aquarius event parsing and liquidity actor attribution.
-- Improve 7-day and 30-day Leader profiles.
-- Make every CopyOp idempotent and traceable to a source ledger, transaction, and event.
-- Complete deposit, withdrawal, and claim copy previews.
-- Maintain a manual user-signed fallback path.
-- Add test fixtures and mainnet spot-check documentation.
+- Define a reusable adapter boundary for pool discovery, LP state, liquidity events, and deposit, withdrawal, and claim operations.
+- Add the first additional Stellar DEX venue while retaining Aquarius as the reference implementation.
+- Define the Soroban policy account interface, limits, pause/disarm behavior, and manual fallback for automated Copy LP.
+- Add cross-venue fixtures and safety tests for scaling, unsupported operations, expired intents, duplicate events, and ambiguous source activity.
 
 **Completion criteria**
 
-- Sampled Aquarius liquidity events expose the correct actor.
-- A Leader event creates exactly one CopyOp per active session.
-- Scaled token amounts and coefficients pass deterministic tests.
-- Users can inspect the source event and generate a valid draft.
+- Both venues are represented through the same adapter boundary and the additional venue is visible in the pool API.
+- The policy prototype can be created, inspected, paused, and disarmed on testnet.
+- Invalid, ambiguous, expired, or duplicated source activity cannot create an executable operation.
+- The adapter and policy specifications, fixtures, and test results are public.
 
 ### Milestone 2: Policy-controlled automation
 
 **Deliverables**
 
-- Implement Soroban Copy Policy / Smart Account integration.
-- Add pool and entrypoint allowlists.
+- Implement Soroban Copy Policy / Smart Account integration for supported DEX adapters.
+- Add venue, pool, and entrypoint allowlists.
 - Add per-operation and daily limits.
 - Add nonce, expiry, and replay protection.
 - Add pause, resume, and disarm.
-- Implement LumenLP Relayer for policy-approved Aquarius operations.
-- Deploy and validate the flow on testnet.
+- Implement LumenLP Relayer for policy-approved operations across supported venues.
+- Deploy and validate the cross-venue flow on testnet.
 
 **Completion criteria**
 
 - A user can configure and arm a copy policy on testnet.
-- A permitted Leader deposit or withdrawal is executed automatically within configured limits.
+- A permitted Leader deposit or withdrawal is executed automatically within configured limits on supported venues.
 - An operation exceeding a limit is rejected on-chain.
 - A user can pause or disarm the policy and prevent new execution.
 - The manual user-signed path remains available as a fallback.
 
-### Milestone 3: Mainnet launch and fee conversion
+### Milestone 3: Multi-venue mainnet launch and aggregator boundary
 
 **Deliverables**
 
-- Limited mainnet deployment for Aquarius Copy LP.
+- Limited mainnet deployment for Aquarius and at least one additional Stellar DEX.
 - Execution history with transaction links and failure reasons.
 - Concentrated-liquidity action support where event and position mapping are reliable.
-- Optional, separately authorized LumAgg fee-token conversion.
+- Optional, separately authorized fee-token conversion through a DEX aggregator such as Soroswap or LumAgg.
 - Security review, operational runbook, and public documentation.
 - External user walkthrough and feedback cycle.
 
 **Completion criteria**
 
-- Mainnet copy flow works for supported Aquarius actions.
+- Mainnet copy flow works for supported actions on both venues.
 - No unrestricted server-side wallet custody is introduced.
 - Every automatic action is policy-checked and traceable.
-- Fee-token conversion cannot expand Copy LP permissions into arbitrary swaps.
+- Aggregator-based fee-token conversion cannot expand Copy LP permissions into arbitrary swaps.
 - Public documentation explains limitations, data coverage, and trust boundaries.
 
 ## Success Metrics
@@ -315,9 +315,9 @@ Suggested allocation structure:
 
 | Tranche | Scope | Amount |
 |---|---|---:|
-| Tranche 1 | Aquarius data hardening, Leader profiles, Copy LP foundation | `[AMOUNT]` |
+| Tranche 1 | Reusable DEX adapter boundary, first additional venue, policy prototype, and safety tests | `[AMOUNT]` |
 | Tranche 2 | Soroban Policy, testnet automation, relayer, safety limits | `[AMOUNT]` |
-| Tranche 3 | Limited mainnet launch, CL actions, LumAgg integration, security and docs | `[AMOUNT]` |
+| Tranche 3 | Limited multi-venue mainnet launch, DEX aggregator boundary, reliability, security, and docs | `[AMOUNT]` |
 | **Total** |  | **`[TOTAL]`** |
 
 The budget should be tied to completed, verifiable deliverables rather than general operating costs.

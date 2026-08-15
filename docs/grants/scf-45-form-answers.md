@@ -24,7 +24,7 @@ Use the public GitHub URL after confirming the repository is accessible:
 
 `https://github.com/LumenLP/lumenlp/blob/main/docs/architecture.md`
 
-The document must be public and should describe the current RPC/indexer/API architecture, Copy Engine, Soroban Policy, relayer, trust boundaries, and LumAgg boundary.
+The document must be public and should describe the current RPC/indexer/API architecture, Copy Engine, Soroban Policy, relayer, trust boundaries, and the separately authorized DEX aggregator boundary.
 
 ### GitHub URL
 
@@ -119,11 +119,11 @@ He has built the current LumenLP stack end to end: Aquarius and Soroban RPC inte
 
 LinkedIn: https://www.linkedin.com/in/yaransu/
 
-The project is intentionally scoped around one production venue, Aquarius, for this award. Specialized security review and testing will be handled through the SCF-supported review process and qualified external assistance where appropriate.
+Aquarius is the first production venue, not the final product boundary. The award will establish the automation and adapter model needed to extend LumenLP across Stellar DEX pools. Specialized security review and testing will be handled through the SCF-supported review process and qualified external assistance where appropriate.
 
 ## Recommended Budget
 
-For a one-person team with a focused Aquarius-only scope, a reasonable request is **$75,000 USD-equivalent in XLM**, subject to matching the amount already indicated in the Interest Form. Do not increase the scope to multi-DEX support just to justify a larger budget.
+For a one-person team delivering the first automation release and beginning expansion beyond Aquarius, a reasonable request is **$75,000 USD-equivalent in XLM**, subject to matching the amount already indicated in the Interest Form.
 
 The required payment structure is:
 
@@ -140,23 +140,25 @@ Do not include marketing, promotion, or external security audit costs in the bud
 
 **Target completion date:** `[Choose a date approximately 6–8 weeks after award approval]`
 
-### 1. Aquarius event and actor attribution hardening — $5,000
+The existing Aquarius pool analytics, event indexer, snapshots, Leader profiles, and user-reviewed Copy LP queue are the starting product and are not counted as new tranche deliverables.
 
-Improve event parsing for Aquarius deposit, withdrawal, and claim events. Persist source ledger, transaction, contract, event identifier, actor, token amounts, and operation kind. Add fixtures and deterministic parser tests.
+### 1. Reusable Stellar DEX adapter boundary and first additional venue — $7,000
 
-**Completion:** sampled mainnet events show the correct actor and source metadata; parser tests pass; unresolved actors fail closed instead of generating CopyOps.
+Define a common adapter interface for pool discovery, LP state reads, liquidity events, and supported deposit, withdrawal, and claim operations. Keep Aquarius as the reference implementation and add the first additional Stellar DEX venue. Add contract fixtures and deterministic compatibility tests for both venues.
 
-### 2. Leader profiles and Copy LP foundation — $5,000
+**Completion:** both venues are represented through the same adapter boundary; the additional venue is visible in the pool API; supported event and operation fixtures pass; unsupported operations fail closed.
 
-Complete 7-day and 30-day Leader activity profiles and make CopyOps idempotent per session and source event. Show claimed fees, deposits, withdrawals, pools touched, current exposure, and source event links.
+### 2. Automated Copy LP policy specification and testnet prototype — $5,000
 
-**Completion:** a Leader event creates one correctly scaled CopyOp; the UI shows the original event, scaled amounts, pool, operation type, and status.
+Turn the current user-reviewed Copy LP flow into an implementation-ready automation specification. Define the Soroban policy account interface, allowed pool and entrypoint model, copy coefficient, per-operation and daily limits, expiry, nonce, replay protection, pause, disarm, and manual fallback. Implement the first testnet policy prototype.
 
-### 3. User-reviewed Aquarius Copy LP flow — $5,000
+**Completion:** the specification is public; testnet policy state can be created, inspected, paused, and disarmed; out-of-policy intents are rejected in repeatable tests.
 
-Complete the manual fallback path for deposit, withdrawal, and claim drafts. Keep user signing explicit while the automatic policy layer is developed.
+### 3. Cross-venue operation and safety test suite — $3,000
 
-**Completion:** an external tester can create a session, receive a scaled operation, generate a transaction draft, and verify the source transaction and operation status.
+Build end-to-end tests covering source-event to copy-intent mapping for Aquarius and the new venue, including coefficient scaling, unsupported pool actions, expired intents, insufficient balance, duplicate events, and manual user-signed fallback.
+
+**Completion:** the test suite runs in CI or a documented reproducible environment and demonstrates that invalid, ambiguous, or duplicated source activity cannot create an executable operation.
 
 **Tranche #1 total: $15,000**
 
@@ -166,13 +168,13 @@ Complete the manual fallback path for deposit, withdrawal, and claim drafts. Kee
 
 ### 1. Soroban Copy Policy and account authorization — $8,000
 
-Implement the policy-controlled execution boundary for Aquarius LP operations. Support pool and entrypoint allowlists, copy coefficients, maximum amount per operation, daily limits, expiry, nonce, replay protection, pause, and disarm.
+Implement the policy-controlled execution boundary for supported Stellar DEX LP operations. Support venue, pool, and entrypoint allowlists, copy coefficients, maximum amount per operation, daily limits, expiry, nonce, replay protection, pause, and disarm.
 
 **Completion:** testnet registration, authorization, pause, disarm, and rejection of out-of-policy operations work in repeatable tests.
 
 ### 2. LumenLP Copy Engine and relayer — $6,000
 
-Implement the service that converts indexed Leader events into validated copy intents and submits only policy-approved operations. Keep the interface compatible with a future independent keeper, while using a LumenLP-operated relayer for the initial product.
+Implement the service that converts indexed Leader events into validated copy intents and submits only policy-approved operations through the supported DEX adapters. Keep the interface compatible with a future independent keeper, while using a LumenLP-operated relayer for the initial product.
 
 **Completion:** a permitted testnet deposit, withdrawal, and claim can be executed automatically; duplicate events and over-limit operations are rejected.
 
@@ -194,25 +196,25 @@ Run end-to-end scenarios with real testnet accounts, including permitted actions
 
 **Target completion date:** `[Choose a date approximately 4 months after award approval]`
 
-### 1. Limited Aquarius mainnet launch — $12,000
+### 1. Limited multi-venue mainnet launch — $10,000
 
-Deploy the policy-controlled Copy LP flow to mainnet with conservative limits and a staged rollout. Support Aquarius deposit, withdrawal, and claim operations where event and position mapping are reliable.
+Deploy the policy-controlled Copy LP flow to mainnet with conservative limits and a staged rollout. Support Aquarius and at least one additional Stellar DEX for deposit, withdrawal, and claim operations where event and position mapping are reliable.
 
-**Completion:** limited external users can arm a policy, observe a Leader event, and complete a policy-approved mainnet Copy LP operation with a public transaction link.
+**Completion:** limited external users can arm a policy, observe a supported Leader event, and complete a policy-approved mainnet Copy LP operation on both venues with public transaction links.
 
-### 2. Execution history and operational reliability — $6,000
+### 2. Execution history and operational reliability — $5,000
 
 Add complete execution history, transaction links, failure reasons, relayer health, indexer lag visibility, and safe recovery paths. Preserve the manual user-signed fallback.
 
 **Completion:** every automatic operation is traceable from source event to intent, policy decision, submitted transaction, and final status.
 
-### 3. Optional LumAgg fee-token conversion — $4,000
+### 3. Separately authorized DEX aggregator integration — $5,000
 
-Add a separate user-authorized path to quote and swap claimed fee tokens through LumAgg. This flow must not inherit unrestricted authority from the Copy LP policy.
+Add a separate user-authorized path to quote and swap claimed fee tokens through a DEX aggregator such as Soroswap or LumAgg. This flow must not inherit unrestricted authority from the Copy LP policy.
 
-**Completion:** the user can explicitly authorize a fee-token swap with route, amount, slippage, and expiry shown before execution.
+**Completion:** the user can explicitly authorize a fee-token swap with the selected aggregator, route, amount, slippage, and expiry shown before execution; the Copy LP policy cannot authorize arbitrary swaps.
 
-### 4. Public documentation and launch package — $8,000
+### 4. Public documentation and launch package — $10,000
 
 Publish the architecture, policy model, data methodology, API usage, limitations, operational runbook, and a short public walkthrough. Include evidence of external testing and known limitations.
 
@@ -224,15 +226,15 @@ Publish the architecture, policy model, data methodology, API usage, limitations
 
 The form requires dates in `DD/MM/YYYY` format. Use dates consistent with the actual award start date. The suggested sequence is:
 
-- **Tranche #1:** `[DD/MM/YYYY]` — data, Leader profiles, manual Copy LP MVP.
-- **Tranche #2:** `[DD/MM/YYYY]` — testnet Policy, relayer, monitoring plan, threat model.
-- **Tranche #3:** `[DD/MM/YYYY]` — limited mainnet launch, LumAgg boundary, documentation.
+- **Tranche #1:** `[DD/MM/YYYY]` — reusable DEX adapter boundary, first additional venue, policy prototype, and safety tests.
+- **Tranche #2:** `[DD/MM/YYYY]` — testnet Policy, relayer, monitoring plan, threat model, and cross-venue validation.
+- **Tranche #3:** `[DD/MM/YYYY]` — limited multi-venue mainnet launch, DEX aggregator boundary, reliability, and documentation.
 
 ## Important Submission Decisions
 
 - Select **End User Application**.
 - Submit one real team member unless a second contributor is confirmed and can create an SCF account.
-- Keep the product scope Aquarius Copy LP, not multi-DEX infrastructure.
+- Treat Aquarius as the first supported venue and build toward broader Stellar DEX pool coverage through reusable adapters.
 - Present automatic execution as the grant outcome, not as an already-live feature.
 - Include the required on-chain monitoring plan and threat model in Tranche #2.
 - Keep the manual user-signed path as a fallback.

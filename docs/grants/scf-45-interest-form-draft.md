@@ -34,7 +34,7 @@ The user flow is:
 2. Inspect a Leader account using observable on-chain data such as claimed fees, deposits, withdrawals, pools touched, and current exposure.
 3. Select a Leader and configure a copy coefficient and safety limits.
 4. Preview the Leader's deposit, withdrawal, or fee-claim action and the scaled follower action.
-5. Execute the approved Aquarius operation through a non-custodial, policy-constrained account. Fee-token conversion can be separately authorized through LumAgg.
+5. Execute the approved Aquarius operation through a non-custodial, policy-constrained account. Fee-token conversion can be separately authorized through a DEX aggregator such as Soroswap or LumAgg.
 
 Leader rankings are presented as data and activity signals, not as guaranteed profit or investment advice. Claimed fees are not labeled as complete PnL.
 
@@ -57,7 +57,7 @@ The grant will turn the current Aquarius prototype into a production-ready Copy 
 - Add a Soroban policy layer with pool allowlists, per-operation limits, daily limits, slippage limits, pause, and disarm controls.
 - Run a LumenLP relayer for the initial production flow; the contract remains the authority for permissions and limits.
 - Keep all user funds non-custodial and keep Leader swaps outside the copy flow.
-- Add optional, separately authorized LumAgg swaps for claimed fee tokens.
+- Add optional, separately authorized DEX aggregator swaps for claimed fee tokens, using an aggregator such as Soroswap or LumAgg.
 - Publish the data methodology, API documentation, and execution history so users can verify every action.
 
 ## Initial milestones
@@ -81,7 +81,7 @@ The grant will turn the current Aquarius prototype into a production-ready Copy 
 
 - Production Aquarius Copy LP Studio.
 - Execution history with transaction links and failure reasons.
-- Optional LumAgg fee-token conversion flow.
+- Optional DEX aggregator fee-token conversion flow.
 - Public API and integration documentation.
 - Testnet and mainnet walkthrough for external users.
 
