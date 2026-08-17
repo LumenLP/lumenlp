@@ -1182,8 +1182,19 @@ a.pool-metric-card:hover {
 }
 .pool-card-ratio-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
+  gap: 7px;
+}
+.pool-card-ratio-item {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+.pool-card-ratio-item:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
 }
 .pool-card-flow {
   color: var(--muted);
@@ -1516,9 +1527,6 @@ th { color: var(--muted); font-weight: 500; }
   .pool-card-grid {
     grid-template-columns: 1fr 1fr;
   }
-  .pool-card-ratio-grid {
-    grid-template-columns: 1fr 1fr;
-  }
   .preset-grid {
     grid-template-columns: 1fr;
   }
@@ -1543,9 +1551,6 @@ th { color: var(--muted); font-weight: 500; }
   .watchlist-metrics,
   .pool-card-grid,
   .pool-card-meta-grid,
-  .pool-card-ratio-grid {
-    grid-template-columns: 1fr;
-  }
   .saved-view-row {
     align-items: stretch;
   }

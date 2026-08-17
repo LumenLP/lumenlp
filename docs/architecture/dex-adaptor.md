@@ -1,6 +1,6 @@
 # DexAdaptor — multi-DEX LP surface
 
-**Status:** Interface + Aquarius production + scaffolds for Sushi V3, Phoenix, Soroswap AMM, Comet, Classic.  
+**Status:** Interface + Aquarius production + scaffolds for Sushi V3, Phoenix, Soroswap AMM, and Comet.  
 **Code:** `crates/dex/src/adaptor.rs`  
 **API:** `GET /v1/venues`
 
@@ -28,13 +28,12 @@ crates/dex/
 | `phoenix` | Phoenix | scaffold |
 | `soroswap_amm` | Soroswap AMM | scaffold |
 | `comet` | Comet | scaffold |
-| `classic` | Stellar Classic DEX | deferred / ADR |
 
 ## Capabilities
 
-Each row exposes booleans: `list_pools`, `positions`, `liquidity_events`, `quotes`, `draft_ops`, `copy_scale`.
+Each row exposes booleans for pool discovery and normalized LP actions: `list_pools`, `positions`, `liquidity_events`, `quotes`, `draft_ops`, `deposit`, `withdraw`, `claim`, and `copy_scale`.
 
-Aquarius currently sets all to `true`. Scaffolds set all to `false` until a production adaptor lands.
+Aquarius currently sets all to `true`. Scaffolds set all to `false` until a production adaptor lands. Stellar Classic DEX is intentionally outside this pool-LP adapter registry because its order-book model does not expose the same pool deposit/withdraw lifecycle.
 
 ## Trait (conceptual)
 

@@ -189,13 +189,14 @@ The current Aquarius analytics, event indexer, snapshots, Leader profiles, and u
 **Deliverables**
 
 - Define a reusable adapter boundary for pool discovery, LP state, liquidity events, and deposit, withdrawal, and claim operations.
-- Add the first additional Stellar DEX venue while retaining Aquarius as the reference implementation.
+- Cover the target Stellar DEX pool venues through the common adapter boundary: Aquarius, Phoenix, Sushi V3, Soroswap AMM, and Comet. Soroswap AMM is a pool venue and is separate from any DEX aggregator integration. Stellar Classic DEX is outside the current Copy LP scope because its order-book model does not expose the same LP pool operations.
 - Define the Soroban policy account interface, limits, pause/disarm behavior, and manual fallback for automated Copy LP.
 - Add cross-venue fixtures and safety tests for scaling, unsupported operations, expired intents, duplicate events, and ambiguous source activity.
 
 **Completion criteria**
 
-- Both venues are represented through the same adapter boundary and the additional venue is visible in the pool API.
+- All target venues are represented in the adapter registry and support matrix, with documented capabilities, contract entrypoints, event models, and validation gates.
+- Each venue is exposed through the pool API only for the operations that have passed validation; unsupported or unverified operations fail closed.
 - The policy prototype can be created, inspected, paused, and disarmed on testnet.
 - Invalid, ambiguous, expired, or duplicated source activity cannot create an executable operation.
 - The adapter and policy specifications, fixtures, and test results are public.
@@ -233,7 +234,7 @@ The current Aquarius analytics, event indexer, snapshots, Leader profiles, and u
 
 **Completion criteria**
 
-- Mainnet copy flow works for supported actions on both venues.
+- Mainnet copy flow works for supported actions on each production-enabled venue.
 - No unrestricted server-side wallet custody is introduced.
 - Every automatic action is policy-checked and traceable.
 - Aggregator-based fee-token conversion cannot expand Copy LP permissions into arbitrary swaps.
@@ -315,7 +316,7 @@ Suggested allocation structure:
 
 | Tranche | Scope | Amount |
 |---|---|---:|
-| Tranche 1 | Reusable DEX adapter boundary, first additional venue, policy prototype, and safety tests | `[AMOUNT]` |
+| Tranche 1 | Unified Stellar DEX adapter coverage, policy prototype, and safety tests | `[AMOUNT]` |
 | Tranche 2 | Soroban Policy, testnet automation, relayer, safety limits | `[AMOUNT]` |
 | Tranche 3 | Limited multi-venue mainnet launch, DEX aggregator boundary, reliability, security, and docs | `[AMOUNT]` |
 | **Total** |  | **`[TOTAL]`** |

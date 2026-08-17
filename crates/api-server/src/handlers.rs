@@ -15,17 +15,18 @@ use {
     },
     axum::{
         extract::{Path, Query, State},
-        http::StatusCode,
+        http::{header::CACHE_CONTROL, HeaderValue, StatusCode},
         response::IntoResponse,
         routing::{get, patch, post},
         Json, Router,
     },
-    chrono::{Duration, Utc},
+    chrono::{DateTime, Duration, Utc},
     serde::Deserialize,
     serde_json::{json, Value},
     std::{
         collections::{HashMap, HashSet},
         sync::{Arc, Mutex},
+        time::{Duration as StdDuration, Instant as StdInstant},
     },
 };
 
@@ -36,6 +37,7 @@ pub struct AppState {
     pub index_db: Arc<Mutex<IndexDb>>,
     pub token_meta_cache: Arc<Mutex<HashMap<String, TokenMeta>>>,
     pub prices: Arc<PriceService>,
+    pub pool_list_cache: Arc<Mutex<Option<(StdInstant, Value)>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -185,8 +187,8 @@ fn bridge_tvl_usd(latest_tvl: f64, xlm_usd: Option<f64>) -> Option<f64> {
     xlm_usd.and_then(|px| xlm_quote_to_usd(latest_tvl, px))
 }
 
-/// Prefer latest event-derived reserves quote when snapshot TVL is missing.
-fn reserves_quote_xlm_from_events(events: &[PoolEventRow]) -> Option<f64> {
+/// Return the newest reserve quote and its event timestamp.
+fn latest_reserves_quote_xlm_from_events(events: &[PoolEventRow]) -> Option<(i64, f64)> {
     for event in events {
         if event.kind != "update_reserves" && event.kind != "reserves_sync" {
             continue;
@@ -201,12 +203,17 @@ fn reserves_quote_xlm_from_events(events: &[PoolEventRow]) -> Option<f64> {
                     .body
                     .pointer("/derived/reserves_quote_xlm")
                     .and_then(|v| v.as_f64())
-            });
+        });
         if let Some(q) = quote.filter(|v| v.is_finite() && *v > 0.0) {
-            return Some(q);
+            return Some((event.created_at, q));
         }
     }
     None
+}
+
+/// Prefer latest event-derived reserves quote when snapshot TVL is missing.
+fn reserves_quote_xlm_from_events(events: &[PoolEventRow]) -> Option<f64> {
+    latest_reserves_quote_xlm_from_events(events).map(|(_, quote)| quote)
 }
 
 /// When rollups/snapshots are empty but indexer has activity, seed the 24h window.
@@ -520,6 +527,19 @@ async fn indexer_status(State(state): State<AppState>) -> impl IntoResponse {
 }
 
 async fn list_pools(State(state): State<AppState>) -> impl IntoResponse {
+    if let Some(body) = {
+        let cache = state.pool_list_cache.lock().unwrap();
+        cache.as_ref().and_then(|(expires_at, body)| {
+            (*expires_at > StdInstant::now()).then(|| body.clone())
+        })
+    } {
+        let mut response = Json(body).into_response();
+        response.headers_mut().insert(
+            CACHE_CONTROL,
+            HeaderValue::from_static("public, max-age=10, s-maxage=10, stale-while-revalidate=30"),
+        );
+        return response;
+    }
     let (
         rows,
         stats,
@@ -559,7 +579,7 @@ async fn list_pools(State(state): State<AppState>) -> impl IntoResponse {
                 .filter_map(|token| token.as_str().map(ToOwned::to_owned))
                 .collect();
             let token_meta_map =
-                resolve_token_meta_map(state.rpc.as_ref(), &state.token_meta_cache, &token_ids)
+                resolve_token_meta_map(state.rpc.clone(), &state.token_meta_cache, &token_ids)
                     .await;
             let wanted = wanted_tokens_from_meta(&token_meta_map);
             let (price_map, mut quote_meta) = state.prices.prices_for_tokens(&wanted).await;
@@ -630,7 +650,7 @@ async fn list_pools(State(state): State<AppState>) -> impl IntoResponse {
                     obj.insert("score_breakdown".into(), score_breakdown.clone());
                 }
             }
-            Json(json!({
+            let body = json!({
                 "pools": rows,
                 "quote": quote_json(&quote_meta),
                 "indexed_pool_count": stats.pool_count,
@@ -641,8 +661,17 @@ async fn list_pools(State(state): State<AppState>) -> impl IntoResponse {
                 } else {
                     None::<&str>
                 }
-            }))
-            .into_response()
+            });
+            {
+                let mut cache = state.pool_list_cache.lock().unwrap();
+                *cache = Some((StdInstant::now() + StdDuration::from_secs(10), body.clone()));
+            }
+            let mut response = Json(body).into_response();
+            response.headers_mut().insert(
+                CACHE_CONTROL,
+                HeaderValue::from_static("public, max-age=10, s-maxage=10, stale-while-revalidate=30"),
+            );
+            response
         }
         (Err(e), _, _) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -675,6 +704,10 @@ async fn pool_detail(
         )
     };
     let latest = history.last();
+    let snapshot_ts = latest
+        .and_then(|row| DateTime::parse_from_rfc3339(&row.ts).ok())
+        .map(|ts| ts.timestamp())
+        .unwrap_or(i64::MIN);
     let (rollups, activity, activity_summary) = {
         let index_db = state.index_db.lock().unwrap();
         (
@@ -692,7 +725,7 @@ async fn pool_detail(
         } else {
             let token_ids: HashSet<String> = tokens.iter().cloned().collect();
             let map =
-                resolve_token_meta_map(state.rpc.as_ref(), &state.token_meta_cache, &token_ids)
+        resolve_token_meta_map(state.rpc.clone(), &state.token_meta_cache, &token_ids)
                     .await;
             let token_meta = tokens
                 .iter()
@@ -720,9 +753,11 @@ async fn pool_detail(
     } else {
         "none"
     };
-    if latest_tvl <= 0.0 {
-        if let Ok(events) = state.index_db.lock().unwrap().recent_pool_events(&address, 40) {
-            if let Some(reserves_xlm) = reserves_quote_xlm_from_events(&events) {
+    if let Ok(events) = state.index_db.lock().unwrap().recent_pool_events(&address, 40) {
+        if let Some((event_ts, reserves_xlm)) = latest_reserves_quote_xlm_from_events(&events) {
+            // A pool can receive reserve updates between snapshotter runs. Do not
+            // serve an older snapshot as the current TVL in that case.
+            if latest_tvl <= 0.0 || event_ts > snapshot_ts {
                 latest_tvl = reserves_xlm;
                 tvl_source = "event_reserves";
             }
@@ -790,7 +825,7 @@ async fn pool_detail(
 }
 
 async fn resolve_token_meta_map(
-    rpc: &SorobanRpc,
+    rpc: Arc<SorobanRpc>,
     cache: &Arc<Mutex<HashMap<String, TokenMeta>>>,
     token_ids: &HashSet<String>,
 ) -> HashMap<String, TokenMeta> {
@@ -807,8 +842,18 @@ async fn resolve_token_meta_map(
         }
     }
 
+    let mut tasks = tokio::task::JoinSet::new();
     for token in missing {
-        let meta = resolve_one_token_meta(rpc, &token).await;
+        let rpc = Arc::clone(&rpc);
+        tasks.spawn(async move {
+            let meta = resolve_one_token_meta(&rpc, &token).await;
+            (token, meta)
+        });
+    }
+    while let Some(result) = tasks.join_next().await {
+        let Ok((token, meta)) = result else {
+            continue;
+        };
         {
             let mut cache_guard = cache.lock().unwrap();
             cache_guard.insert(token.clone(), meta.clone());
@@ -907,7 +952,7 @@ async fn pool_events(
     let token_meta_map = if token_ids.is_empty() {
         HashMap::new()
     } else {
-        resolve_token_meta_map(state.rpc.as_ref(), &state.token_meta_cache, &token_ids).await
+        resolve_token_meta_map(state.rpc.clone(), &state.token_meta_cache, &token_ids).await
     };
     let wanted = wanted_tokens_from_meta(&token_meta_map);
     let (price_map, mut quote_meta) = state.prices.prices_for_tokens(&wanted).await;

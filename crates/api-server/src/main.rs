@@ -45,6 +45,7 @@ async fn main() -> Result<()> {
         index_db,
         token_meta_cache,
         prices,
+        pool_list_cache: Arc::new(Mutex::new(None)),
     };
 
     let cors = CorsLayer::new()

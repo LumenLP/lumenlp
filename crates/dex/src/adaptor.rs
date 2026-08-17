@@ -52,6 +52,9 @@ pub struct VenueCapabilities {
     pub quotes: bool,
     /// Build unsigned / draft LP actions (deposit, withdraw, CL adjust, …).
     pub draft_ops: bool,
+    pub deposit: bool,
+    pub withdraw: bool,
+    pub claim: bool,
     pub copy_scale: bool,
 }
 
@@ -63,6 +66,9 @@ impl VenueCapabilities {
             liquidity_events: false,
             quotes: false,
             draft_ops: false,
+            deposit: false,
+            withdraw: false,
+            claim: false,
             copy_scale: false,
         }
     }
@@ -74,7 +80,21 @@ impl VenueCapabilities {
             liquidity_events: true,
             quotes: true,
             draft_ops: true,
+            deposit: true,
+            withdraw: true,
+            claim: true,
             copy_scale: true,
+        }
+    }
+
+    pub const fn supports(self, kind: DraftOpKind) -> bool {
+        match kind {
+            DraftOpKind::Deposit => self.deposit,
+            DraftOpKind::Withdraw => self.withdraw,
+            DraftOpKind::Claim => self.claim,
+            DraftOpKind::OpenRange
+            | DraftOpKind::CloseRange
+            | DraftOpKind::AdjustRange => self.draft_ops,
         }
     }
 }
@@ -228,11 +248,6 @@ pub fn default_venue_registry() -> Vec<Box<dyn DexAdaptor>> {
             name: "Comet",
             notes: "Scaffold. Weighted pools; mainnet gate if liquidity thin.",
         }),
-        Box::new(ScaffoldAdaptor {
-            venue_id: VenueId::Classic,
-            name: "Stellar Classic DEX",
-            notes: "Deferred / ADR. Different LP model than Soroban AMMs.",
-        }),
     ]
 }
 
@@ -275,7 +290,20 @@ mod tests {
     }
 
     #[test]
-    fn five_lp_venues_plus_classic_listed() {
-        assert_eq!(support_matrix().len(), 6);
+    fn five_target_lp_venues_listed() {
+        assert_eq!(support_matrix().len(), 5);
+        assert!(support_matrix()
+            .iter()
+            .all(|row| row.venue_id != VenueId::Classic));
+    }
+
+    #[test]
+    fn capabilities_are_explicit_for_copy_actions() {
+        let capabilities = VenueCapabilities::aquarius_production();
+        assert!(capabilities.supports(DraftOpKind::Deposit));
+        assert!(capabilities.supports(DraftOpKind::Withdraw));
+        assert!(capabilities.supports(DraftOpKind::Claim));
+        assert!(capabilities.supports(DraftOpKind::AdjustRange));
+        assert!(!VenueCapabilities::empty().supports(DraftOpKind::Deposit));
     }
 }

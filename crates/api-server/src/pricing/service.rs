@@ -126,23 +126,10 @@ impl PriceService {
             }
         };
 
-        for (_, id) in &resolved {
-            let key = id.as_freighter_key();
-            if prices_by_key
-                .get(&key)
-                .is_some_and(|p| p.is_finite() && *p > 0.0)
-            {
-                continue;
-            }
-            if let Some(expert_key) = id.as_stellar_expert_key() {
-                if let Some(price) = self.fetch_expert(&expert_key).await {
-                    prices_by_key.insert(key.clone(), price);
-                    expert_sourced.insert(key.clone());
-                    freighter_sourced.remove(&key);
-                }
-            }
-        }
-
+        // Keep pool-list requests bounded: the bulk price response is enough for
+        // the current XLM-quote valuation path. Per-asset Expert fallbacks turn
+        // one request into dozens of serial network calls and make `/v1/pools`
+        // slow whenever the token set is large.
         if !prices_by_key
             .get("native")
             .is_some_and(|p| p.is_finite() && *p > 0.0)

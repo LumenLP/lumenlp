@@ -62,6 +62,13 @@ function poolTokenVisuals(pool: PoolRow) {
   return tokenVisualsFromMeta(pool.token_meta, pool.tokens);
 }
 
+function poolTvlUsd(pool: PoolRow, windowKey: PoolWindow, xlmUsd?: number | null) {
+  const direct = pickUsd(pool.tvl_usd, pool.tvl, xlmUsd).value;
+  if (direct != null && direct > 0) return direct;
+  const average = pool.window_metrics?.[windowKey]?.avg_tvl;
+  return pickUsd(null, average, xlmUsd).value;
+}
+
 function normalizedTokenLabel(label: string | null | undefined) {
   if (!label) return "";
   return label.toLowerCase() === "native" ? "XLM" : label;
@@ -712,7 +719,7 @@ function PoolsPageInner() {
                       </div>
                     </td>
                     <td className={metricColumnClass(["liquidity"])}>
-                      {fmtUsd(pickUsd(p.tvl_usd, p.tvl, quote?.xlm_usd ?? p.quote?.xlm_usd).value)}
+                      {fmtUsd(poolTvlUsd(p, windowKey, quote?.xlm_usd ?? p.quote?.xlm_usd))}
                     </td>
                     <td className={`metric-positive ${metricColumnClass(["fee_tvl"]) ?? ""}`.trim()}>{fmtPct(p.window_metrics?.[windowKey]?.fee_tvl ?? 0)}</td>
                     <td className={metricColumnClass(["fee"])}>
@@ -778,7 +785,7 @@ function PoolsPageInner() {
                   <div className="pool-card-highlight">
                     <div className="watchlist-label">Fee / TVL</div>
                     <div className="pool-card-highlight-value">
-                      {fmtPct(pool.window_metrics?.[windowKey]?.fee_tvl ?? 0)}
+                      {fmtPct(pool.window_metrics?.[windowKey]?.fee_tvl)}
                     </div>
                   </div>
                 </div>
@@ -787,7 +794,7 @@ function PoolsPageInner() {
                     <div className="watchlist-label">Liquidity</div>
                     <div className="pool-card-money">
                       {fmtUsd(
-                        pickUsd(pool.tvl_usd, pool.tvl, quote?.xlm_usd ?? pool.quote?.xlm_usd).value,
+                        poolTvlUsd(pool, windowKey, quote?.xlm_usd ?? pool.quote?.xlm_usd),
                       )}
                     </div>
                   </div>
@@ -820,12 +827,12 @@ function PoolsPageInner() {
                 </div>
                 <div className="pool-card-section">
                   <div className="pool-card-section-title">Fee / TVL Ratio</div>
-                  <div className="pool-card-ratio-grid">
-                    {(["24h", "6h", "1h", "5m"] as const).map((window) => (
-                      <div key={`${pool.address}-${window}`}>
+                    <div className="pool-card-ratio-grid">
+                      {(["24h", "6h", "1h", "5m"] as const).map((window) => (
+                      <div className="pool-card-ratio-item" key={`${pool.address}-${window}`}>
                         <div className="watchlist-label">{window}</div>
                         <div className="watchlist-value metric-positive">
-                          {fmtPct(pool.window_metrics?.[window]?.fee_tvl ?? 0)}
+                          {fmtPct(pool.window_metrics?.[window]?.fee_tvl)}
                         </div>
                       </div>
                     ))}
