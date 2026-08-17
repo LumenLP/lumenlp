@@ -1,0 +1,19 @@
+{
+  "network": "mainnet",
+  "factory_address": "CB4SVAWJA6TSRNOJZ7W2AWFW46D5VR4ZMFZKDIKXEINZCZEGZCJZCKMI",
+  "pool_address": "CBENABXP6C4C7WG6KB7JQOTDS5GIIXF3IX3PIYNZFCDZDWUHITO2HZ4S",
+  "query_config": {
+    "pool_type": 0,
+    "total_fee_bps": 50,
+    "token_a": "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA",
+    "token_b": "CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75",
+    "share_token": "CBMZ76PQDAKGHWQ22CITGTD4A6YD6XQ5SVNGBG75VAT3BB2KZE36HASJ"
+  },
+  "query_pool_info": {
+    "asset_a_amount": "78640049090",
+    "asset_b_amount": "12386668745",
+    "asset_lp_share_amount": "31156162526"
+  },
+  "captured_via": "stellar contract invoke --send no",
+  "captured_at": "2026-08-17"
+}

@@ -1,0 +1,11 @@
+{
+  "venue": "phoenix",
+  "factory_address": "CB4SVAWJA6TSRNOJZ7W2AWFW46D5VR4ZMFZKDIKXEINZCZEGZCJZCKMI",
+  "contract_method": "query_all_pools_details",
+  "return_type": "Vec<LiquidityPoolInfo>",
+  "purpose": "Phoenix mainnet factory configuration copied from the local DEX aggregator; pool addresses below are fixture placeholders.",
+  "pool_addresses": [
+    "CPHOENIXPOOL111111111111111111111111111111111111111111111111111111",
+    "CPHOENIXPOOL222222222222222222222222222222222222222222222222222222"
+  ]
+}

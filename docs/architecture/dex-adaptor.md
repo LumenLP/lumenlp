@@ -1,6 +1,6 @@
 # DexAdaptor — multi-DEX LP surface
 
-**Status:** Interface + Aquarius production + scaffolds for Sushi V3, Phoenix, Soroswap AMM, and Comet.  
+**Status:** Interface + Aquarius production + read-only readers for Phoenix and Soroswap AMM; Sushi V3 and Comet remain scaffolds.
 **Code:** `crates/dex/src/adaptor.rs`  
 **API:** `GET /v1/venues`
 
@@ -16,8 +16,9 @@ crates/dex/
   rpc.rs          # shared Soroban RPC
   types.rs / db.rs
   aquarius/       # production (pool, router, positions, pricing)
-  phoenix.rs      # read-only query reader; factory/event validation pending
-  sushi.rs / soroswap.rs / comet.rs                # scaffolds
+  phoenix.rs      # read-only factory/pool query reader; LP events pending
+  soroswap.rs     # read-only factory/pair query reader; LP events pending
+  sushi.rs / comet.rs                             # scaffolds
 ```
 
 ## `venue_id`
@@ -26,8 +27,8 @@ crates/dex/
 |----|------|----------------|
 | `aquarius` | Aquarius | **production** |
 | `sushi_v3` | Sushi V3 | scaffold |
-| `phoenix` | Phoenix | scaffold; read-only reader in progress |
-| `soroswap_amm` | Soroswap AMM | scaffold |
+| `phoenix` | Phoenix | scaffold; read-only reader validated on mainnet |
+| `soroswap_amm` | Soroswap AMM | scaffold; read-only reader validated on mainnet |
 | `comet` | Comet | scaffold |
 
 ## Capabilities
@@ -68,15 +69,39 @@ Payload amounts remain venue-specific JSON so CP shares and CL ticks can coexist
 
 ## Phoenix first slice
 
-`dex::phoenix::hydrate_pool` reads the Phoenix XYK pool query surface:
+`dex::phoenix` now covers the first read-only Phoenix boundary:
+
+- `discover_pool_addresses` calls the configured factory's `query_all_pools_details` method;
+- the mainnet factory configuration is `CB4SVAWJA6TSRNOJZ7W2AWFW46D5VR4ZMFZKDIKXEINZCZEGZCJZCKMI`;
+- `discover_mainnet_pool_addresses` provides the production-network convenience path;
+- discovered addresses are sorted and de-duplicated before persistence;
+- `hydrate_pool` reads the Phoenix XYK pool query surface:
 
 - `query_config` for token addresses and `total_fee_bps`;
+- `pool_type` is decoded as XYK (`0`) or Stable (`1`) instead of assuming every pool is XYK;
 - `query_pool_info` for token reserves and total shares;
 - signed Soroban integer fields are normalized to non-negative `u128` values;
 - token order is checked between both query responses;
-- no write operation or factory discovery is enabled yet.
+- `provide_liquidity` and `withdraw_liquidity` are the supported LP lifecycle event topics;
+- `swap`, `initialize`, and admin topics are not Copy LP position events;
+- no write operation is enabled yet.
 
-Promotion to production requires a validated factory address set, event topic fixtures, and mainnet spot checks before enabling indexing or Copy LP operations.
+The mainnet spot-check fixture records a successful factory and pool read. Promotion to production still requires event-version validation and a monitored indexing rollout before enabling Copy LP operations. The factory fixture uses the real address; generic pool entries remain synthetic test data.
+
+Repeatable read-only validation is available at `deploy/validate-phoenix.sh`. It checks factory discovery plus `query_config` and `query_pool_info` without signing or submitting a transaction.
+
+## Soroswap first slice
+
+`dex::soroswap` covers the read-only factory and constant-product pair boundary:
+
+- `discover_pool_addresses` calls `all_pairs_length` and `all_pairs`;
+- the mainnet factory configuration is `CA4HEQTL2WPEUYKYKCDOHCDNIV4QHNJ7EL4J4NQ6VADP7SYHVRYZ7AW2`;
+- `hydrate_pool` reads `token_0`, `token_1`, and `get_reserves` concurrently;
+- the current Soroswap AMM fee is normalized as 30 bps;
+- reserves are decoded as non-negative signed Soroban integers;
+- no LP event parser or write operation is enabled yet.
+
+The mainnet spot-check fixture records a successful factory and pair read. Repeatable validation is available at `deploy/validate-soroswap.sh`. Promotion to production still requires pair event-version validation, LP share accounting, and a monitored indexing rollout.
 
 ## Related
 

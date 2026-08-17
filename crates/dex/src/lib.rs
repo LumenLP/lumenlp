@@ -1,7 +1,7 @@
 //! Multi-DEX LP clients for Stellar (Soroban RPC-first).
 //!
 //! - Shared: [`rpc`], [`types`], [`adaptor`], snapshot [`db`]
-//! - Venues: [`aquarius`] (production), [`sushi`], [`phoenix`], [`soroswap`], [`comet`] (scaffolds)
+//! - Venues: [`aquarius`] (production), [`phoenix`] and [`soroswap`] (read-only readers), [`sushi`] and [`comet`] (scaffolds)
 
 pub mod adaptor;
 pub mod aquarius;

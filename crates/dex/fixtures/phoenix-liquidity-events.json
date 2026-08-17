@@ -1,0 +1,20 @@
+{
+  "venue": "phoenix",
+  "event_topics": {
+    "provide_liquidity": [
+      "sender",
+      "token_a",
+      "token_a-amount",
+      "token_b",
+      "token_b-amount"
+    ],
+    "withdraw_liquidity": [
+      "sender",
+      "shares_amount",
+      "return_amount_a",
+      "return_amount_b"
+    ]
+  },
+  "ignored_topics": ["swap", "initialize"],
+  "note": "Topic names are taken from the Phoenix XYK and stable pool source; values are decoded from Soroban events at index time."
+}

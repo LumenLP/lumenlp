@@ -13,7 +13,8 @@ LumenLP is **developer / LP infrastructure**, not a custodial vault:
 |-------|------------|
 | **DexAdaptor** | Stable `venue_id` + capability matrix ([docs](docs/architecture/dex-adaptor.md)) |
 | **Aquarius (production)** | Router discovery, pool metrics, event indexer, Copy LP dry-run |
-| **Other DEXes** | Scaffolds for Sushi V3, Phoenix, Soroswap AMM, Comet (+ Classic deferred) |
+| **Phoenix** | Mainnet factory/pool read smoke-tested; event and Copy LP integration remain scaffolded |
+| **Other DEXes** | Soroswap AMM has a read-only mainnet reader; Sushi V3 and Comet remain scaffolds (+ Classic deferred) |
 | **Strategies** | Copy-scale, stay-in-range / fee-harvest previews (reference UI) |
 | **Reference client** | Web `/pools`, `/copy`, `/strategies` — demo, not the product definition |
 
@@ -57,6 +58,28 @@ RPC_URL=... INDEXER_DB_PATH=./data/pool-indexer.db cargo run -p pool-indexer --r
 RPC_URL=... DATABASE_PATH=./data/lpagent.db INDEXER_DB_PATH=./data/pool-indexer.db \
   BIND=0.0.0.0:3301 cargo run -p api-server --release
 ```
+
+### Phoenix read-only validation
+
+The Phoenix mainnet factory and a sample pool can be checked without signing or
+submitting a transaction:
+
+```bash
+RPC_URL=https://mainnet.sorobanrpc.com ./deploy/validate-phoenix.sh
+```
+
+### Soroswap read-only validation
+
+The Soroswap AMM factory and a sample pair can be checked without signing or
+submitting a transaction:
+
+```bash
+RPC_URL=https://mainnet.sorobanrpc.com ./deploy/validate-soroswap.sh
+```
+
+The reader currently covers factory pair discovery and `token_0`, `token_1`,
+and `get_reserves`. LP event indexing and Copy LP operations remain disabled
+until their venue-specific semantics are validated.
 
 ### Frontend
 
