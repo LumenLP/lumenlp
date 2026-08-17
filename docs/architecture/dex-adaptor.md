@@ -35,15 +35,21 @@ Each row exposes booleans for pool discovery and normalized LP actions: `list_po
 
 Aquarius currently sets all to `true`. Scaffolds set all to `false` until a production adaptor lands. Stellar Classic DEX is intentionally outside this pool-LP adapter registry because its order-book model does not expose the same pool deposit/withdraw lifecycle.
 
-## Trait (conceptual)
+## Normalized boundary
 
 ```text
 DexAdaptor
   venue_id() / name() / status() / capabilities() / notes()
-  support_row()  → matrix row for docs/API
+  normalize_pool(SharePoolState)       → PoolDescriptor
+  normalize_position(UserPosition)     → PositionDescriptor
+  normalize_event(LiquidityEvent)      → validated event
+  build_draft_op(DraftRequest)          → DraftOp or fail-closed error
+  support_row()                         → matrix row for docs/API
 ```
 
-Heavy RPC (hydrate pool, scan events, build XDR) stays in venue modules (`dex::aquarius`, `pool-indexer`, …). The trait is the **stable binding** for strategy config and the public support matrix.
+`PoolDescriptor`, `PositionDescriptor`, `LiquidityEvent`, and `DraftRequest` are shared strategy-facing types. Their payload fields intentionally retain venue-specific JSON where CP shares and CL ticks cannot be represented by one fixed schema.
+
+Heavy RPC (hydrate pool, scan events, build XDR) stays in venue modules (`dex::aquarius`, `pool-indexer`, …). The trait is the **stable binding** for strategy config and the public support matrix. Every draft operation is checked against the venue capability matrix; unsupported operations fail closed before reaching a relayer or wallet.
 
 ## Draft ops
 
@@ -56,7 +62,8 @@ Payload amounts remain venue-specific JSON so CP shares and CL ticks can coexist
 2. Wire indexer parsers + draft builders.  
 3. Flip `VenueStatus::Production` and capabilities.  
 4. Extend copy/runtime to accept that `venue_id`.  
-5. Update `GET /v1/venues` via `default_venue_registry()`.
+5. Add contract/event fixtures and compatibility tests for pool, position, event, and draft normalization.  
+6. Update `GET /v1/venues` via `default_venue_registry()`.
 
 ## Related
 

@@ -4,7 +4,11 @@
 //! not on Aquarius-specific modules. Aquarius is the reference implementation;
 //! other venues start as scaffolds until production adaptors land.
 
-use serde::{Deserialize, Serialize};
+use {
+    crate::types::{PoolType, SharePoolState, UserPosition},
+    anyhow::{anyhow, Result},
+    serde::{Deserialize, Serialize},
+};
 
 /// Stable venue identifier used in APIs, configs, and copy sessions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -123,6 +127,63 @@ pub struct DraftOp {
     pub quote_xlm: Option<f64>,
 }
 
+/// Venue-neutral pool metadata passed from a venue reader to strategy code.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PoolDescriptor {
+    pub venue_id: VenueId,
+    pub address: String,
+    pub pool_type: PoolType,
+    pub tokens: Vec<String>,
+    pub fee_bps: u32,
+}
+
+/// Venue-neutral LP position view. Amounts remain in token base units.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PositionDescriptor {
+    pub venue_id: VenueId,
+    pub pool_address: String,
+    pub position_key: String,
+    pub tokens: Vec<String>,
+    pub amounts: Vec<f64>,
+    pub quote_xlm: Option<f64>,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LiquidityEventKind {
+    Deposit,
+    Withdraw,
+    Claim,
+    RangeOpen,
+    RangeClose,
+    RangeAdjust,
+}
+
+/// Normalized observable LP event. Venue-specific payload stays opaque.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LiquidityEvent {
+    pub venue_id: VenueId,
+    pub event_id: String,
+    pub tx_hash: Option<String>,
+    pub ledger: u32,
+    pub pool_address: String,
+    pub actor: Option<String>,
+    pub kind: LiquidityEventKind,
+    pub payload: serde_json::Value,
+    pub quote_xlm: Option<f64>,
+}
+
+/// Input to the common draft builder. Adapters encode `payload` for their venue.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DraftRequest {
+    pub pool_address: String,
+    pub kind: DraftOpKind,
+    pub position_key: String,
+    pub payload: serde_json::Value,
+    pub quote_xlm: Option<f64>,
+}
+
 /// Status row for the public multi-DEX support matrix.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct VenueSupportRow {
@@ -155,6 +216,70 @@ pub trait DexAdaptor: Send + Sync {
     fn capabilities(&self) -> VenueCapabilities;
     fn notes(&self) -> &'static str {
         ""
+    }
+
+    /// Convert a venue-native pool state into the strategy-facing shape.
+    fn normalize_pool(&self, state: &SharePoolState) -> PoolDescriptor {
+        PoolDescriptor {
+            venue_id: self.venue_id(),
+            address: state.address.clone(),
+            pool_type: state.pool_type,
+            tokens: state.tokens.clone(),
+            fee_bps: state.fee_bps,
+        }
+    }
+
+    /// Convert an existing venue position into the strategy-facing shape.
+    fn normalize_position(&self, position: &UserPosition) -> PositionDescriptor {
+        PositionDescriptor {
+            venue_id: self.venue_id(),
+            pool_address: position.pool_address.clone(),
+            position_key: position
+                .shares
+                .map(|shares| format!("shares:{shares}"))
+                .unwrap_or_else(|| "position:unknown".into()),
+            tokens: position.tokens.clone(),
+            amounts: position.amounts.clone(),
+            quote_xlm: position.value_quote,
+            status: position.status.clone(),
+        }
+    }
+
+    /// Validate and normalize an event emitted by a venue-specific parser.
+    fn normalize_event(&self, event: LiquidityEvent) -> Result<LiquidityEvent> {
+        if event.venue_id != self.venue_id() {
+            return Err(anyhow!(
+                "event venue mismatch: expected {}, got {}",
+                self.venue_id().as_str(),
+                event.venue_id.as_str()
+            ));
+        }
+        if event.event_id.is_empty() || event.pool_address.is_empty() {
+            return Err(anyhow!("liquidity event requires event_id and pool_address"));
+        }
+        Ok(event)
+    }
+
+    /// Build a normalized unsigned operation or fail closed when unsupported.
+    fn build_draft_op(&self, request: DraftRequest) -> Result<DraftOp> {
+        if request.pool_address.is_empty() || request.position_key.is_empty() {
+            return Err(anyhow!("draft operation requires pool_address and position_key"));
+        }
+        if !self.capabilities().supports(request.kind) {
+            return Err(anyhow!(
+                "{} does not support {}",
+                self.name(),
+                serde_json::to_string(&request.kind).unwrap_or_else(|_| "operation".into())
+            ));
+        }
+        Ok(DraftOp {
+            venue_id: self.venue_id(),
+            pool_address: request.pool_address,
+            kind: request.kind,
+            position_key: request.position_key,
+            amounts: request.payload,
+            quote_xlm: request.quote_xlm,
+        })
     }
 
     fn support_row(&self) -> VenueSupportRow {
@@ -262,6 +387,19 @@ pub fn support_matrix() -> Vec<VenueSupportRow> {
 mod tests {
     use super::*;
 
+    #[derive(Debug, Deserialize)]
+    struct ContractFixture {
+        venue_id: VenueId,
+        pool_address: String,
+        pool_type: PoolType,
+        tokens: Vec<String>,
+        reserves: Vec<u128>,
+        fee_bps: u32,
+        total_shares: u128,
+        share_token: Option<String>,
+        operations: Vec<DraftOpKind>,
+    }
+
     #[test]
     fn venue_id_roundtrip() {
         for id in [
@@ -305,5 +443,70 @@ mod tests {
         assert!(capabilities.supports(DraftOpKind::Claim));
         assert!(capabilities.supports(DraftOpKind::AdjustRange));
         assert!(!VenueCapabilities::empty().supports(DraftOpKind::Deposit));
+    }
+
+    #[test]
+    fn every_registered_venue_normalizes_shared_pool_fixture() {
+        let fixture = SharePoolState {
+            address: "CPOOL".into(),
+            pool_type: PoolType::ConstantProduct,
+            tokens: vec!["CTOKEN0".into(), "CTOKEN1".into()],
+            reserves: vec![1_000, 2_000],
+            fee_bps: 30,
+            total_shares: 1_000,
+            share_token: Some("CSHARE".into()),
+            amp: None,
+        };
+
+        for adaptor in default_venue_registry() {
+            let normalized = adaptor.normalize_pool(&fixture);
+            assert_eq!(normalized.venue_id, adaptor.venue_id());
+            assert_eq!(normalized.address, "CPOOL");
+            assert_eq!(normalized.tokens.len(), 2);
+        }
+    }
+
+    #[test]
+    fn scaffold_adaptors_fail_closed_for_copy_operations() {
+        let request = DraftRequest {
+            pool_address: "CPOOL".into(),
+            kind: DraftOpKind::Deposit,
+            position_key: "shares:1".into(),
+            payload: serde_json::json!({"amounts": [10, 20]}),
+            quote_xlm: Some(1.0),
+        };
+
+        for adaptor in default_venue_registry() {
+            let result = adaptor.build_draft_op(request.clone());
+            if adaptor.venue_id() == VenueId::Aquarius {
+                assert!(result.is_ok());
+            } else {
+                assert!(result.is_err(), "{} must fail closed", adaptor.name());
+            }
+        }
+    }
+
+    #[test]
+    fn contract_fixtures_match_shared_pool_boundary() {
+        let fixtures = [
+            include_str!("../fixtures/aquarius-pool.json"),
+            include_str!("../fixtures/phoenix-pool.json"),
+        ];
+
+        for raw in fixtures {
+            let fixture: ContractFixture = serde_json::from_str(raw).unwrap();
+            assert!(!fixture.pool_address.is_empty());
+            assert_eq!(fixture.tokens.len(), fixture.reserves.len());
+            assert!(fixture.fee_bps <= 10_000);
+            assert!(fixture.total_shares > 0);
+            assert!(fixture.pool_type != PoolType::Unknown);
+            assert!(fixture.operations.iter().all(|kind| matches!(
+                kind,
+                DraftOpKind::Deposit | DraftOpKind::Withdraw | DraftOpKind::Claim
+            )));
+            if fixture.venue_id == VenueId::Aquarius {
+                assert_eq!(fixture.share_token.as_deref(), Some("CAQUARIUSSHARE"));
+            }
+        }
     }
 }

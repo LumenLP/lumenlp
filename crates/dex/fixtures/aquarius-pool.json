@@ -1,0 +1,11 @@
+{
+  "venue_id": "aquarius",
+  "pool_address": "CAQUARIUSPOOL",
+  "pool_type": "constant_product",
+  "tokens": ["CTOKENA", "CTOKENB"],
+  "reserves": [1250000000, 850000000],
+  "fee_bps": 30,
+  "total_shares": 1000000000,
+  "share_token": "CAQUARIUSSHARE",
+  "operations": ["deposit", "withdraw", "claim"]
+}

@@ -14,8 +14,9 @@ pub mod sushi;
 pub mod types;
 
 pub use adaptor::{
-    support_matrix, AquariusAdaptor, DexAdaptor, DraftOp, DraftOpKind, ScaffoldAdaptor, VenueId,
-    VenueCapabilities, VenueStatus, VenueSupportRow,
+    support_matrix, AquariusAdaptor, DexAdaptor, DraftOp, DraftOpKind, DraftRequest,
+    LiquidityEvent, LiquidityEventKind, PoolDescriptor, PositionDescriptor, ScaffoldAdaptor,
+    VenueCapabilities, VenueId, VenueStatus, VenueSupportRow,
 };
 pub use aquarius::AQUARIUS_ROUTER;
 pub use rpc::SorobanRpc;
