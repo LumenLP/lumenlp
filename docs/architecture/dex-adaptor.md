@@ -12,11 +12,12 @@ LP strategies (copy-scale, stay-in-range, fee harvest) must not hardcode Aquariu
 
 ```text
 crates/dex/
-  adaptor.rs      # DexAdaptor trait + support matrix
+  adaptor.rs      # DexAdaptor trait + normalized boundary + support matrix
   rpc.rs          # shared Soroban RPC
   types.rs / db.rs
   aquarius/       # production (pool, router, positions, pricing)
-  sushi.rs / phoenix.rs / soroswap.rs / comet.rs   # scaffolds
+  phoenix.rs      # read-only query reader; factory/event validation pending
+  sushi.rs / soroswap.rs / comet.rs                # scaffolds
 ```
 
 ## `venue_id`
@@ -25,7 +26,7 @@ crates/dex/
 |----|------|----------------|
 | `aquarius` | Aquarius | **production** |
 | `sushi_v3` | Sushi V3 | scaffold |
-| `phoenix` | Phoenix | scaffold |
+| `phoenix` | Phoenix | scaffold; read-only reader in progress |
 | `soroswap_amm` | Soroswap AMM | scaffold |
 | `comet` | Comet | scaffold |
 
@@ -64,6 +65,18 @@ Payload amounts remain venue-specific JSON so CP shares and CL ticks can coexist
 4. Extend copy/runtime to accept that `venue_id`.  
 5. Add contract/event fixtures and compatibility tests for pool, position, event, and draft normalization.  
 6. Update `GET /v1/venues` via `default_venue_registry()`.
+
+## Phoenix first slice
+
+`dex::phoenix::hydrate_pool` reads the Phoenix XYK pool query surface:
+
+- `query_config` for token addresses and `total_fee_bps`;
+- `query_pool_info` for token reserves and total shares;
+- signed Soroban integer fields are normalized to non-negative `u128` values;
+- token order is checked between both query responses;
+- no write operation or factory discovery is enabled yet.
+
+Promotion to production requires a validated factory address set, event topic fixtures, and mainnet spot checks before enabling indexing or Copy LP operations.
 
 ## Related
 
