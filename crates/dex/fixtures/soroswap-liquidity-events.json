@@ -1,0 +1,23 @@
+{
+  "venue": "soroswap_amm",
+  "event_topics": {
+    "deposit": [
+      "to",
+      "amount_0",
+      "amount_1",
+      "liquidity",
+      "new_reserve_0",
+      "new_reserve_1"
+    ],
+    "withdraw": [
+      "to",
+      "liquidity",
+      "amount_0",
+      "amount_1",
+      "new_reserve_0",
+      "new_reserve_1"
+    ]
+  },
+  "ignored_topics": ["swap", "sync", "skim"],
+  "note": "SoroswapPair emits a namespace topic followed by the event symbol; values are decoded from Soroban events at index time."
+}

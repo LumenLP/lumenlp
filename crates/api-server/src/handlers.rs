@@ -77,6 +77,7 @@ pub fn router() -> Router<AppState> {
 }
 
 const WINDOWS: [(&str, i64); 4] = [("5m", 5), ("1h", 60), ("6h", 360), ("24h", 1_440)];
+const SCORE_TVL_FLOOR: f64 = 10.0;
 
 fn cadence_sort_value(value: Option<f64>) -> f64 {
     match value {
@@ -93,17 +94,26 @@ fn pool_score_json(
     net_liq_override: Option<f64>,
 ) -> Value {
     let metrics_24h = window_metrics.get("24h");
-    let fee_tvl = metrics_24h
+    let reported_fee_tvl = metrics_24h
         .and_then(|v| v.get("fee_tvl"))
         .and_then(|v| v.as_f64())
         .unwrap_or(0.0);
+    let fee = metrics_24h
+        .and_then(|v| v.get("fee"))
+        .and_then(|v| v.as_f64())
+        .filter(|value| value.is_finite() && *value >= 0.0);
     let volume = volume_24h_override.unwrap_or_else(|| {
         metrics_24h
             .and_then(|v| v.get("volume"))
             .and_then(|v| v.as_f64())
             .unwrap_or(0.0)
     });
-    let liquidity = tvl.max(1.0);
+    // A tiny pool can produce a mathematically huge Fee/TVL from a few cents
+    // of fees. Keep that signal visible, but prevent it from dominating rank.
+    let liquidity = tvl.max(SCORE_TVL_FLOOR);
+    let fee_tvl = fee
+        .map(|value| value / liquidity)
+        .unwrap_or_else(|| if tvl >= SCORE_TVL_FLOOR { reported_fee_tvl } else { 0.0 });
     let volume_efficiency = volume / liquidity;
     let net_liq = net_liq_override.unwrap_or_else(|| {
         activity_summary
@@ -547,6 +557,7 @@ async fn list_pools(State(state): State<AppState>) -> impl IntoResponse {
         rollups_map,
         activity_map,
         activity_summary_map,
+        latest_reserves_map,
         indexer_status,
     ) = {
         let db = state.db.lock().unwrap();
@@ -560,6 +571,7 @@ async fn list_pools(State(state): State<AppState>) -> impl IntoResponse {
             index_db
                 .pool_activity_summary_map(Utc::now().timestamp() - 24 * 60 * 60)
                 .unwrap_or_default(),
+            index_db.latest_reserves_quote_xlm_map().unwrap_or_default(),
             index_db.status().ok(),
         )
     };
@@ -600,7 +612,22 @@ async fn list_pools(State(state): State<AppState>) -> impl IntoResponse {
                     continue;
                 };
                 let address = address.to_string();
-                let latest_tvl = obj.get("tvl").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                let snapshot_tvl = obj.get("tvl").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                let snapshot_ts = obj
+                    .get("last_snapshot_at")
+                    .and_then(|value| value.as_str())
+                    .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+                    .map(|value| value.timestamp())
+                    .unwrap_or(0);
+                let latest_tvl = latest_reserves_map
+                    .get(&address)
+                    .filter(|(event_ts, _)| snapshot_tvl <= 0.0 || event_ts > &snapshot_ts)
+                    .map(|(_, quote)| *quote)
+                    .unwrap_or(snapshot_tvl);
+                if (latest_tvl - snapshot_tvl).abs() > f64::EPSILON {
+                    obj.insert("tvl".into(), json!(latest_tvl));
+                    obj.insert("tvl_source".into(), json!("event_reserves"));
+                }
                 let fee_bps = obj.get("fee_bps").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
                 let mut metrics = rollups_map
                     .get(&address)
@@ -718,7 +745,7 @@ async fn pool_detail(
                 .ok(),
         )
     };
-    let (token_meta, token_meta_map, tokens) = if let Some((_, tokens_json, _)) = meta.as_ref() {
+    let (token_meta, token_meta_map, tokens) = if let Some((_, tokens_json, _, _)) = meta.as_ref() {
         let tokens: Vec<String> = serde_json::from_str(tokens_json).unwrap_or_default();
         if tokens.is_empty() {
             (Vec::new(), HashMap::new(), tokens)
@@ -804,6 +831,7 @@ async fn pool_detail(
     };
     Json(json!({
         "address": address,
+        "venue": meta.as_ref().map(|m| m.3.clone()),
         "pool_type": meta.as_ref().map(|m| m.0.clone()),
         "tokens": meta.as_ref().and_then(|m| serde_json::from_str::<Value>(&m.1).ok()),
         "fee_bps": meta.as_ref().map(|m| m.2),
@@ -945,7 +973,7 @@ async fn pool_events(
         db.pool_meta(&address)
             .ok()
             .flatten()
-            .and_then(|(_, tokens_json, _)| serde_json::from_str(&tokens_json).ok())
+            .and_then(|(_, tokens_json, _, _)| serde_json::from_str(&tokens_json).ok())
             .unwrap_or_default()
     };
     let token_ids: HashSet<String> = tokens.iter().cloned().collect();
@@ -1860,6 +1888,18 @@ mod tests {
         assert_eq!(bridge_tvl_usd(0.0, Some(0.17)), None);
         assert_eq!(bridge_tvl_usd(-1.0, Some(0.17)), None);
         assert!(bridge_tvl_usd(100.0, Some(0.17)).unwrap() > 0.0);
+    }
+
+    #[test]
+    fn score_floor_prevents_micro_pool_fee_tvl_from_dominating() {
+        let metrics = json!({
+            "24h": {"fee_tvl": 10.48, "volume": 0.20}
+        });
+        let score = pool_score_json(0.031, &metrics, None, None, None)
+            .get("score")
+            .and_then(Value::as_f64)
+            .unwrap();
+        assert!(score < 10.0, "micro-pool score={score}");
     }
 
     #[test]

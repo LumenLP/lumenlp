@@ -1,0 +1,13 @@
+{
+  "venue": "soroswap_amm",
+  "network": "public",
+  "checked_at": "2026-08-17",
+  "factory_address": "CA4HEQTL2WPEUYKYKCDOHCDNIV4QHNJ7EL4J4NQ6VADP7SYHVRYZ7AW2",
+  "pair_index": 0,
+  "pair_address": "CB46LMGJC7SYSH4C7SBNLV635OX5BSNQDGRR32NRXAV7N2AVNZMQUJ3A",
+  "token_0": "CBCU5VMZ3GNHHKJUWZ2GI7K36MEAXOJW2RJCIJHFPVFGBME3WADLXA6W",
+  "token_1": "CCBJNX4B23ZDXEE3KRS2IAQJSLNQY4ZJ24K44BI7FYYIF5ZAZMRYPRRD",
+  "reserves": ["2000000000000", "1250000000000"],
+  "fee_bps": 30,
+  "source": "mainnet Soroban RPC read-only contract invocation"
+}

@@ -1,6 +1,6 @@
 # DexAdaptor — multi-DEX LP surface
 
-**Status:** Interface + Aquarius production + read-only readers for Phoenix and Soroswap AMM; Sushi V3 and Comet remain scaffolds.
+**Status:** Interface + Aquarius production + multi-venue read/index support for Soroswap AMM; Phoenix has a validated read-only boundary; Sushi V3 and Comet remain scaffolds.
 **Code:** `crates/dex/src/adaptor.rs`  
 **API:** `GET /v1/venues`
 
@@ -16,8 +16,8 @@ crates/dex/
   rpc.rs          # shared Soroban RPC
   types.rs / db.rs
   aquarius/       # production (pool, router, positions, pricing)
-  phoenix.rs      # read-only factory/pool query reader; LP events pending
-  soroswap.rs     # read-only factory/pair query reader; LP events pending
+  phoenix.rs      # factory/pool query reader; write/copy support pending
+  soroswap.rs     # factory/pair query reader; write/copy support pending
   sushi.rs / comet.rs                             # scaffolds
 ```
 
@@ -28,7 +28,7 @@ crates/dex/
 | `aquarius` | Aquarius | **production** |
 | `sushi_v3` | Sushi V3 | scaffold |
 | `phoenix` | Phoenix | scaffold; read-only reader validated on mainnet |
-| `soroswap_amm` | Soroswap AMM | scaffold; read-only reader validated on mainnet |
+| `soroswap_amm` | Soroswap AMM | indexed read support; Copy LP writes pending |
 | `comet` | Comet | scaffold |
 
 ## Capabilities
@@ -92,16 +92,17 @@ Repeatable read-only validation is available at `deploy/validate-phoenix.sh`. It
 
 ## Soroswap first slice
 
-`dex::soroswap` covers the read-only factory and constant-product pair boundary:
+`dex::soroswap` covers the factory, constant-product pair, and first production indexing boundary:
 
 - `discover_pool_addresses` calls `all_pairs_length` and `all_pairs`;
 - the mainnet factory configuration is `CA4HEQTL2WPEUYKYKCDOHCDNIV4QHNJ7EL4J4NQ6VADP7SYHVRYZ7AW2`;
 - `hydrate_pool` reads `token_0`, `token_1`, and `get_reserves` concurrently;
 - the current Soroswap AMM fee is normalized as 30 bps;
 - reserves are decoded as non-negative signed Soroban integers;
-- no LP event parser or write operation is enabled yet.
+- `deposit` and `withdraw` are recognized as LP lifecycle events; `swap`, `sync`, and `skim` are excluded;
+- no write operation is enabled yet.
 
-The mainnet spot-check fixture records a successful factory and pair read. Repeatable validation is available at `deploy/validate-soroswap.sh`. Promotion to production still requires pair event-version validation, LP share accounting, and a monitored indexing rollout.
+The mainnet spot-check fixture records a successful factory and pair read. Soroswap discovery, pool hydration, and event ingestion are enabled alongside Aquarius in the production indexer and snapshotter. Repeatable validation is available at `deploy/validate-soroswap.sh`. Copy LP promotion still requires pair event-version validation, LP share accounting, policy integration, and a monitored write rollout.
 
 ## Related
 

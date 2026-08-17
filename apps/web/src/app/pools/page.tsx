@@ -82,6 +82,12 @@ function poolTypeLabel(type: string | null | undefined) {
   return type;
 }
 
+function venueLabel(venue: string | null | undefined) {
+  if (venue === "soroswap_amm" || venue === "soroswap") return "Soroswap";
+  if (venue === "aquarius") return "Aquarius";
+  return venue || "Stellar DEX";
+}
+
 function fmtActivitySummary(pool: PoolRow, xlmUsd?: number | null) {
   const s = pool.activity_summary;
   if (!s) return "—";
@@ -749,6 +755,7 @@ function PoolsPageInner() {
                     <td>{fmtNum(p.activity?.swap_count ?? 0, 0)}</td>
                     <td className="muted">
                       <span className="badge">{poolTypeLabel(p.pool_type)}</span>
+                      <span className="badge">{venueLabel(p.venue)}</span>
                     </td>
 	                    <td className="muted">{fmtUnixTs(p.activity?.last_event_at)}</td>
                     <td className="muted">
@@ -777,6 +784,7 @@ function PoolsPageInner() {
                     <div className="pool-card-mini-icons">
                       <span className="badge">{pool.fee_bps} bps</span>
                       <span className="badge">{poolTypeLabel(pool.pool_type)}</span>
+                      <span className="badge">{venueLabel(pool.venue)}</span>
                     </div>
                   </div>
                 </div>

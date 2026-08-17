@@ -1,0 +1,8 @@
+{
+  "venue": "soroswap_amm",
+  "factory_address": "CA4HEQTL2WPEUYKYKCDOHCDNIV4QHNJ7EL4J4NQ6VADP7SYHVRYZ7AW2",
+  "discovery": ["all_pairs_length", "all_pairs"],
+  "pair_reads": ["token_0", "token_1", "get_reserves"],
+  "fee_bps": 30,
+  "note": "Read-only fixture shape; live event and LP operation support is not enabled."
+}

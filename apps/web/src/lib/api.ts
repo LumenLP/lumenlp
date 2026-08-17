@@ -160,6 +160,7 @@ export type QuoteInfo = {
 
 export type PoolRow = {
   address: string;
+  venue?: string;
   pool_type: string;
   tokens: string[];
   token_meta?: Array<{
@@ -263,6 +264,7 @@ export type PoolsResponse = {
 
 export type PoolDetailResponse = {
   address: string;
+  venue?: string | null;
   token_meta?: Array<{
     address: string;
     symbol: string;

@@ -1002,6 +1002,44 @@ impl IndexDb {
         Ok(out)
     }
 
+    /// Return the newest reserve quote event for each pool in one query.
+    ///
+    /// The pool list endpoint uses this to avoid showing an old snapshot while
+    /// the detail endpoint is already able to see a newer reserve update.
+    pub fn latest_reserves_quote_xlm_map(&self) -> Result<HashMap<String, (i64, f64)>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT created_at, pool_address, body_json
+            FROM pool_events
+            WHERE kind IN ('update_reserves', 'reserves_sync')
+            ORDER BY created_at DESC, id DESC
+            "#,
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let created_at: i64 = row.get(0)?;
+            let pool_address: String = row.get(1)?;
+            let body_json: String = row.get(2)?;
+            Ok((created_at, pool_address, body_json))
+        })?;
+        let mut latest = HashMap::new();
+        for row in rows {
+            let (created_at, pool_address, body_json) = row?;
+            if latest.contains_key(&pool_address) {
+                continue;
+            }
+            let body: Value = serde_json::from_str(&body_json).unwrap_or(Value::Null);
+            let Some(quote) = body
+                .pointer("/derived/reserves_quote_xlm")
+                .and_then(Value::as_f64)
+                .filter(|value| value.is_finite() && *value > 0.0)
+            else {
+                continue;
+            };
+            latest.insert(pool_address, (created_at, quote));
+        }
+        Ok(latest)
+    }
+
     pub fn pool_activity_summary(
         &self,
         pool_address: &str,

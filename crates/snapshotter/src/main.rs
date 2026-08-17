@@ -9,6 +9,7 @@ use {
             router::discover_pool_addresses,
         },
         db::Db,
+        soroswap::{discover_mainnet_pool_addresses, hydrate_pool as hydrate_soroswap_pool},
         SorobanRpc, MAINNET_PASSPHRASE,
     },
     metrics::{fee_apr_24h, tvl_from_reserves},
@@ -28,27 +29,56 @@ async fn main() -> Result<()> {
     let top_n: usize = std::env::var("SNAPSHOT_TOP_N")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(40);
+        .unwrap_or(400);
 
     let rpc = SorobanRpc::new(&rpc_url, MAINNET_PASSPHRASE);
     let db = Db::open(&db_path)?;
 
     info!(%rpc_url, %db_path, top_n, "snapshotter starting");
 
-    let addresses = discover_pool_addresses(&rpc).await?;
-    info!(discovered = addresses.len(), "hydrating pools");
+    let venues = std::env::var("SNAPSHOT_VENUES").unwrap_or_else(|_| "aquarius,soroswap".into());
+    let mut pools = Vec::new();
+    for venue in venues
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let discovered = match venue {
+            "aquarius" => discover_pool_addresses(&rpc).await?,
+            "soroswap" | "soroswap_amm" => discover_mainnet_pool_addresses(&rpc).await?,
+            other => anyhow::bail!("unknown snapshot venue: {other}"),
+        };
+        info!(
+            venue,
+            discovered = discovered.len(),
+            "venue pools discovered"
+        );
+        pools.extend(
+            discovered
+                .into_iter()
+                .map(|address| (venue.to_string(), address)),
+        );
+    }
+    pools.sort_by(|a, b| a.1.cmp(&b.1));
+    pools.dedup_by(|a, b| a.1 == b.1);
+    info!(discovered = pools.len(), "hydrating pools");
 
     let mut hydrated = Vec::new();
-    for (i, addr) in addresses.iter().enumerate() {
-        match hydrate_pool(&rpc, addr).await {
+    for (i, (venue, addr)) in pools.iter().enumerate() {
+        let state = match venue.as_str() {
+            "aquarius" => hydrate_pool(&rpc, addr).await,
+            "soroswap" | "soroswap_amm" => hydrate_soroswap_pool(&rpc, addr).await,
+            _ => unreachable!("validated venue during discovery"),
+        };
+        match state {
             Ok(state) => {
-                db.upsert_pool(&state)?;
+                db.upsert_pool_with_venue(&state, venue)?;
                 hydrated.push(state);
             }
             Err(e) => warn!(pool = %addr, error = %e, "hydrate failed"),
         }
         if (i + 1) % 20 == 0 {
-            info!(done = i + 1, total = addresses.len(), "hydrate progress");
+            info!(done = i + 1, total = pools.len(), "hydrate progress");
         }
     }
 

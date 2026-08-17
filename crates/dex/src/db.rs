@@ -51,28 +51,49 @@ impl Db {
               ON pool_snapshots(pool_address, ts);
             "#,
         )?;
+        let has_venue: bool = self
+            .conn
+            .prepare("PRAGMA table_info(pools)")?
+            .query_map([], |row| row.get::<_, String>(1))?
+            .any(|column| column.as_deref().ok() == Some("venue"));
+        if !has_venue {
+            self.conn.execute(
+                "ALTER TABLE pools ADD COLUMN venue TEXT NOT NULL DEFAULT 'aquarius'",
+                [],
+            )?;
+        }
         Ok(())
     }
 
     pub fn upsert_pool(&self, state: &SharePoolState) -> Result<()> {
+        self.upsert_pool_with_venue(state, "aquarius")
+    }
+
+    pub fn upsert_pool_with_venue(&self, state: &SharePoolState, venue: &str) -> Result<()> {
         let tokens_json = serde_json::to_string(&state.tokens)?;
         let now = Utc::now().to_rfc3339();
+        let venue_id = match venue {
+            "soroswap" => "soroswap_amm",
+            other => other,
+        };
         self.conn.execute(
             r#"
-            INSERT INTO pools (address, pool_type, tokens_json, fee_bps, updated_at)
-            VALUES (?1, ?2, ?3, ?4, ?5)
+            INSERT INTO pools (address, pool_type, tokens_json, fee_bps, updated_at, venue)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6)
             ON CONFLICT(address) DO UPDATE SET
               pool_type=excluded.pool_type,
               tokens_json=excluded.tokens_json,
               fee_bps=excluded.fee_bps,
-              updated_at=excluded.updated_at
+              updated_at=excluded.updated_at,
+              venue=excluded.venue
             "#,
             params![
                 state.address,
                 state.pool_type.as_str(),
                 tokens_json,
                 state.fee_bps as i64,
-                now
+                now,
+                venue_id
             ],
         )?;
         Ok(())
@@ -241,13 +262,13 @@ impl Db {
         }
     }
 
-    pub fn pool_meta(&self, address: &str) -> Result<Option<(String, String, i64)>> {
+    pub fn pool_meta(&self, address: &str) -> Result<Option<(String, String, i64, String)>> {
         let mut stmt = self
             .conn
-            .prepare("SELECT pool_type, tokens_json, fee_bps FROM pools WHERE address = ?1")?;
+            .prepare("SELECT pool_type, tokens_json, fee_bps, venue FROM pools WHERE address = ?1")?;
         let mut rows = stmt.query(params![address])?;
         if let Some(r) = rows.next()? {
-            Ok(Some((r.get(0)?, r.get(1)?, r.get(2)?)))
+            Ok(Some((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
         } else {
             Ok(None)
         }
@@ -258,10 +279,11 @@ impl Db {
         let mut out = Vec::new();
         for s in snaps {
             let meta = self.pool_meta(&s.pool_address)?;
-            let (pool_type, tokens_json, fee_bps) =
-                meta.unwrap_or_else(|| ("unknown".into(), "[]".into(), 0));
+            let (pool_type, tokens_json, fee_bps, venue) =
+                meta.unwrap_or_else(|| ("unknown".into(), "[]".into(), 0, "aquarius".into()));
             out.push(serde_json::json!({
                 "address": s.pool_address,
+                "venue": venue,
                 "pool_type": pool_type,
                 "tokens": serde_json::from_str::<serde_json::Value>(&tokens_json).unwrap_or(serde_json::json!([])),
                 "fee_bps": fee_bps,
@@ -279,7 +301,7 @@ impl Db {
         let snaps = self.latest_snapshots()?;
         let mut out = Vec::new();
         for s in snaps {
-            let Some((pool_type, tokens_json, fee_bps)) = self.pool_meta(&s.pool_address)? else {
+            let Some((pool_type, tokens_json, fee_bps, _venue)) = self.pool_meta(&s.pool_address)? else {
                 continue;
             };
             let tokens: Vec<String> = serde_json::from_str(&tokens_json).unwrap_or_default();

@@ -4,14 +4,15 @@ use {
         types::{PoolEvent, PoolEventKind, PoolSwap},
     },
     anyhow::{anyhow, Context, Result},
+    base64::{engine::general_purpose::STANDARD as BASE64, Engine as _},
+    chrono::DateTime,
     dex::{
         aquarius::{
             pool::hydrate_pool, pricing::price_book_from_pools, router::discover_pool_addresses,
         },
+        soroswap::{discover_mainnet_pool_addresses, hydrate_pool as hydrate_soroswap_pool},
         PoolType, SharePoolState, SorobanRpc,
     },
-    base64::{engine::general_purpose::STANDARD as BASE64, Engine as _},
-    chrono::DateTime,
     metrics::PriceBook,
     serde::Deserialize,
     serde_json::{json, Value},
@@ -50,6 +51,7 @@ pub struct EventScanResult {
 struct PoolIndexContext {
     fee_bps_by_pool: HashMap<String, u32>,
     tokens_by_pool: HashMap<String, Vec<String>>,
+    dex_by_pool: HashMap<String, String>,
     price_book: PriceBook,
 }
 
@@ -60,8 +62,36 @@ pub struct PoolEventScanner {
 
 impl PoolEventScanner {
     pub async fn discover(rpc: &SorobanRpc, db: &IndexDb) -> Result<Self> {
-        let pools = discover_pool_addresses(rpc).await?;
-        let context = build_index_context(rpc, db, &pools).await?;
+        let venues = std::env::var("INDEXER_VENUES").unwrap_or_else(|_| "aquarius,soroswap".into());
+        let mut pool_venues = Vec::new();
+        for venue in venues
+            .split(',')
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            let discovered = match venue {
+                "aquarius" => discover_pool_addresses(rpc).await?,
+                "soroswap" | "soroswap_amm" => discover_mainnet_pool_addresses(rpc).await?,
+                other => anyhow::bail!("unknown indexer venue: {other}"),
+            };
+            info!(
+                venue,
+                pools = discovered.len(),
+                "indexer venue pools discovered"
+            );
+            pool_venues.extend(
+                discovered
+                    .into_iter()
+                    .map(|address| (venue.to_string(), address)),
+            );
+        }
+        pool_venues.sort_by(|a, b| a.1.cmp(&b.1));
+        pool_venues.dedup_by(|a, b| a.1 == b.1);
+        let pools = pool_venues
+            .iter()
+            .map(|(_, address)| address.clone())
+            .collect::<Vec<_>>();
+        let context = build_index_context(rpc, db, &pool_venues).await?;
         Ok(Self { pools, context })
     }
 
@@ -142,13 +172,21 @@ impl PoolEventScanner {
 async fn build_index_context(
     rpc: &SorobanRpc,
     db: &IndexDb,
-    pools: &[String],
+    pool_venues: &[(String, String)],
 ) -> Result<PoolIndexContext> {
+    let pools = pool_venues
+        .iter()
+        .map(|(_, address)| address.clone())
+        .collect::<Vec<_>>();
     let cached_states = db.cached_pool_states().unwrap_or_default();
     let mut cached_by_pool = HashMap::new();
     let mut hydrated: Vec<SharePoolState> = Vec::new();
     let mut fee_bps_by_pool = HashMap::new();
     let mut tokens_by_pool = HashMap::new();
+    let dex_by_pool = pool_venues
+        .iter()
+        .map(|(venue, address)| (address.clone(), venue.clone()))
+        .collect::<HashMap<_, _>>();
 
     for state in cached_states {
         fee_bps_by_pool.insert(state.address.clone(), state.fee_bps);
@@ -163,11 +201,19 @@ async fn build_index_context(
     }
 
     let mut hydrated_missing = 0usize;
-    for pool in pools {
+    for pool in &pools {
         if cached_by_pool.contains_key(pool) {
             continue;
         }
-        match hydrate_pool(rpc, pool).await {
+        let venue = dex_by_pool
+            .get(pool)
+            .map(String::as_str)
+            .unwrap_or("aquarius");
+        let hydrated_state = match venue {
+            "soroswap" | "soroswap_amm" => hydrate_soroswap_pool(rpc, &pool).await,
+            _ => hydrate_pool(rpc, &pool).await,
+        };
+        match hydrated_state {
             Ok(state) => {
                 fee_bps_by_pool.insert(state.address.clone(), state.fee_bps);
                 tokens_by_pool.insert(state.address.clone(), state.tokens.clone());
@@ -188,6 +234,7 @@ async fn build_index_context(
     Ok(PoolIndexContext {
         fee_bps_by_pool,
         tokens_by_pool,
+        dex_by_pool,
         price_book,
     })
 }
@@ -296,10 +343,25 @@ fn parse_pool_event(
     let Some(topics) = &event.topic else {
         return Ok(None);
     };
-    let Some(kind_name) = topic_symbol_name(topics.first())? else {
+    let Some(first_topic) = topic_symbol_name(topics.first())? else {
         return Ok(None);
     };
-    let kind = PoolEventKind::parse(&kind_name);
+    let is_soroswap = context
+        .dex_by_pool
+        .get(&event.contract_id)
+        .is_some_and(|venue| venue == "soroswap" || venue == "soroswap_amm");
+    let kind_name = if is_soroswap && first_topic == "SoroswapPair" {
+        topic_symbol_name(topics.get(1))?.unwrap_or_default()
+    } else {
+        first_topic
+    };
+    let kind = match (is_soroswap, kind_name.as_str()) {
+        (true, "deposit") => PoolEventKind::DepositLiquidity,
+        (true, "withdraw") => PoolEventKind::WithdrawLiquidity,
+        (true, "swap") => PoolEventKind::Trade,
+        (true, "sync") => PoolEventKind::ReservesSync,
+        _ => PoolEventKind::parse(&kind_name),
+    };
     if kind == PoolEventKind::Unknown {
         return Ok(None);
     }
@@ -309,7 +371,11 @@ fn parse_pool_event(
         .map(|item| decode_scval_b64(item).and_then(|value| scval_to_json(&value)))
         .collect::<Result<Vec<_>>>()?;
     let decoded_body = event_body_json(event.value.as_ref())?;
-    let topic_actor = actor_from_topics(kind.as_str(), &decoded_topics);
+    let topic_actor = if is_soroswap {
+        actor_from_soroswap_data(&decoded_body)
+    } else {
+        actor_from_topics(kind.as_str(), &decoded_topics)
+    };
     let actor = topic_actor.as_deref().or(tx_actor);
     let derived = derive_event_fields(
         &kind,
@@ -318,6 +384,7 @@ fn parse_pool_event(
         &decoded_body,
         context,
         actor,
+        is_soroswap,
     );
     let created_at = ledger_closed_at_to_unix(event.ledger_closed_at.as_deref(), event.ledger);
     let body_json = json!({
@@ -365,6 +432,7 @@ fn derive_event_fields(
     data: &[Value],
     context: &PoolIndexContext,
     actor: Option<&str>,
+    is_soroswap: bool,
 ) -> Value {
     let pool_fee_bps = context.fee_bps_by_pool.get(pool_address).copied();
     let pool_tokens = context
@@ -375,39 +443,40 @@ fn derive_event_fields(
 
     match kind {
         PoolEventKind::Trade => {
+            if is_soroswap {
+                return derive_soroswap_swap(pool_fee_bps, &pool_tokens, data, context, actor);
+            }
             let token_in = topic.get(1).and_then(value_address_string);
             let token_out = topic.get(2).and_then(value_address_string);
             let amount_in = data.get(0).and_then(value_amount_string);
             let amount_out = data.get(1).and_then(value_amount_string);
             let fee_amount = data.get(2).and_then(value_amount_string);
-            let volume_in = token_in
-                .as_deref()
-                .zip(amount_in.as_deref())
-                .and_then(|(token, amount)| {
-                    estimate_amount_xlm(&context.price_book, token, amount)
-                });
-            let volume_out = token_out
-                .as_deref()
-                .zip(amount_out.as_deref())
-                .and_then(|(token, amount)| {
-                    estimate_amount_xlm(&context.price_book, token, amount)
-                });
+            let volume_in =
+                token_in
+                    .as_deref()
+                    .zip(amount_in.as_deref())
+                    .and_then(|(token, amount)| {
+                        estimate_amount_xlm(&context.price_book, token, amount)
+                    });
+            let volume_out =
+                token_out
+                    .as_deref()
+                    .zip(amount_out.as_deref())
+                    .and_then(|(token, amount)| {
+                        estimate_amount_xlm(&context.price_book, token, amount)
+                    });
             // One-sided notional (Aquarius-style): prefer amount_in, fall back to amount_out
             // when the input token is missing from the price book.
             let volume_quote_xlm = volume_in.or(volume_out);
-            let fee_quote_xlm =
-                token_in
-                    .as_deref()
-                    .zip(fee_amount.as_deref())
-                    .and_then(|(token, amount)| {
-                        estimate_amount_xlm(&context.price_book, token, amount)
-                    })
-                    .or_else(|| {
-                        // fee is in token_in; if unpriced, approximate via volume * fee_bps
-                        pool_fee_bps.and_then(|bps| {
-                            volume_quote_xlm.map(|v| v * (bps as f64) / 10_000.0)
-                        })
-                    });
+            let fee_quote_xlm = token_in
+                .as_deref()
+                .zip(fee_amount.as_deref())
+                .and_then(|(token, amount)| estimate_amount_xlm(&context.price_book, token, amount))
+                .or_else(|| {
+                    // fee is in token_in; if unpriced, approximate via volume * fee_bps
+                    pool_fee_bps
+                        .and_then(|bps| volume_quote_xlm.map(|v| v * (bps as f64) / 10_000.0))
+                });
             derived_with_actor(
                 json!({
                     "pool_fee_bps": pool_fee_bps,
@@ -467,6 +536,16 @@ fn derive_event_fields(
             )
         }
         PoolEventKind::DepositLiquidity | PoolEventKind::WithdrawLiquidity => {
+            if is_soroswap {
+                return derive_soroswap_liquidity(
+                    kind,
+                    pool_fee_bps,
+                    &pool_tokens,
+                    data,
+                    context,
+                    actor,
+                );
+            }
             let share_amount = data.first().and_then(value_amount_string);
             let token_amounts = pool_tokens
                 .iter()
@@ -498,6 +577,9 @@ fn derive_event_fields(
             )
         }
         PoolEventKind::UpdateReserves | PoolEventKind::ReservesSync => {
+            if is_soroswap {
+                return derive_soroswap_sync(pool_fee_bps, &pool_tokens, data, context);
+            }
             let reserves = data
                 .iter()
                 .map(value_amount_string)
@@ -535,10 +617,6 @@ fn pool_swap_from_event(event: &PoolEvent) -> Option<PoolSwap> {
     let data = body.get("data")?.as_array()?;
     let derived = body.get("derived")?;
 
-    let token_in = topic.get(1).and_then(value_address_string);
-    let token_out = topic.get(2).and_then(value_address_string);
-    let amount_in = data.get(0).and_then(value_amount_string);
-    let amount_out = data.get(1).and_then(value_amount_string);
     let fee_quote = derived.get("fee_quote_xlm").and_then(Value::as_f64);
     let volume_quote = derived.get("volume_quote_xlm").and_then(Value::as_f64);
     let fee_bps = derived
@@ -546,13 +624,39 @@ fn pool_swap_from_event(event: &PoolEvent) -> Option<PoolSwap> {
         .and_then(Value::as_u64)
         .and_then(|value| u32::try_from(value).ok());
 
+    let soroswap = topic
+        .first()
+        .and_then(|value| value.get("value"))
+        .and_then(Value::as_str)
+        == Some("SoroswapPair");
+    let token_in = derived
+        .get("token_in")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+        .or_else(|| topic.get(1).and_then(value_address_string));
+    let token_out = derived
+        .get("token_out")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+        .or_else(|| topic.get(2).and_then(value_address_string));
+    let amount_in = derived
+        .get("amount_in")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+        .or_else(|| data.first().and_then(value_amount_string));
+    let amount_out = derived
+        .get("amount_out")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+        .or_else(|| data.get(1).and_then(value_amount_string));
+
     Some(PoolSwap {
         tx_hash,
         event_id: event.event_id.clone(),
         ledger: event.ledger,
         created_at: event.created_at,
         pool_address: event.pool_address.clone(),
-        dex: "aquarius".to_string(),
+        dex: if soroswap { "soroswap_amm" } else { "aquarius" }.to_string(),
         token_in,
         token_out,
         amount_in,
@@ -560,6 +664,137 @@ fn pool_swap_from_event(event: &PoolEvent) -> Option<PoolSwap> {
         fee_bps,
         volume_quote,
         fee_quote,
+    })
+}
+
+fn actor_from_soroswap_data(data: &[Value]) -> Option<String> {
+    data.first()
+        .and_then(|value| value.get("to"))
+        .and_then(value_address_string)
+        .filter(|address| is_stellar_account_address(address))
+}
+
+fn soroswap_field<'a>(data: &'a [Value], name: &str) -> Option<&'a Value> {
+    data.first()?.get(name)
+}
+
+fn soroswap_amount(data: &[Value], name: &str) -> Option<String> {
+    soroswap_field(data, name).and_then(value_amount_string)
+}
+
+fn positive_amount(value: Option<String>) -> Option<String> {
+    value.filter(|amount| {
+        amount
+            .parse::<i128>()
+            .map(|value| value > 0)
+            .unwrap_or(false)
+    })
+}
+
+fn derive_soroswap_swap(
+    pool_fee_bps: Option<u32>,
+    pool_tokens: &[String],
+    data: &[Value],
+    context: &PoolIndexContext,
+    actor: Option<&str>,
+) -> Value {
+    let amount0_in = soroswap_amount(data, "amount_0_in");
+    let amount1_in = soroswap_amount(data, "amount_1_in");
+    let amount0_out = soroswap_amount(data, "amount_0_out");
+    let amount1_out = soroswap_amount(data, "amount_1_out");
+    let (token_in, amount_in) = if let Some(amount) = positive_amount(amount0_in.clone()) {
+        (pool_tokens.first().cloned(), Some(amount))
+    } else {
+        (
+            pool_tokens.get(1).cloned(),
+            positive_amount(amount1_in.clone()),
+        )
+    };
+    let (token_out, amount_out) = if let Some(amount) = positive_amount(amount0_out.clone()) {
+        (pool_tokens.first().cloned(), Some(amount))
+    } else {
+        (
+            pool_tokens.get(1).cloned(),
+            positive_amount(amount1_out.clone()),
+        )
+    };
+    let volume_quote_xlm = token_in
+        .as_deref()
+        .zip(amount_in.as_deref())
+        .and_then(|(token, amount)| estimate_amount_xlm(&context.price_book, token, amount));
+    let fee_quote_xlm =
+        pool_fee_bps.and_then(|bps| volume_quote_xlm.map(|volume| volume * bps as f64 / 10_000.0));
+    derived_with_actor(
+        json!({
+            "pool_fee_bps": pool_fee_bps,
+            "token_in": token_in,
+            "token_out": token_out,
+            "amount_in": amount_in,
+            "amount_out": amount_out,
+            "volume_quote_xlm": volume_quote_xlm,
+            "fee_quote_xlm": fee_quote_xlm,
+        }),
+        actor,
+    )
+}
+
+fn derive_soroswap_liquidity(
+    kind: &PoolEventKind,
+    pool_fee_bps: Option<u32>,
+    pool_tokens: &[String],
+    data: &[Value],
+    context: &PoolIndexContext,
+    actor: Option<&str>,
+) -> Value {
+    let (share_amount, amount0, amount1) = match kind {
+        PoolEventKind::DepositLiquidity => (
+            soroswap_amount(data, "liquidity"),
+            soroswap_amount(data, "amount_0"),
+            soroswap_amount(data, "amount_1"),
+        ),
+        _ => (
+            soroswap_amount(data, "liquidity"),
+            soroswap_amount(data, "amount_0"),
+            soroswap_amount(data, "amount_1"),
+        ),
+    };
+    let total_quote_xlm = estimate_two_token_amounts_xlm(
+        &context.price_book,
+        pool_tokens.first().map(String::as_str),
+        amount0.as_deref(),
+        pool_tokens.get(1).map(String::as_str),
+        amount1.as_deref(),
+    );
+    derived_with_actor(
+        json!({
+            "pool_fee_bps": pool_fee_bps,
+            "share_amount": share_amount,
+            "token_amounts": [
+                {"token": pool_tokens.first(), "amount": amount0},
+                {"token": pool_tokens.get(1), "amount": amount1}
+            ],
+            "total_quote_xlm": total_quote_xlm,
+        }),
+        actor,
+    )
+}
+
+fn derive_soroswap_sync(
+    pool_fee_bps: Option<u32>,
+    pool_tokens: &[String],
+    data: &[Value],
+    context: &PoolIndexContext,
+) -> Value {
+    let reserves = vec![
+        soroswap_amount(data, "new_reserve_0"),
+        soroswap_amount(data, "new_reserve_1"),
+    ];
+    let amounts = reserves.iter().flatten().cloned().collect::<Vec<_>>();
+    let reserves_quote_xlm = estimate_reserves_xlm(&context.price_book, pool_tokens, &amounts);
+    json!({
+        "pool_fee_bps": pool_fee_bps,
+        "reserves": pool_tokens.iter().zip(amounts.iter()).map(|(token, amount)| json!({"token": token, "amount": amount})).collect::<Vec<_>>(),
+        "reserves_quote_xlm": reserves_quote_xlm,
     })
 }
 
@@ -634,12 +869,30 @@ fn scval_to_json(val: &xdr::ScVal) -> Result<Value> {
             "type": "i128",
             "value": i128_from_parts(parts.clone()).to_string(),
         }),
+        xdr::ScVal::Map(Some(entries)) => {
+            let mut object = serde_json::Map::new();
+            for entry in entries.iter() {
+                let Some(key) = scval_map_key(&entry.key) else {
+                    continue;
+                };
+                object.insert(key, scval_to_json(&entry.val)?);
+            }
+            Value::Object(object)
+        }
         xdr::ScVal::Void => Value::Null,
         other => json!({
             "type": "unsupported",
             "value": format!("{other:?}"),
         }),
     })
+}
+
+fn scval_map_key(value: &xdr::ScVal) -> Option<String> {
+    match value {
+        xdr::ScVal::Symbol(symbol) => Some(symbol.to_string()),
+        xdr::ScVal::String(text) => Some(text.to_string()),
+        _ => None,
+    }
 }
 
 fn sc_address_to_string(address: &xdr::ScAddress) -> Result<String> {
@@ -806,10 +1059,7 @@ mod tests {
     #[test]
     fn derived_with_actor_injects_field() {
         let derived = derived_with_actor(json!({"share_amount": "1000"}), Some("GABC"));
-        assert_eq!(
-            derived.get("actor").and_then(Value::as_str),
-            Some("GABC")
-        );
+        assert_eq!(derived.get("actor").and_then(Value::as_str), Some("GABC"));
     }
 
     #[test]
