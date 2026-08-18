@@ -1,6 +1,6 @@
 # DexAdaptor — multi-DEX LP surface
 
-**Status:** Interface + Aquarius production + multi-venue read/index support for Soroswap AMM; Phoenix has a validated read-only boundary; Sushi V3 and Comet remain scaffolds.
+**Status:** Interface + Aquarius production + multi-venue read/index support for Soroswap AMM, Phoenix, Sushi V3, and Comet.
 **Code:** `crates/dex/src/adaptor.rs`  
 **API:** `GET /v1/venues`
 
@@ -18,7 +18,8 @@ crates/dex/
   aquarius/       # production (pool, router, positions, pricing)
   phoenix.rs      # factory/pool query reader; write/copy support pending
   soroswap.rs     # factory/pair query reader; write/copy support pending
-  sushi.rs / comet.rs                             # scaffolds
+  sushi.rs        # known-pool CLMM reader; event/write support pending
+  comet.rs        # weighted-pool reader; event/write support pending
 ```
 
 ## `venue_id`
@@ -26,10 +27,10 @@ crates/dex/
 | id | Name | Status today |
 |----|------|----------------|
 | `aquarius` | Aquarius | **production** |
-| `sushi_v3` | Sushi V3 | scaffold |
-| `phoenix` | Phoenix | scaffold; read-only reader validated on mainnet |
+| `sushi_v3` | Sushi V3 | indexed read support; event/Copy LP writes pending |
+| `phoenix` | Phoenix | indexed read support; Copy LP writes pending |
 | `soroswap_amm` | Soroswap AMM | indexed read support; Copy LP writes pending |
-| `comet` | Comet | scaffold |
+| `comet` | Comet | indexed read support; event/Copy LP writes pending |
 
 ## Capabilities
 
@@ -86,7 +87,7 @@ Payload amounts remain venue-specific JSON so CP shares and CL ticks can coexist
 - `swap`, `initialize`, and admin topics are not Copy LP position events;
 - no write operation is enabled yet.
 
-The mainnet spot-check fixture records a successful factory and pool read. Promotion to production still requires event-version validation and a monitored indexing rollout before enabling Copy LP operations. The factory fixture uses the real address; generic pool entries remain synthetic test data.
+The mainnet spot-check fixture records a successful factory and pool read. Phoenix discovery, pool hydration, and swap/activity ingestion are enabled alongside Aquarius and Soroswap in the production indexer and snapshotter. Promotion to Copy LP still requires liquidity-event version validation, LP share accounting, and a monitored write rollout. The factory fixture uses the real address; generic pool entries remain synthetic test data.
 
 Repeatable read-only validation is available at `deploy/validate-phoenix.sh`. It checks factory discovery plus `query_config` and `query_pool_info` without signing or submitting a transaction.
 
@@ -103,6 +104,18 @@ Repeatable read-only validation is available at `deploy/validate-phoenix.sh`. It
 - no write operation is enabled yet.
 
 The mainnet spot-check fixture records a successful factory and pair read. Soroswap discovery, pool hydration, and event ingestion are enabled alongside Aquarius in the production indexer and snapshotter. Repeatable validation is available at `deploy/validate-soroswap.sh`. Copy LP promotion still requires pair event-version validation, LP share accounting, policy integration, and a monitored write rollout.
+
+## Sushi V3 first slice
+
+`dex::sushi` covers the initial concentrated-liquidity analytics boundary:
+
+- uses the validated mainnet Sushi V3 pool catalogue from the local aggregator discovery implementation;
+- reads `slot0`, `liquidity`, `fee`, `token0`, and `token1` from each pool contract;
+- derives virtual reserves from current liquidity and sqrt price for the shared TVL/price pipeline;
+- labels pools as `concentrated` and exposes them through the same API DEX filter as Aquarius, Phoenix, and Soroswap;
+- does not yet classify Sushi CL liquidity events or build Copy LP writes.
+
+The production snapshotter and indexer now include Sushi pools. The derived reserves are an analytics approximation for CLMM state, not fungible LP-share reserves; event fixtures, tick-range accounting, and policy-controlled Copy LP execution are required before promotion beyond read-only analytics.
 
 ## Related
 

@@ -1,5 +1,5 @@
 [Unit]
-Description=LP Agent snapshotter (Aquarius + Soroswap ingest cycle)
+Description=LumenLP snapshotter (Aquarius + Soroswap + Phoenix + Sushi + Comet ingest cycle)
 After=network.target
 
 [Service]
@@ -8,8 +8,8 @@ User=root
 WorkingDirectory=/opt/lpagent
 Environment=RPC_URL=http://127.0.0.1:8003
 Environment=DATABASE_PATH=/opt/lpagent/data/lpagent.db
-Environment=SNAPSHOT_VENUES=aquarius,soroswap
-Environment=SNAPSHOT_TOP_N=400
+Environment=SNAPSHOT_VENUES=aquarius,soroswap,phoenix,sushi,comet
+Environment=SNAPSHOT_TOP_N=600
 Environment=RUST_LOG=info
 ExecStart=/opt/lpagent/target/release/snapshotter
 Nice=10

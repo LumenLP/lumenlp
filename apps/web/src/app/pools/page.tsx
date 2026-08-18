@@ -78,6 +78,7 @@ function poolTypeLabel(type: string | null | undefined) {
   if (!type) return "Unknown";
   if (type === "constant_product") return "AMM";
   if (type === "concentrated") return "CLMM";
+  if (type === "weighted") return "Weighted";
   if (type === "stable") return "Stable";
   return type;
 }
@@ -85,6 +86,9 @@ function poolTypeLabel(type: string | null | undefined) {
 function venueLabel(venue: string | null | undefined) {
   if (venue === "soroswap_amm" || venue === "soroswap") return "Soroswap";
   if (venue === "aquarius") return "Aquarius";
+  if (venue === "phoenix") return "Phoenix";
+  if (venue === "sushi" || venue === "sushi_v3") return "Sushi V3";
+  if (venue === "comet") return "Comet";
   return venue || "Stellar DEX";
 }
 
@@ -160,6 +164,7 @@ function PoolsPageInner() {
   const [windowKey, setWindowKey] = useState<(typeof windows)[number]>("24h");
   const [sortKey, setSortKey] = useState<(typeof sortOptions)[number]>("score");
   const [viewMode, setViewMode] = useState<ViewMode>("card");
+  const [venueFilter, setVenueFilter] = useState<string>("aquarius");
   const [poolTypeFilter, setPoolTypeFilter] = useState<string>("all");
   const [activityFilter, setActivityFilter] = useState<(typeof activityFilters)[number]>("all");
   const [feeTierFilter, setFeeTierFilter] = useState<string>("all");
@@ -172,6 +177,19 @@ function PoolsPageInner() {
 
   const poolTypes = useMemo(
     () => ["all", ...Array.from(new Set(pools.map((pool) => pool.pool_type).filter(Boolean))).sort()],
+    [pools],
+  );
+  const venues = useMemo(
+    () => [
+      "all",
+      ...Array.from(
+        new Set(
+          pools
+            .map((pool) => pool.venue)
+            .filter((venue): venue is string => Boolean(venue)),
+        ),
+      ).sort(),
+    ],
     [pools],
   );
   const feeTiers = useMemo(
@@ -194,6 +212,8 @@ function PoolsPageInner() {
     }
     const nextType = searchParams.get("type");
     if (nextType) setPoolTypeFilter(nextType);
+    const nextVenue = searchParams.get("dex");
+    setVenueFilter(nextVenue === "all" ? "all" : nextVenue || "aquarius");
     const nextActivity = searchParams.get("activity");
     if (nextActivity && activityFilters.includes(nextActivity as (typeof activityFilters)[number])) {
       setActivityFilter(nextActivity as (typeof activityFilters)[number]);
@@ -243,6 +263,7 @@ function PoolsPageInner() {
     if (windowKey !== "24h") params.set("window", windowKey);
     if (sortKey !== "score") params.set("sort", sortKey);
     if (viewMode !== "card") params.set("view", viewMode);
+    if (venueFilter !== "aquarius") params.set("dex", venueFilter);
     if (poolTypeFilter !== "all") params.set("type", poolTypeFilter);
     if (activityFilter !== "all") params.set("activity", activityFilter);
     if (feeTierFilter !== "all") params.set("feeTier", feeTierFilter);
@@ -256,6 +277,7 @@ function PoolsPageInner() {
     setWindowKey("24h");
     setSortKey("score");
     setViewMode("card");
+    setVenueFilter("aquarius");
     setPoolTypeFilter("all");
     setActivityFilter("all");
     setFeeTierFilter("all");
@@ -279,6 +301,7 @@ function PoolsPageInner() {
     sortKey,
     tvlBucketFilter,
     urlReady,
+    venueFilter,
     viewMode,
     windowKey,
   ]);
@@ -304,8 +327,12 @@ function PoolsPageInner() {
       poolTypeFilter === "all"
         ? base
         : base.filter((pool) => pool.pool_type === poolTypeFilter);
+    const filteredByVenue =
+      venueFilter === "all"
+        ? filteredByType
+        : filteredByType.filter((pool) => pool.venue === venueFilter);
     const nowUnix = Date.now() / 1000;
-    const filteredByActivity = filteredByType.filter((pool) => {
+    const filteredByActivity = filteredByVenue.filter((pool) => {
       if (activityFilter === "all") return true;
       if (activityFilter === "active") {
         return (pool.activity_summary?.event_count_24h ?? 0) > 0;
@@ -379,7 +406,7 @@ function PoolsPageInner() {
             : (bWindow?.fee_tvl ?? 0);
       return bValue - aValue;
     });
-  }, [activityFilter, feeTierFilter, feeTvlBucketFilter, poolTypeFilter, pools, q, sortKey, tvlBucketFilter, windowKey]);
+  }, [activityFilter, feeTierFilter, feeTvlBucketFilter, poolTypeFilter, pools, q, sortKey, tvlBucketFilter, venueFilter, windowKey]);
 
   const maxSamples = Math.max(
     0,
@@ -405,6 +432,9 @@ function PoolsPageInner() {
           label: `Sort: ${sortKey.replaceAll("_", " ")}`,
           clear: () => setSortKey("score"),
         }
+      : null,
+    venueFilter !== "aquarius"
+      ? { key: "dex", label: `DEX: ${venueLabel(venueFilter)}`, clear: () => setVenueFilter("all") }
       : null,
     poolTypeFilter !== "all"
       ? { key: "type", label: `Type: ${poolTypeLabel(poolTypeFilter)}`, clear: () => setPoolTypeFilter("all") }
@@ -471,6 +501,21 @@ function PoolsPageInner() {
                 onChange={(e) => setQ(e.target.value)}
               />
             </label>
+            <div className="filter-field">
+              <span className="filter-label">DEX</span>
+              <div className="segmented filter-control">
+                {venues.map((venue) => (
+                  <button
+                    key={venue}
+                    type="button"
+                    className={venue === venueFilter ? "primary" : undefined}
+                    onClick={() => setVenueFilter(venue)}
+                  >
+                    {venue === "all" ? "All" : venueLabel(venue)}
+                  </button>
+                ))}
+              </div>
+            </div>
             <div className="filter-field">
               <span className="filter-label">Type</span>
               <div className="segmented filter-control">
@@ -670,6 +715,7 @@ function PoolsPageInner() {
                   <th className={metricColumnClass(["cadence_24h"])}>Cadence</th>
                   <th className={metricColumnClass(["event_count"])}>Events</th>
                   <th>Swaps</th>
+                  <th>DEX</th>
                   <th>Type</th>
                   <th>Last Event</th>
                   <th>Updated</th>
@@ -753,10 +799,8 @@ function PoolsPageInner() {
                     </td>
                     <td className={metricColumnClass(["event_count"])}>{fmtNum(p.activity?.event_count ?? 0, 0)}</td>
                     <td>{fmtNum(p.activity?.swap_count ?? 0, 0)}</td>
-                    <td className="muted">
-                      <span className="badge">{poolTypeLabel(p.pool_type)}</span>
-                      <span className="badge">{venueLabel(p.venue)}</span>
-                    </td>
+                    <td className="muted"><span className="badge">{venueLabel(p.venue)}</span></td>
+                    <td className="muted"><span className="badge">{poolTypeLabel(p.pool_type)}</span></td>
 	                    <td className="muted">{fmtUnixTs(p.activity?.last_event_at)}</td>
                     <td className="muted">
                       {p.window_metrics?.[windowKey]?.as_of_ts

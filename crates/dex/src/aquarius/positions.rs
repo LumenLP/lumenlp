@@ -105,7 +105,7 @@ async fn load_position(
             }))
         }
         PoolType::Concentrated => load_cl_position(rpc, user, &state, book).await,
-        PoolType::Unknown => Ok(None),
+        PoolType::Unknown | PoolType::Weighted => Ok(None),
     }
 }
 

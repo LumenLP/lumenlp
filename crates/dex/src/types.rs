@@ -6,6 +6,7 @@ pub enum PoolType {
     ConstantProduct,
     Stable,
     Concentrated,
+    Weighted,
     Unknown,
 }
 
@@ -15,6 +16,7 @@ impl PoolType {
             "constant_product" | "volatile" => Self::ConstantProduct,
             "stable" => Self::Stable,
             "concentrated" => Self::Concentrated,
+            "weighted" => Self::Weighted,
             _ => Self::Unknown,
         }
     }
@@ -24,6 +26,7 @@ impl PoolType {
             Self::ConstantProduct => "constant_product",
             Self::Stable => "stable",
             Self::Concentrated => "concentrated",
+            Self::Weighted => "weighted",
             Self::Unknown => "unknown",
         }
     }

@@ -3,14 +3,17 @@ use {
         db::{CachedPoolState, IndexDb},
         types::{PoolEvent, PoolEventKind, PoolSwap},
     },
-    anyhow::{anyhow, Context, Result},
+        anyhow::{anyhow, Context, Result},
     base64::{engine::general_purpose::STANDARD as BASE64, Engine as _},
     chrono::DateTime,
     dex::{
+        comet::{discover_mainnet_pool_addresses as discover_comet_pool_addresses, hydrate_pool as hydrate_comet_pool},
         aquarius::{
             pool::hydrate_pool, pricing::price_book_from_pools, router::discover_pool_addresses,
         },
+        phoenix::{discover_mainnet_pool_addresses as discover_phoenix_pool_addresses, hydrate_pool as hydrate_phoenix_pool},
         soroswap::{discover_mainnet_pool_addresses, hydrate_pool as hydrate_soroswap_pool},
+        sushi::{discover_mainnet_pool_addresses as discover_sushi_pool_addresses, hydrate_pool as hydrate_sushi_pool},
         PoolType, SharePoolState, SorobanRpc,
     },
     metrics::PriceBook,
@@ -62,7 +65,7 @@ pub struct PoolEventScanner {
 
 impl PoolEventScanner {
     pub async fn discover(rpc: &SorobanRpc, db: &IndexDb) -> Result<Self> {
-        let venues = std::env::var("INDEXER_VENUES").unwrap_or_else(|_| "aquarius,soroswap".into());
+        let venues = std::env::var("INDEXER_VENUES").unwrap_or_else(|_| "aquarius,soroswap,phoenix,sushi,comet".into());
         let mut pool_venues = Vec::new();
         for venue in venues
             .split(',')
@@ -72,6 +75,9 @@ impl PoolEventScanner {
             let discovered = match venue {
                 "aquarius" => discover_pool_addresses(rpc).await?,
                 "soroswap" | "soroswap_amm" => discover_mainnet_pool_addresses(rpc).await?,
+                "phoenix" => discover_phoenix_pool_addresses(rpc).await?,
+                "sushi" | "sushi_v3" => discover_sushi_pool_addresses(rpc).await?,
+                "comet" => discover_comet_pool_addresses(rpc).await?,
                 other => anyhow::bail!("unknown indexer venue: {other}"),
             };
             info!(
@@ -211,6 +217,9 @@ async fn build_index_context(
             .unwrap_or("aquarius");
         let hydrated_state = match venue {
             "soroswap" | "soroswap_amm" => hydrate_soroswap_pool(rpc, &pool).await,
+            "phoenix" => hydrate_phoenix_pool(rpc, &pool).await,
+            "sushi" | "sushi_v3" => hydrate_sushi_pool(rpc, &pool).await,
+            "comet" => hydrate_comet_pool(rpc, &pool).await,
             _ => hydrate_pool(rpc, &pool).await,
         };
         match hydrated_state {
@@ -350,14 +359,18 @@ fn parse_pool_event(
         .dex_by_pool
         .get(&event.contract_id)
         .is_some_and(|venue| venue == "soroswap" || venue == "soroswap_amm");
+    let is_phoenix = context
+        .dex_by_pool
+        .get(&event.contract_id)
+        .is_some_and(|venue| venue == "phoenix");
     let kind_name = if is_soroswap && first_topic == "SoroswapPair" {
         topic_symbol_name(topics.get(1))?.unwrap_or_default()
     } else {
         first_topic
     };
-    let kind = match (is_soroswap, kind_name.as_str()) {
-        (true, "deposit") => PoolEventKind::DepositLiquidity,
-        (true, "withdraw") => PoolEventKind::WithdrawLiquidity,
+    let kind = match (is_soroswap || is_phoenix, kind_name.as_str()) {
+        (true, "deposit" | "provide_liquidity") => PoolEventKind::DepositLiquidity,
+        (true, "withdraw" | "withdraw_liquidity") => PoolEventKind::WithdrawLiquidity,
         (true, "swap") => PoolEventKind::Trade,
         (true, "sync") => PoolEventKind::ReservesSync,
         _ => PoolEventKind::parse(&kind_name),
@@ -371,7 +384,7 @@ fn parse_pool_event(
         .map(|item| decode_scval_b64(item).and_then(|value| scval_to_json(&value)))
         .collect::<Result<Vec<_>>>()?;
     let decoded_body = event_body_json(event.value.as_ref())?;
-    let topic_actor = if is_soroswap {
+    let topic_actor = if is_soroswap || is_phoenix {
         actor_from_soroswap_data(&decoded_body)
     } else {
         actor_from_topics(kind.as_str(), &decoded_topics)
@@ -385,6 +398,7 @@ fn parse_pool_event(
         context,
         actor,
         is_soroswap,
+        is_phoenix,
     );
     let created_at = ledger_closed_at_to_unix(event.ledger_closed_at.as_deref(), event.ledger);
     let body_json = json!({
@@ -433,6 +447,7 @@ fn derive_event_fields(
     context: &PoolIndexContext,
     actor: Option<&str>,
     is_soroswap: bool,
+    is_phoenix: bool,
 ) -> Value {
     let pool_fee_bps = context.fee_bps_by_pool.get(pool_address).copied();
     let pool_tokens = context
@@ -445,6 +460,9 @@ fn derive_event_fields(
         PoolEventKind::Trade => {
             if is_soroswap {
                 return derive_soroswap_swap(pool_fee_bps, &pool_tokens, data, context, actor);
+            }
+            if is_phoenix {
+                return derive_phoenix_swap(pool_fee_bps, data, context, actor);
             }
             let token_in = topic.get(1).and_then(value_address_string);
             let token_out = topic.get(2).and_then(value_address_string);
@@ -629,6 +647,11 @@ fn pool_swap_from_event(event: &PoolEvent) -> Option<PoolSwap> {
         .and_then(|value| value.get("value"))
         .and_then(Value::as_str)
         == Some("SoroswapPair");
+    let phoenix = topic
+        .first()
+        .and_then(|value| value.get("value"))
+        .and_then(Value::as_str)
+        == Some("swap");
     let token_in = derived
         .get("token_in")
         .and_then(Value::as_str)
@@ -656,7 +679,14 @@ fn pool_swap_from_event(event: &PoolEvent) -> Option<PoolSwap> {
         ledger: event.ledger,
         created_at: event.created_at,
         pool_address: event.pool_address.clone(),
-        dex: if soroswap { "soroswap_amm" } else { "aquarius" }.to_string(),
+        dex: if soroswap {
+            "soroswap_amm"
+        } else if phoenix {
+            "phoenix"
+        } else {
+            "aquarius"
+        }
+        .to_string(),
         token_in,
         token_out,
         amount_in,
@@ -738,6 +768,48 @@ fn derive_soroswap_swap(
     )
 }
 
+fn derive_phoenix_swap(
+    pool_fee_bps: Option<u32>,
+    data: &[Value],
+    context: &PoolIndexContext,
+    actor: Option<&str>,
+) -> Value {
+    let token_in = phoenix_field(data, "sell_token").and_then(value_address_string);
+    let token_out = phoenix_field(data, "buy_token").and_then(value_address_string);
+    let amount_in = phoenix_field(data, "offer_amount").and_then(value_amount_string);
+    let amount_out = phoenix_field(data, "actual_received_amount").and_then(value_amount_string);
+    let volume_quote_xlm = token_in
+        .as_deref()
+        .zip(amount_in.as_deref())
+        .and_then(|(token, amount)| estimate_amount_xlm(&context.price_book, token, amount));
+    // Phoenix charges on output. Use the configured bps as a conservative
+    // notional estimate until the event exposes a dedicated fee field.
+    let fee_quote_xlm = pool_fee_bps.and_then(|bps| {
+        token_out
+            .as_deref()
+            .zip(amount_out.as_deref())
+            .and_then(|(token, amount)| estimate_amount_xlm(&context.price_book, token, amount))
+            .map(|output| output * bps as f64 / 10_000.0)
+            .or_else(|| volume_quote_xlm.map(|volume| volume * bps as f64 / 10_000.0))
+    });
+    derived_with_actor(
+        json!({
+            "pool_fee_bps": pool_fee_bps,
+            "token_in": token_in,
+            "token_out": token_out,
+            "amount_in": amount_in,
+            "amount_out": amount_out,
+            "volume_quote_xlm": volume_quote_xlm,
+            "fee_quote_xlm": fee_quote_xlm,
+        }),
+        actor,
+    )
+}
+
+fn phoenix_field<'a>(data: &'a [Value], name: &str) -> Option<&'a Value> {
+    data.first()?.get(name)
+}
+
 fn derive_soroswap_liquidity(
     kind: &PoolEventKind,
     pool_fee_bps: Option<u32>,
@@ -805,6 +877,7 @@ fn topic_symbol_name(first_topic: Option<&String>) -> Result<Option<String>> {
     let scval = decode_scval_b64(first_topic)?;
     match scval {
         xdr::ScVal::Symbol(symbol) => Ok(Some(symbol.to_string())),
+        xdr::ScVal::String(text) => Ok(Some(text.to_string())),
         _ => Ok(None),
     }
 }
@@ -1091,5 +1164,72 @@ mod tests {
         let tx_hash = "abc123";
         assert_eq!(cache_tx_source_lookup(&mut cache, tx_hash, Ok(None)), None);
         assert_eq!(cache.get(tx_hash), Some(&None));
+    }
+
+    #[test]
+    fn parses_real_soroswap_pair_swap_event() {
+        let event: ContractEvent = serde_json::from_value(json!({
+            "type": "contract",
+            "ledger": 63997342,
+            "ledgerClosedAt": "2026-08-17T15:32:05Z",
+            "contractId": "CC7CDFY2VGDODJ7WPO3JIK2MXLOAXL4LRQCC43UJDBAIJ4SVFO3HNPOC",
+            "id": "0274866490921975808-0000000003",
+            "txHash": "7e63814a6a5678bd2b830b6fce61880328fbbd7a56c4340872bd6ec6aadabfde",
+            "topic": [
+                "AAAADgAAAAxTb3Jvc3dhcFBhaXI=",
+                "AAAADwAAAARzd2Fw"
+            ],
+            "value": "AAAAEQAAAAEAAAAFAAAADwAAAAthbW91bnRfMF9pbgAAAAAKAAAAAAAAAAAAAAAARLWwZwAAAA8AAAAMYW1vdW50XzBfb3V0AAAACgAAAAAAAAAAAAAAAAAAAAAAAAAPAAAAC2Ftb3VudF8xX2luAAAAAAoAAAAAAAAAAAAAAAAAAAAAAAAADwAAAAxhbW91bnRfMV9vdXQAAAAKAAAAAAAAAAAAAAAAPGUcGAAAAA8AAAACdG8AAAAAABIAAAAB0Slbn0lAIGHRp/jVapW4+0HeyDtolvaWfyRW9vxMk/s="
+        }))
+        .expect("valid Soroswap event fixture");
+        let pool = event.contract_id.clone();
+        let context = PoolIndexContext {
+            fee_bps_by_pool: HashMap::from([(pool.clone(), 30)]),
+            tokens_by_pool: HashMap::from([(
+                pool.clone(),
+                vec![
+                    "CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75".into(),
+                    "CDTKPWPLOURQA2SGTKTUQOWRCBZEORB4BWBOMJ3D3ZTQQSGE5F6JBQLV".into(),
+                ],
+            )]),
+            dex_by_pool: HashMap::from([(pool, "soroswap_amm".into())]),
+            price_book: PriceBook::default(),
+        };
+
+        let parsed = parse_pool_event(&event, &context, None)
+            .expect("event should decode")
+            .expect("Soroswap swap should be indexed");
+        assert_eq!(parsed.kind, PoolEventKind::Trade);
+        assert!(parsed.body_json.contains("amount_in"));
+        assert!(pool_swap_from_event(&parsed).is_some());
+    }
+
+    #[test]
+    fn parses_real_phoenix_swap_event() {
+        let event: ContractEvent = serde_json::from_value(json!({
+            "type": "contract",
+            "ledger": 63982420,
+            "ledgerClosedAt": "2026-08-09T00:00:00Z",
+            "contractId": "CBENABXP6C4C7WG6KB7JQOTDS5GIIXF3IX3PIYNZFCDZDWUHITO2HZ4S",
+            "id": "phoenix-real-swap",
+            "txHash": "7e63814a6a5678bd2b830b6fce61880328fbbd7a56c4340872bd6ec6aadabfde",
+            "topic": ["AAAADwAAAARzd2Fw"],
+            "value": "AAAAEQAAAAEAAAAIAAAADwAAABZhY3R1YWxfcmVjZWl2ZWRfYW1vdW50AAAAAAAKAAAAAAAAAAAAAAAAAPvB3AAAAA8AAAAJYnV5X3Rva2VuAAAAAAAAEgAAAAEltPzYWa7C+mNIQ4xImzw8EMmLbSG+T9PLMMtolT75dwAAAA8AAAAMb2ZmZXJfYW1vdW50AAAACgAAAAAAAAAAAAAAAAD7wdwAAAAPAAAAE3JlZmVycmFsX2ZlZV9hbW91bnQAAAAACgAAAAAAAAAAAAAAAAAAAAAAAAAPAAAADXJldHVybl9hbW91bnQAAAAAAAAKAAAAAAAAAAAAAAAABjUQAwAAAA8AAAAKc2VsbF90b2tlbgAAAAAAEgAAAAGt785ZruUpaPdgYdSUwlJbdWWfpClqZfSZ7ynlZHfklgAAAA8AAAAGc2VuZGVyAAAAAAASAAAAAVtVdeT6RL//b+yPYm8UEeFa1fVxv6koRC1nly1wtWYnAAAADwAAAA1zcHJlYWRfYW1vdW50AAAAAAAACgAAAAAAAAAAAAAAAAACILs="
+        }))
+        .expect("valid Phoenix event fixture");
+        let pool = event.contract_id.clone();
+        let context = PoolIndexContext {
+            fee_bps_by_pool: HashMap::from([(pool.clone(), 50)]),
+            tokens_by_pool: HashMap::from([(pool.clone(), vec!["CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".into(), "CBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB".into()])]),
+            dex_by_pool: HashMap::from([(pool, "phoenix".into())]),
+            price_book: PriceBook::default(),
+        };
+
+        let parsed = parse_pool_event(&event, &context, None)
+            .expect("event should decode")
+            .expect("Phoenix swap should be indexed");
+        assert_eq!(parsed.kind, PoolEventKind::Trade);
+        assert!(parsed.body_json.contains("actual_received_amount"));
+        assert_eq!(pool_swap_from_event(&parsed).unwrap().dex, "phoenix");
     }
 }

@@ -9,7 +9,10 @@ use {
             router::discover_pool_addresses,
         },
         db::Db,
+        comet::{discover_mainnet_pool_addresses as discover_comet_pool_addresses, hydrate_pool as hydrate_comet_pool},
+        phoenix::{discover_mainnet_pool_addresses as discover_phoenix_pool_addresses, hydrate_pool as hydrate_phoenix_pool},
         soroswap::{discover_mainnet_pool_addresses, hydrate_pool as hydrate_soroswap_pool},
+        sushi::{discover_mainnet_pool_addresses as discover_sushi_pool_addresses, hydrate_pool as hydrate_sushi_pool},
         SorobanRpc, MAINNET_PASSPHRASE,
     },
     metrics::{fee_apr_24h, tvl_from_reserves},
@@ -29,14 +32,14 @@ async fn main() -> Result<()> {
     let top_n: usize = std::env::var("SNAPSHOT_TOP_N")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(400);
+        .unwrap_or(600);
 
     let rpc = SorobanRpc::new(&rpc_url, MAINNET_PASSPHRASE);
     let db = Db::open(&db_path)?;
 
     info!(%rpc_url, %db_path, top_n, "snapshotter starting");
 
-    let venues = std::env::var("SNAPSHOT_VENUES").unwrap_or_else(|_| "aquarius,soroswap".into());
+    let venues = std::env::var("SNAPSHOT_VENUES").unwrap_or_else(|_| "aquarius,soroswap,phoenix,sushi,comet".into());
     let mut pools = Vec::new();
     for venue in venues
         .split(',')
@@ -46,6 +49,9 @@ async fn main() -> Result<()> {
         let discovered = match venue {
             "aquarius" => discover_pool_addresses(&rpc).await?,
             "soroswap" | "soroswap_amm" => discover_mainnet_pool_addresses(&rpc).await?,
+            "phoenix" => discover_phoenix_pool_addresses(&rpc).await?,
+            "sushi" | "sushi_v3" => discover_sushi_pool_addresses(&rpc).await?,
+            "comet" => discover_comet_pool_addresses(&rpc).await?,
             other => anyhow::bail!("unknown snapshot venue: {other}"),
         };
         info!(
@@ -68,6 +74,9 @@ async fn main() -> Result<()> {
         let state = match venue.as_str() {
             "aquarius" => hydrate_pool(&rpc, addr).await,
             "soroswap" | "soroswap_amm" => hydrate_soroswap_pool(&rpc, addr).await,
+            "phoenix" => hydrate_phoenix_pool(&rpc, addr).await,
+            "sushi" | "sushi_v3" => hydrate_sushi_pool(&rpc, addr).await,
+            "comet" => hydrate_comet_pool(&rpc, addr).await,
             _ => unreachable!("validated venue during discovery"),
         };
         match state {

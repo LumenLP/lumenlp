@@ -1,5 +1,5 @@
 [Unit]
-Description=LP Agent multi-DEX pool indexer (Aquarius + Soroswap event ingest)
+Description=LumenLP multi-DEX pool indexer (Aquarius + Soroswap + Phoenix + Sushi + Comet ingest)
 After=network.target
 
 [Service]
@@ -9,7 +9,7 @@ WorkingDirectory=/opt/lpagent
 Environment=RPC_URL=http://127.0.0.1:8003
 Environment=INDEXER_DB_PATH=/opt/lpagent/data/pool-indexer.db
 Environment=INDEXER_POLL_SECS=30
-Environment=INDEXER_VENUES=aquarius,soroswap
+Environment=INDEXER_VENUES=aquarius,soroswap,phoenix,sushi,comet
 Environment=RUST_LOG=info
 ExecStart=/opt/lpagent/target/release/pool-indexer run
 Restart=on-failure
