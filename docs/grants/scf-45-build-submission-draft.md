@@ -81,7 +81,7 @@ Users retain control of their account and can stop the policy. LumenLP does not 
 
 ## Current Progress
 
-The project is already running on Stellar mainnet:
+The project is running on Stellar mainnet:
 
 - public web application at `lumenlp.xyz`;
 - public API at `api.lumenlp.xyz`;
@@ -97,7 +97,9 @@ The project is already running on Stellar mainnet:
 - production server and monitoring runbook;
 - architecture and metric methodology documentation.
 
-The current Copy LP flow is intentionally user-reviewed. The grant will fund the transition from event-driven copy drafts to policy-constrained automation.
+The current Copy LP flow is intentionally user-reviewed. The grant will fund
+the transition from event-driven copy drafts to policy-constrained,
+testnet-validated and limited-mainnet automation.
 
 ## Why Stellar
 

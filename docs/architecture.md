@@ -4,11 +4,11 @@ LumenLP is a Stellar-native LP discovery, analytics, and Copy LP product. It sta
 
 ## Executive Summary
 
-The existing product is a production analytics and user-reviewed Copy LP
-system. It observes Stellar DEX activity, normalizes pool and LP events, and
-exposes pool and Leader signals through a public API and web application. The
-grant work extends this base into a policy-controlled automation path rather
-than replacing the existing data plane.
+LumenLP is a deployed analytics and user-reviewed Copy LP MVP. It observes
+Stellar DEX activity, normalizes pool and LP events, and exposes pool and
+Leader signals through a public API and web application. The grant work
+extends this base into a policy-controlled automation path rather than
+replacing the existing data plane.
 
 The security boundary is Soroban, not the web application or the relayer. An
 off-chain indexer may observe an event and create an intent, but only the Copy
@@ -45,8 +45,7 @@ The current production system is RPC-first and non-custodial. The website and AP
 ### Deferred capabilities
 
 - Production rollout of Soroban policy-controlled automatic execution remains
-  gated by security and operational validation. The Testnet policy vertical
-  slice and real Aquarius deposit/withdraw path are already implemented.
+  gated by security and operational validation.
 - Broader LumenLP relayer operation coverage and production hardening.
 - CLMM range copy and rebalance depth.
 - Optional fee-token conversion through LumAgg.
@@ -366,7 +365,7 @@ a production vault and not a generic executor. It constrains which relayer
 calls may reach an allowlisted Aquarius pool, while keeping the follower's
 funds inside the policy contract rather than inside the relayer key.
 
-The implemented policy currently restricts:
+The policy prototype currently exercises restrictions on:
 
 - the configured relayer address;
 - the session's allowed pool addresses;
@@ -512,18 +511,19 @@ operation kinds are rejected before the replay marker and budget are written.
 The adapter does not fall back to arbitrary contract calls, arbitrary swaps, or
 unknown pool interfaces.
 
-#### Testnet evidence and current boundary
+#### Validation evidence and current boundary
 
 The v3 testnet contract is:
 
 `CDDEM34TOAN5DOG5LBJCC676QV2M27V3SSXZ7IPVA76RUSLSZEM5KLNJ`
 
-The implementation has been exercised against a real Aquarius Testnet pool:
+The policy flow has been exercised against a real Aquarius Testnet pool:
 
 - deposit: policy-funded USDC/native deposit minted LP shares;
 - withdraw: LP shares were burned and both pool assets returned to policy;
 - claim: zero-reward claim completed successfully;
 - local fixture: positive-reward claim authorization performs a real mock token transfer.
+
 
 The production promotion boundary is explicit: positive-reward claim against a
 configured Aquarius reward stream, broader negative-path tests, monitoring,

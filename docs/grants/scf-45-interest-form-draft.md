@@ -38,7 +38,7 @@ The user flow is:
 
 Leader rankings are presented as data and activity signals, not as guaranteed profit or investment advice. Claimed fees are not labeled as complete PnL.
 
-## What is already live
+## What is live
 
 - Aquarius pool discovery from Soroban RPC.
 - Mainnet pool ranking and snapshots for TVL, liquidity, fees, Fee/TVL, and activity windows.

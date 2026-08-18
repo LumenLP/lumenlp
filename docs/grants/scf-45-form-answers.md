@@ -52,11 +52,11 @@ After selecting a Leader, a user configures a copy coefficient and safety limits
 
 Leader swaps are not mirrored because a swap may be a fee exit, a position adjustment, or an unrelated trade. Copy LP focuses on verifiable liquidity actions rather than arbitrary wallet activity.
 
-The current mainnet product already includes pool discovery, snapshots, event indexing, Leader profiles, and a user-reviewed scaled Copy LP queue, with Aquarius as the first production venue. The Build Award will turn this working MVP into a testnet-validated and limited-mainnet automated product covering the target Stellar DEX pool venues through reusable adapters.
+The current MVP provides pool discovery, snapshots, event indexing, Leader profiles, and a user-reviewed scaled Copy LP queue, with Aquarius as the first production venue. The Build Award will turn this working MVP into a testnet-validated and limited-mainnet automated product covering the target Stellar DEX pool venues through reusable adapters.
 
 ## Traction Evidence
 
-LumenLP is already deployed and processing Stellar mainnet data.
+LumenLP is deployed and processing Stellar mainnet data.
 
 - Website: https://lumenlp.xyz
 - API health: https://api.lumenlp.xyz/health
