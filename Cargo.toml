@@ -6,12 +6,16 @@ members = [
   "crates/api-server",
   "crates/snapshotter",
   "crates/pool-indexer",
+  "contracts/copy-policy",
 ]
 
 [workspace.package]
 edition = "2021"
 license = "MIT"
 version = "0.1.0"
+
+[profile.release]
+overflow-checks = true
 
 [workspace.dependencies]
 anyhow = "1"

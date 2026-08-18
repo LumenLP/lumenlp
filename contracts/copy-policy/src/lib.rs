@@ -1,0 +1,543 @@
+#![no_std]
+
+use soroban_sdk::{
+    auth::{ContractContext, InvokerContractAuthEntry, SubContractInvocation},
+    contract, contracterror, contractimpl, contracttype, symbol_short, Address, BytesN, Env, Symbol,
+    Vec, IntoVal, U256,
+};
+
+const MAX_POOLS: u32 = 32;
+
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[repr(u32)]
+pub enum Error {
+    AlreadyInitialized = 1,
+    NotInitialized = 2,
+    NotOwner = 3,
+    NotRelayer = 4,
+    SessionNotFound = 5,
+    SessionPaused = 6,
+    SessionExpired = 7,
+    PoolNotAllowed = 8,
+    OperationNotAllowed = 9,
+    PerOperationLimit = 10,
+    DailyLimit = 11,
+    Replay = 12,
+    InvalidLimit = 13,
+    TooManyPools = 14,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Session {
+    pub leader: Address,
+    pub allowed_pools: Vec<Address>,
+    pub follow_claims: bool,
+    pub max_per_op_quote: i128,
+    pub max_daily_quote: i128,
+    pub expires_at: u64,
+    pub paused: bool,
+    pub daily_day: u64,
+    pub daily_used_quote: i128,
+}
+
+#[contracttype]
+#[derive(Clone)]
+enum DataKey {
+    Owner,
+    Relayer,
+    Session(u32),
+    Replay(u32, BytesN<32>),
+}
+
+#[contract]
+pub struct CopyPolicy;
+
+#[contractimpl]
+impl CopyPolicy {
+    /// Initialize the policy owner and the service account allowed to submit
+    /// already-authorized copy intents.
+    pub fn initialize(env: Env, owner: Address, relayer: Address) -> Result<(), Error> {
+        if env.storage().instance().has(&DataKey::Owner) {
+            return Err(Error::AlreadyInitialized);
+        }
+        owner.require_auth();
+        env.storage().instance().set(&DataKey::Owner, &owner);
+        env.storage().instance().set(&DataKey::Relayer, &relayer);
+        Ok(())
+    }
+
+    pub fn register_session(
+        env: Env,
+        session_id: u32,
+        leader: Address,
+        allowed_pools: Vec<Address>,
+        follow_claims: bool,
+        max_per_op_quote: i128,
+        max_daily_quote: i128,
+        expires_at: u64,
+    ) -> Result<(), Error> {
+        Self::owner(&env)?.require_auth();
+        if allowed_pools.len() > MAX_POOLS {
+            return Err(Error::TooManyPools);
+        }
+        if max_per_op_quote <= 0 || max_daily_quote <= 0 || expires_at <= env.ledger().timestamp() {
+            return Err(Error::InvalidLimit);
+        }
+        let session = Session {
+            leader,
+            allowed_pools,
+            follow_claims,
+            max_per_op_quote,
+            max_daily_quote,
+            expires_at,
+            paused: false,
+            daily_day: day(env.ledger().timestamp()),
+            daily_used_quote: 0,
+        };
+        env.storage().persistent().set(&DataKey::Session(session_id), &session);
+        Ok(())
+    }
+
+    pub fn pause_session(env: Env, session_id: u32) -> Result<(), Error> {
+        Self::owner(&env)?.require_auth();
+        let mut session = Self::load_session(&env, session_id)?;
+        session.paused = true;
+        env.storage().persistent().set(&DataKey::Session(session_id), &session);
+        Ok(())
+    }
+
+    pub fn resume_session(env: Env, session_id: u32) -> Result<(), Error> {
+        Self::owner(&env)?.require_auth();
+        let mut session = Self::load_session(&env, session_id)?;
+        if env.ledger().timestamp() >= session.expires_at {
+            return Err(Error::SessionExpired);
+        }
+        session.paused = false;
+        env.storage().persistent().set(&DataKey::Session(session_id), &session);
+        Ok(())
+    }
+
+    pub fn disarm_session(env: Env, session_id: u32) -> Result<(), Error> {
+        Self::owner(&env)?.require_auth();
+        env.storage().persistent().remove(&DataKey::Session(session_id));
+        Ok(())
+    }
+
+    /// Policy-only execution gate. It records a source event and consumes the
+    /// daily budget, but deliberately does not call a DEX in this prototype.
+    pub fn execute_copy_op(
+        env: Env,
+        session_id: u32,
+        source_event_id: BytesN<32>,
+        pool: Address,
+        kind: Symbol,
+        quote: i128,
+    ) -> Result<(), Error> {
+        Self::authorize_copy_op(&env, session_id, &source_event_id, &pool, &kind, quote)?;
+        env.events().publish((symbol_short!("copy"), session_id), (source_event_id, pool, kind, quote));
+        Ok(())
+    }
+
+    /// Authorize and invoke one Aquarius standard-pool operation. The policy
+    /// contract is the `user` argument, so the relayer never receives custody
+    /// of follower funds. Token balances must be provisioned separately.
+    pub fn execute_aquarius_standard_op(
+        env: Env,
+        session_id: u32,
+        source_event_id: BytesN<32>,
+        pool: Address,
+        kind: Symbol,
+        quote: i128,
+        desired_amounts: Vec<u128>,
+        min_shares: u128,
+        share_amount: u128,
+        min_amounts: Vec<u128>,
+        claim_token: Address,
+    ) -> Result<(), Error> {
+        if kind != symbol_short!("deposit")
+            && kind != symbol_short!("withdraw")
+            && kind != symbol_short!("claim")
+        {
+            return Err(Error::OperationNotAllowed);
+        }
+        Self::authorize_copy_op(&env, session_id, &source_event_id, &pool, &kind, quote)?;
+        let user = env.current_contract_address();
+        if kind == symbol_short!("deposit") {
+            let tokens: Vec<Address> = env.invoke_contract(
+                &pool,
+                &Symbol::new(&env, "get_tokens"),
+                Vec::new(&env),
+            );
+            if tokens.len() == desired_amounts.len() {
+                let mut auth_entries = Vec::new(&env);
+                for i in 0..desired_amounts.len() {
+                    let amount = desired_amounts.get(i).unwrap();
+                    if amount == 0 {
+                        continue;
+                    }
+                    let token = tokens.get(i).unwrap();
+                    auth_entries.push_back(InvokerContractAuthEntry::Contract(
+                        SubContractInvocation {
+                            context: ContractContext {
+                                contract: token,
+                                fn_name: symbol_short!("transfer"),
+                                args: Vec::from_array(
+                                    &env,
+                                    [
+                                        user.clone().into_val(&env),
+                                        pool.clone().into_val(&env),
+                                        (amount as i128).into_val(&env),
+                                    ],
+                                ),
+                            },
+                            sub_invocations: Vec::new(&env),
+                        },
+                    ));
+                }
+                env.authorize_as_current_contract(auth_entries);
+            }
+            let _: (Vec<u128>, u128) = env.invoke_contract(
+                &pool,
+                &symbol_short!("deposit"),
+                Vec::from_array(&env, [user.into_val(&env), desired_amounts.into_val(&env), min_shares.into_val(&env)]),
+            );
+        } else if kind == symbol_short!("withdraw") {
+            let tokens: Vec<Address> = env.invoke_contract(
+                &pool,
+                &Symbol::new(&env, "get_tokens"),
+                Vec::new(&env),
+            );
+            let reserves: Vec<u128> = env.invoke_contract(
+                &pool,
+                &Symbol::new(&env, "get_reserves"),
+                Vec::new(&env),
+            );
+            let total_shares: u128 = env.invoke_contract(
+                &pool,
+                &Symbol::new(&env, "get_total_shares"),
+                Vec::new(&env),
+            );
+            if tokens.len() == 2 && reserves.len() == 2 && total_shares > 0 {
+                let out_a = proportional_floor(&env, reserves.get(0).unwrap(), share_amount, total_shares);
+                let out_b = proportional_floor(&env, reserves.get(1).unwrap(), share_amount, total_shares);
+                let share_id: Address = env.invoke_contract(
+                    &pool,
+                    &symbol_short!("share_id"),
+                    Vec::new(&env),
+                );
+                let mut auth_entries = Vec::new(&env);
+                auth_entries.push_back(InvokerContractAuthEntry::Contract(
+                    SubContractInvocation {
+                        context: ContractContext {
+                            contract: share_id,
+                            fn_name: symbol_short!("burn"),
+                            args: Vec::from_array(
+                                &env,
+                                [user.clone().into_val(&env), (share_amount as i128).into_val(&env)],
+                            ),
+                        },
+                        sub_invocations: Vec::new(&env),
+                    },
+                ));
+                for (token, amount) in [
+                    (tokens.get(0).unwrap(), out_a),
+                    (tokens.get(1).unwrap(), out_b),
+                ] {
+                    if amount == 0 {
+                        continue;
+                    }
+                    auth_entries.push_back(InvokerContractAuthEntry::Contract(
+                        SubContractInvocation {
+                            context: ContractContext {
+                                contract: token,
+                                fn_name: symbol_short!("transfer"),
+                                args: Vec::from_array(
+                                    &env,
+                                    [
+                                        pool.clone().into_val(&env),
+                                        user.clone().into_val(&env),
+                                        (amount as i128).into_val(&env),
+                                    ],
+                                ),
+                            },
+                            sub_invocations: Vec::new(&env),
+                        },
+                    ));
+                }
+                env.authorize_as_current_contract(auth_entries);
+            }
+            let _: Vec<u128> = env.invoke_contract(
+                &pool,
+                &symbol_short!("withdraw"),
+                Vec::from_array(&env, [user.into_val(&env), share_amount.into_val(&env), min_amounts.into_val(&env)]),
+            );
+        } else if kind == symbol_short!("claim") {
+            let reward_amount: u128 = env.invoke_contract(
+                &pool,
+                &Symbol::new(&env, "get_user_reward"),
+                Vec::from_array(&env, [user.clone().into_val(&env)]),
+            );
+            if reward_amount > 0 {
+                let mut auth_entries = Vec::new(&env);
+                auth_entries.push_back(InvokerContractAuthEntry::Contract(
+                    SubContractInvocation {
+                        context: ContractContext {
+                            contract: claim_token,
+                            fn_name: symbol_short!("transfer"),
+                            args: Vec::from_array(
+                                &env,
+                                [
+                                    pool.clone().into_val(&env),
+                                    user.clone().into_val(&env),
+                                    (reward_amount as i128).into_val(&env),
+                                ],
+                            ),
+                        },
+                        sub_invocations: Vec::new(&env),
+                    },
+                ));
+                env.authorize_as_current_contract(auth_entries);
+            }
+            let _: u128 = env.invoke_contract(
+                &pool,
+                &symbol_short!("claim"),
+                Vec::from_array(&env, [user.into_val(&env)]),
+            );
+        }
+        env.events().publish((symbol_short!("copy"), session_id), (source_event_id, pool, kind, quote));
+        Ok(())
+    }
+
+    pub fn session(env: Env, session_id: u32) -> Result<Session, Error> {
+        Self::load_session(&env, session_id)
+    }
+
+    fn owner(env: &Env) -> Result<Address, Error> {
+        env.storage().instance().get(&DataKey::Owner).ok_or(Error::NotInitialized)
+    }
+
+    fn relayer(env: &Env) -> Result<Address, Error> {
+        env.storage().instance().get(&DataKey::Relayer).ok_or(Error::NotInitialized)
+    }
+
+    fn load_session(env: &Env, session_id: u32) -> Result<Session, Error> {
+        env.storage().persistent().get(&DataKey::Session(session_id)).ok_or(Error::SessionNotFound)
+    }
+
+    fn authorize_copy_op(
+        env: &Env,
+        session_id: u32,
+        source_event_id: &BytesN<32>,
+        pool: &Address,
+        kind: &Symbol,
+        quote: i128,
+    ) -> Result<(), Error> {
+        Self::relayer(env)?.require_auth();
+        if env.storage().persistent().has(&DataKey::Replay(session_id, source_event_id.clone())) {
+            return Err(Error::Replay);
+        }
+        let mut session = Self::load_session(env, session_id)?;
+        let now = env.ledger().timestamp();
+        if session.paused {
+            return Err(Error::SessionPaused);
+        }
+        if now >= session.expires_at {
+            return Err(Error::SessionExpired);
+        }
+        if !session.allowed_pools.iter().any(|allowed| allowed == *pool) {
+            return Err(Error::PoolNotAllowed);
+        }
+        if *kind == symbol_short!("claim") && !session.follow_claims {
+            return Err(Error::OperationNotAllowed);
+        }
+        if *kind != symbol_short!("deposit")
+            && *kind != symbol_short!("withdraw")
+            && *kind != symbol_short!("claim")
+        {
+            return Err(Error::OperationNotAllowed);
+        }
+        if quote <= 0 || quote > session.max_per_op_quote {
+            return Err(Error::PerOperationLimit);
+        }
+        if day(now) != session.daily_day {
+            session.daily_day = day(now);
+            session.daily_used_quote = 0;
+        }
+        if session.daily_used_quote + quote > session.max_daily_quote {
+            return Err(Error::DailyLimit);
+        }
+        session.daily_used_quote += quote;
+        env.storage().persistent().set(&DataKey::Session(session_id), &session);
+        env.storage().persistent().set(&DataKey::Replay(session_id, source_event_id.clone()), &true);
+        Ok(())
+    }
+}
+
+fn day(timestamp: u64) -> u64 {
+    timestamp / 86_400
+}
+
+fn proportional_floor(env: &Env, reserve: u128, shares: u128, total_shares: u128) -> u128 {
+    U256::from_u128(env, reserve)
+        .mul(&U256::from_u128(env, shares))
+        .div(&U256::from_u128(env, total_shares))
+        .to_u128()
+        .unwrap()
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use soroban_sdk::testutils::Address as _;
+
+    #[contract]
+    struct MockPool;
+
+    #[contractimpl]
+    impl MockPool {
+        pub fn get_tokens(env: Env) -> Vec<Address> {
+            Vec::new(&env)
+        }
+
+        pub fn get_reserves(env: Env) -> Vec<u128> {
+            Vec::new(&env)
+        }
+
+        pub fn get_total_shares(_env: Env) -> u128 {
+            0
+        }
+
+        pub fn share_id(env: Env) -> Address {
+            Address::generate(&env)
+        }
+
+        pub fn deposit(env: Env, user: Address, desired_amounts: Vec<u128>, _min_shares: u128) -> (Vec<u128>, u128) {
+            env.storage().instance().set(&symbol_short!("user"), &user);
+            (desired_amounts, 1)
+        }
+
+        pub fn withdraw(env: Env, user: Address, share_amount: u128, _min_amounts: Vec<u128>) -> Vec<u128> {
+            env.storage().instance().set(&symbol_short!("user"), &user);
+            Vec::from_array(&env, [share_amount])
+        }
+
+        pub fn claim(env: Env, user: Address) -> u128 {
+            env.storage().instance().set(&symbol_short!("user"), &user);
+            1
+        }
+
+        pub fn get_user_reward(_env: Env, _user: Address) -> u128 {
+            0
+        }
+
+        pub fn last_user(env: Env) -> Address {
+            env.storage().instance().get(&symbol_short!("user")).unwrap()
+        }
+    }
+
+    #[test]
+    fn policy_enforces_limits_pause_and_replay() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract = env.register(CopyPolicy, ());
+        let owner = Address::generate(&env);
+        let relayer = Address::generate(&env);
+        let pool = Address::generate(&env);
+        let id = BytesN::from_array(&env, &[7; 32]);
+        CopyPolicyClient::new(&env, &contract).initialize(&owner, &relayer);
+        let mut pools = Vec::new(&env);
+        pools.push_back(pool.clone());
+        CopyPolicyClient::new(&env, &contract)
+            .register_session(&1, &owner, &pools, &true, &10, &15, &100_000);
+        CopyPolicyClient::new(&env, &contract)
+            .execute_copy_op(&1, &id, &pool, &symbol_short!("deposit"), &10);
+        assert!(
+            CopyPolicyClient::new(&env, &contract)
+                .try_execute_copy_op(&1, &id, &pool, &symbol_short!("deposit"), &10)
+                .is_err()
+        );
+        CopyPolicyClient::new(&env, &contract).pause_session(&1);
+        let second = BytesN::from_array(&env, &[8; 32]);
+        assert!(
+            CopyPolicyClient::new(&env, &contract)
+                .try_execute_copy_op(&1, &second, &pool, &symbol_short!("deposit"), &1)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn standard_operations_call_pool_as_policy_contract() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let policy = env.register(CopyPolicy, ());
+        let pool = env.register(MockPool, ());
+        let owner = Address::generate(&env);
+        let relayer = Address::generate(&env);
+        let leader = Address::generate(&env);
+        let pool_address = pool.clone();
+        let policy_client = CopyPolicyClient::new(&env, &policy);
+
+        policy_client.initialize(&owner, &relayer);
+        let mut pools = Vec::new(&env);
+        pools.push_back(pool_address.clone());
+        policy_client.register_session(&7, &leader, &pools, &true, &100, &300, &100_000);
+
+        let deposit_id = BytesN::from_array(&env, &[1; 32]);
+        let mut desired = Vec::new(&env);
+        desired.push_back(10);
+        policy_client.execute_aquarius_standard_op(
+            &7,
+            &deposit_id,
+            &pool_address,
+            &symbol_short!("deposit"),
+            &10,
+            &desired,
+            &0,
+            &0,
+            &Vec::new(&env),
+            &Address::generate(&env),
+        );
+        let pool_client = MockPoolClient::new(&env, &pool);
+        assert_eq!(pool_client.last_user(), policy);
+
+        let withdraw_id = BytesN::from_array(&env, &[2; 32]);
+        policy_client.execute_aquarius_standard_op(
+            &7,
+            &withdraw_id,
+            &pool_address,
+            &symbol_short!("withdraw"),
+            &10,
+            &Vec::new(&env),
+            &0,
+            &4,
+            &Vec::new(&env),
+            &Address::generate(&env),
+        );
+        assert_eq!(pool_client.last_user(), policy);
+
+        let claim_id = BytesN::from_array(&env, &[3; 32]);
+        policy_client.execute_aquarius_standard_op(
+            &7,
+            &claim_id,
+            &pool_address,
+            &symbol_short!("claim"),
+            &10,
+            &Vec::new(&env),
+            &0,
+            &0,
+            &Vec::new(&env),
+            &Address::generate(&env),
+        );
+        assert_eq!(pool_client.last_user(), policy);
+    }
+
+    #[test]
+    fn proportional_floor_handles_u128_products_without_overflow() {
+        let env = Env::default();
+        let reserve = u128::MAX - 1;
+        let shares = u128::MAX - 2;
+        assert_eq!(proportional_floor(&env, reserve, shares, u128::MAX), u128::MAX - 3);
+    }
+}
