@@ -19,7 +19,7 @@ crates/dex/
   phoenix.rs      # factory/pool query reader; write/copy support pending
   soroswap.rs     # factory/pair query reader; write/copy support pending
   sushi.rs        # known-pool CLMM reader; event/write support pending
-  comet.rs        # weighted-pool reader; event/write support pending
+  comet.rs        # weighted-pool reader and discovery; Copy LP writes pending
 ```
 
 ## `venue_id`
@@ -30,7 +30,7 @@ crates/dex/
 | `sushi_v3` | Sushi V3 | indexed read support; event/Copy LP writes pending |
 | `phoenix` | Phoenix | indexed read support; Copy LP writes pending |
 | `soroswap_amm` | Soroswap AMM | indexed read support; Copy LP writes pending |
-| `comet` | Comet | indexed read support; event/Copy LP writes pending |
+| `comet` | Comet | indexed read + event support; Copy LP writes pending |
 
 ## Capabilities
 
@@ -116,6 +116,12 @@ The mainnet spot-check fixture records a successful factory and pair read. Soros
 - does not yet classify Sushi CL liquidity events or build Copy LP writes.
 
 The production snapshotter and indexer now include Sushi pools. The derived reserves are an analytics approximation for CLMM state, not fungible LP-share reserves; event fixtures, tick-range accounting, and policy-controlled Copy LP execution are required before promotion beyond read-only analytics.
+
+## Comet first slice
+
+`dex::comet` provides read-only weighted-pool discovery and hydration from the factory and pool contracts. It reads configured token balances and swap fees, and exposes a normalized weighted-pool state for TVL and activity analytics. Factory discovery is bounded to the RPC's retained ledger range so it does not request unavailable historical ledgers.
+
+The indexer recognizes Comet's `POOL/swap`, `POOL/join_pool`, `POOL/exit_pool`, `POOL/deposit`, and `POOL/withdraw` events. Swap payloads are normalized into token amounts, quote volume, and fee estimates; liquidity payloads retain the caller, token, amount, and quote value. Comet remains read-only for Copy LP: share accounting, policy validation, and safe deposit/withdraw execution must be completed before it is enabled as an execution venue.
 
 ## Related
 

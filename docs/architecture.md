@@ -274,6 +274,12 @@ LumenLP records ledger, transaction hash, and final status
 
 The relayer is not a custodian and cannot widen the policy. The user can pause or disarm the policy and retains the ultimate account authority. The current production fallback is a user-reviewed transaction draft while this policy layer is developed and tested.
 
+The API also applies a fail-closed boundary to the off-chain CopyOp queue. A session can declare allowed pools,
+per-operation quote limits, a UTC daily quote limit, and an expiry. Events outside that scope are retained as
+`rejected` with a machine-readable reason rather than being presented as executable drafts. This is a queue-level
+guardrail for the testnet vertical slice; Soroban remains the final authority once the policy contract and relayer are
+enabled.
+
 ### LumAgg integration boundary
 
 LumAgg is the separate Stellar DEX aggregator used for optional conversion of claimed fee tokens. It is not used to mirror Leader swaps.

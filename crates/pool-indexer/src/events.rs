@@ -363,14 +363,21 @@ fn parse_pool_event(
         .dex_by_pool
         .get(&event.contract_id)
         .is_some_and(|venue| venue == "phoenix");
+    let is_comet = context
+        .dex_by_pool
+        .get(&event.contract_id)
+        .is_some_and(|venue| venue == "comet");
     let kind_name = if is_soroswap && first_topic == "SoroswapPair" {
+        topic_symbol_name(topics.get(1))?.unwrap_or_default()
+    } else if is_comet && first_topic == "POOL" {
         topic_symbol_name(topics.get(1))?.unwrap_or_default()
     } else {
         first_topic
     };
-    let kind = match (is_soroswap || is_phoenix, kind_name.as_str()) {
+    let kind = match (is_soroswap || is_phoenix || is_comet, kind_name.as_str()) {
         (true, "deposit" | "provide_liquidity") => PoolEventKind::DepositLiquidity,
-        (true, "withdraw" | "withdraw_liquidity") => PoolEventKind::WithdrawLiquidity,
+        (true, "deposit_liquidity" | "join_pool") => PoolEventKind::DepositLiquidity,
+        (true, "withdraw" | "withdraw_liquidity" | "exit_pool") => PoolEventKind::WithdrawLiquidity,
         (true, "swap") => PoolEventKind::Trade,
         (true, "sync") => PoolEventKind::ReservesSync,
         _ => PoolEventKind::parse(&kind_name),
@@ -386,6 +393,8 @@ fn parse_pool_event(
     let decoded_body = event_body_json(event.value.as_ref())?;
     let topic_actor = if is_soroswap || is_phoenix {
         actor_from_soroswap_data(&decoded_body)
+    } else if is_comet {
+        comet_field(&decoded_body, "caller").and_then(value_address_string)
     } else {
         actor_from_topics(kind.as_str(), &decoded_topics)
     };
@@ -399,6 +408,7 @@ fn parse_pool_event(
         actor,
         is_soroswap,
         is_phoenix,
+        is_comet,
     );
     let created_at = ledger_closed_at_to_unix(event.ledger_closed_at.as_deref(), event.ledger);
     let body_json = json!({
@@ -448,6 +458,7 @@ fn derive_event_fields(
     actor: Option<&str>,
     is_soroswap: bool,
     is_phoenix: bool,
+    is_comet: bool,
 ) -> Value {
     let pool_fee_bps = context.fee_bps_by_pool.get(pool_address).copied();
     let pool_tokens = context
@@ -463,6 +474,9 @@ fn derive_event_fields(
             }
             if is_phoenix {
                 return derive_phoenix_swap(pool_fee_bps, data, context, actor);
+            }
+            if is_comet {
+                return derive_comet_swap(pool_fee_bps, data, context, actor);
             }
             let token_in = topic.get(1).and_then(value_address_string);
             let token_out = topic.get(2).and_then(value_address_string);
@@ -564,6 +578,9 @@ fn derive_event_fields(
                     actor,
                 );
             }
+            if is_comet {
+                return derive_comet_liquidity(kind, pool_fee_bps, data, context, actor);
+            }
             let share_amount = data.first().and_then(value_amount_string);
             let token_amounts = pool_tokens
                 .iter()
@@ -652,6 +669,10 @@ fn pool_swap_from_event(event: &PoolEvent) -> Option<PoolSwap> {
         .and_then(|value| value.get("value"))
         .and_then(Value::as_str)
         == Some("swap");
+    let comet = topic.first().and_then(|value| value.get("value")).and_then(Value::as_str)
+        == Some("POOL")
+        && topic.get(1).and_then(|value| value.get("value")).and_then(Value::as_str)
+            == Some("swap");
     let token_in = derived
         .get("token_in")
         .and_then(Value::as_str)
@@ -683,6 +704,8 @@ fn pool_swap_from_event(event: &PoolEvent) -> Option<PoolSwap> {
             "soroswap_amm"
         } else if phoenix {
             "phoenix"
+        } else if comet {
+            "comet"
         } else {
             "aquarius"
         }
@@ -702,6 +725,75 @@ fn actor_from_soroswap_data(data: &[Value]) -> Option<String> {
         .and_then(|value| value.get("to"))
         .and_then(value_address_string)
         .filter(|address| is_stellar_account_address(address))
+}
+
+fn comet_field<'a>(data: &'a [Value], name: &str) -> Option<&'a Value> {
+    data.first()?.get(name)
+}
+
+fn derive_comet_swap(
+    pool_fee_bps: Option<u32>,
+    data: &[Value],
+    context: &PoolIndexContext,
+    actor: Option<&str>,
+) -> Value {
+    let token_in = comet_field(data, "token_in").and_then(value_address_string);
+    let token_out = comet_field(data, "token_out").and_then(value_address_string);
+    let amount_in = comet_field(data, "token_amount_in").and_then(value_amount_string);
+    let amount_out = comet_field(data, "token_amount_out").and_then(value_amount_string);
+    let volume_quote_xlm = token_in
+        .as_deref()
+        .zip(amount_in.as_deref())
+        .and_then(|(token, amount)| estimate_amount_xlm(&context.price_book, token, amount))
+        .or_else(|| {
+            token_out
+                .as_deref()
+                .zip(amount_out.as_deref())
+                .and_then(|(token, amount)| estimate_amount_xlm(&context.price_book, token, amount))
+        });
+    let fee_quote_xlm = pool_fee_bps
+        .and_then(|bps| volume_quote_xlm.map(|volume| volume * bps as f64 / 10_000.0));
+    derived_with_actor(
+        json!({
+            "pool_fee_bps": pool_fee_bps,
+            "token_in": token_in,
+            "token_out": token_out,
+            "amount_in": amount_in,
+            "amount_out": amount_out,
+            "fee_quote_xlm": fee_quote_xlm,
+            "volume_quote_xlm": volume_quote_xlm,
+        }),
+        actor,
+    )
+}
+
+fn derive_comet_liquidity(
+    kind: &PoolEventKind,
+    pool_fee_bps: Option<u32>,
+    data: &[Value],
+    context: &PoolIndexContext,
+    actor: Option<&str>,
+) -> Value {
+    let (token_name, amount_name) = match kind {
+        PoolEventKind::DepositLiquidity => ("token_in", "token_amount_in"),
+        PoolEventKind::WithdrawLiquidity => ("token_out", "token_amount_out"),
+        _ => return Value::Null,
+    };
+    let token = comet_field(data, token_name).and_then(value_address_string);
+    let amount = comet_field(data, amount_name).and_then(value_amount_string);
+    let total_quote_xlm = token
+        .as_deref()
+        .zip(amount.as_deref())
+        .and_then(|(token, amount)| estimate_amount_xlm(&context.price_book, token, amount));
+    derived_with_actor(
+        json!({
+            "pool_fee_bps": pool_fee_bps,
+            "share_amount": comet_field(data, "pool_amount_in").and_then(value_amount_string),
+            "token_amounts": [{"token": token, "amount": amount}],
+            "total_quote_xlm": total_quote_xlm,
+        }),
+        actor,
+    )
 }
 
 fn soroswap_field<'a>(data: &'a [Value], name: &str) -> Option<&'a Value> {
@@ -1231,5 +1323,50 @@ mod tests {
         assert_eq!(parsed.kind, PoolEventKind::Trade);
         assert!(parsed.body_json.contains("actual_received_amount"));
         assert_eq!(pool_swap_from_event(&parsed).unwrap().dex, "phoenix");
+    }
+
+    #[test]
+    fn classifies_comet_pool_swap_event() {
+        let pool = "CAS3FL6TLZKDGGSISDBWGGPXT3NRR4DYTZD7YOD3HMYO6LTJUVGRVEAM";
+        let event: ContractEvent = serde_json::from_value(json!({
+            "type": "contract",
+            "ledger": 64000000,
+            "contractId": pool,
+            "id": "comet-swap",
+            "txHash": "7e63814a6a5678bd2b830b6fce61880328fbbd7a56c4340872bd6ec6aadabfde",
+            "topic": [
+                "AAAADwAAAARQT09M",
+                "AAAADwAAAARzd2Fw"
+            ]
+        }))
+        .expect("valid Comet event fixture");
+        let context = PoolIndexContext {
+            fee_bps_by_pool: HashMap::from([(pool.to_string(), 30)]),
+            tokens_by_pool: HashMap::from([(pool.to_string(), Vec::new())]),
+            dex_by_pool: HashMap::from([(pool.to_string(), "comet".into())]),
+            price_book: PriceBook::default(),
+        };
+
+        let parsed = parse_pool_event(&event, &context, None)
+            .expect("event should decode")
+            .expect("Comet swap should be indexed");
+        assert_eq!(parsed.kind, PoolEventKind::Trade);
+        assert_eq!(pool_swap_from_event(&parsed).unwrap().dex, "comet");
+
+        let derived = derive_comet_swap(
+            Some(30),
+            &[json!({
+                "caller": {"type": "address", "value": "GBBO4ZDDZTSM2IUKQYBAST3CFHNPFXECGEFTGWTA3FXZASUBSONBDN3XL"},
+                "token_in": {"type": "address", "value": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},
+                "token_out": {"type": "address", "value": "CBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"},
+                "token_amount_in": {"type": "i128", "value": "1000000"},
+                "token_amount_out": {"type": "i128", "value": "990000"}
+            })],
+            &context,
+            Some("GBBO4ZDDZTSM2IUKQYBAST3CFHNPFXECGEFTGWTA3FXZASUBSONBDN3XL"),
+        );
+        assert_eq!(derived["amount_in"], "1000000");
+        assert_eq!(derived["amount_out"], "990000");
+        assert_eq!(derived["actor"], "GBBO4ZDDZTSM2IUKQYBAST3CFHNPFXECGEFTGWTA3FXZASUBSONBDN3XL");
     }
 }

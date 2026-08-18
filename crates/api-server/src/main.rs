@@ -1,4 +1,5 @@
 mod copy_lp;
+mod copy_policy;
 mod handlers;
 mod index_db;
 mod pricing;
@@ -53,10 +54,17 @@ async fn main() -> Result<()> {
         .allow_methods(Any)
         .allow_headers(Any);
 
+    let warm_state = state.clone();
     let app = Router::new()
         .merge(handlers::router())
         .layer(cors)
         .with_state(state);
+
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        handlers::warm_pool_list_cache(warm_state).await;
+        info!("pool list cache warmed");
+    });
 
     let addr: SocketAddr = bind.parse()?;
     info!(%addr, %rpc_url, %db_path, %index_db_path, "api-server listening");

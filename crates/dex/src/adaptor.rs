@@ -2,7 +2,7 @@
 //!
 //! Strategies and copy-runtime should depend on [`DexAdaptor`] + shared types,
 //! not on Aquarius-specific modules. Aquarius is the reference implementation;
-//! other venues start as scaffolds until production adaptors land.
+//! other venues may expose read/indexed analytics before Copy LP execution is enabled.
 
 use {
     crate::types::{PoolType, SharePoolState, UserPosition},
@@ -88,6 +88,20 @@ impl VenueCapabilities {
             withdraw: true,
             claim: true,
             copy_scale: true,
+        }
+    }
+
+    pub const fn indexed_analytics(liquidity_events: bool) -> Self {
+        Self {
+            list_pools: true,
+            positions: false,
+            liquidity_events,
+            quotes: true,
+            draft_ops: false,
+            deposit: false,
+            withdraw: false,
+            claim: false,
+            copy_scale: false,
         }
     }
 
@@ -319,12 +333,43 @@ impl DexAdaptor for AquariusAdaptor {
     }
 }
 
-/// Placeholder until a venue's production adaptor ships.
+/// Placeholder for Copy LP execution until a venue's production adaptor ships.
 #[derive(Debug, Clone, Copy)]
 pub struct ScaffoldAdaptor {
     pub venue_id: VenueId,
     pub name: &'static str,
     pub notes: &'static str,
+}
+
+/// Read/indexed venue surface whose Copy LP operations remain disabled.
+#[derive(Debug, Clone, Copy)]
+pub struct IndexedAnalyticsAdaptor {
+    pub venue_id: VenueId,
+    pub name: &'static str,
+    pub capabilities: VenueCapabilities,
+    pub notes: &'static str,
+}
+
+impl DexAdaptor for IndexedAnalyticsAdaptor {
+    fn venue_id(&self) -> VenueId {
+        self.venue_id
+    }
+
+    fn name(&self) -> &'static str {
+        self.name
+    }
+
+    fn status(&self) -> VenueStatus {
+        VenueStatus::Scaffold
+    }
+
+    fn capabilities(&self) -> VenueCapabilities {
+        self.capabilities
+    }
+
+    fn notes(&self) -> &'static str {
+        self.notes
+    }
 }
 
 impl DexAdaptor for ScaffoldAdaptor {
@@ -353,25 +398,29 @@ impl DexAdaptor for ScaffoldAdaptor {
 pub fn default_venue_registry() -> Vec<Box<dyn DexAdaptor>> {
     vec![
         Box::new(AquariusAdaptor),
-        Box::new(ScaffoldAdaptor {
+        Box::new(IndexedAnalyticsAdaptor {
             venue_id: VenueId::SushiV3,
             name: "Sushi V3",
-            notes: "Scaffold. CL events/draft planned for Tranche 2.",
+            capabilities: VenueCapabilities::indexed_analytics(false),
+            notes: "Read-only indexed CLMM analytics; Copy LP execution is fail-closed.",
         }),
-        Box::new(ScaffoldAdaptor {
+        Box::new(IndexedAnalyticsAdaptor {
             venue_id: VenueId::Phoenix,
             name: "Phoenix",
-            notes: "Scaffold. CP AMM read+draft planned for Tranche 2.",
+            capabilities: VenueCapabilities::indexed_analytics(true),
+            notes: "Read-only indexed AMM analytics and liquidity events; Copy LP execution is fail-closed.",
         }),
-        Box::new(ScaffoldAdaptor {
+        Box::new(IndexedAnalyticsAdaptor {
             venue_id: VenueId::SoroswapAmm,
             name: "Soroswap AMM",
-            notes: "Scaffold. AMM only (not aggregator).",
+            capabilities: VenueCapabilities::indexed_analytics(true),
+            notes: "Read-only indexed AMM analytics and liquidity events; Copy LP execution is fail-closed.",
         }),
-        Box::new(ScaffoldAdaptor {
+        Box::new(IndexedAnalyticsAdaptor {
             venue_id: VenueId::Comet,
             name: "Comet",
-            notes: "Scaffold. Weighted pools; mainnet gate if liquidity thin.",
+            capabilities: VenueCapabilities::indexed_analytics(true),
+            notes: "Read-only indexed weighted-pool analytics; Copy LP execution is fail-closed.",
         }),
     ]
 }

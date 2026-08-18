@@ -1,5 +1,6 @@
 use {
     crate::copy_lp::build_scaled_op_payload,
+    crate::copy_policy::validate_copy_op,
     crate::index_db::{
         CopyOpRow, CopySessionRow, IndexDb, IndexerStatus, PoolActivityRow,
         PoolActivitySummaryRow, PoolEventRow, PoolRollupRow,
@@ -491,7 +492,8 @@ async fn health() -> impl IntoResponse {
     Json(json!({ "ok": true }))
 }
 
-/// Multi-DEX support matrix (`DexAdaptor` registry). Aquarius is production; others scaffold.
+/// Multi-DEX support matrix (`DexAdaptor` registry). Aquarius supports live Copy LP;
+/// other venues expose read/indexed analytics while execution remains fail-closed.
 async fn list_venues() -> impl IntoResponse {
     let venues = support_matrix()
         .into_iter()
@@ -507,7 +509,7 @@ async fn list_venues() -> impl IntoResponse {
         .collect::<Vec<_>>();
     Json(json!({
         "venues": venues,
-        "note": "Strategies bind to venue_id. Only production venues accept live copy/index paths today.",
+        "note": "Strategies bind to venue_id. Read/indexed analytics are available per venue; live Copy LP execution remains limited to production venues.",
     }))
 }
 
@@ -537,6 +539,7 @@ async fn indexer_status(State(state): State<AppState>) -> impl IntoResponse {
 }
 
 async fn list_pools(State(state): State<AppState>) -> impl IntoResponse {
+    const POOL_LIST_CACHE_SECS: u64 = 30;
     if let Some(body) = {
         let cache = state.pool_list_cache.lock().unwrap();
         cache.as_ref().and_then(|(expires_at, body)| {
@@ -546,7 +549,7 @@ async fn list_pools(State(state): State<AppState>) -> impl IntoResponse {
         let mut response = Json(body).into_response();
         response.headers_mut().insert(
             CACHE_CONTROL,
-            HeaderValue::from_static("public, max-age=10, s-maxage=10, stale-while-revalidate=30"),
+            HeaderValue::from_static("public, max-age=30, s-maxage=30, stale-while-revalidate=60"),
         );
         return response;
     }
@@ -591,7 +594,12 @@ async fn list_pools(State(state): State<AppState>) -> impl IntoResponse {
                 .filter_map(|token| token.as_str().map(ToOwned::to_owned))
                 .collect();
             let token_meta_map =
-                resolve_token_meta_map(state.rpc.clone(), &state.token_meta_cache, &token_ids)
+                resolve_token_meta_map(
+                    state.rpc.clone(),
+                    state.index_db.clone(),
+                    &state.token_meta_cache,
+                    &token_ids,
+                )
                     .await;
             let wanted = wanted_tokens_from_meta(&token_meta_map);
             let (price_map, mut quote_meta) = state.prices.prices_for_tokens(&wanted).await;
@@ -691,12 +699,15 @@ async fn list_pools(State(state): State<AppState>) -> impl IntoResponse {
             });
             {
                 let mut cache = state.pool_list_cache.lock().unwrap();
-                *cache = Some((StdInstant::now() + StdDuration::from_secs(10), body.clone()));
+                *cache = Some((
+                    StdInstant::now() + StdDuration::from_secs(POOL_LIST_CACHE_SECS),
+                    body.clone(),
+                ));
             }
             let mut response = Json(body).into_response();
             response.headers_mut().insert(
                 CACHE_CONTROL,
-                HeaderValue::from_static("public, max-age=10, s-maxage=10, stale-while-revalidate=30"),
+                HeaderValue::from_static("public, max-age=30, s-maxage=30, stale-while-revalidate=60"),
             );
             response
         }
@@ -716,6 +727,11 @@ async fn list_pools(State(state): State<AppState>) -> impl IntoResponse {
         )
             .into_response(),
     }
+}
+
+/// Build the expensive pool ranking cache outside the first user request.
+pub async fn warm_pool_list_cache(state: AppState) {
+    let _ = list_pools(State(state)).await;
 }
 
 async fn pool_detail(
@@ -752,7 +768,12 @@ async fn pool_detail(
         } else {
             let token_ids: HashSet<String> = tokens.iter().cloned().collect();
             let map =
-        resolve_token_meta_map(state.rpc.clone(), &state.token_meta_cache, &token_ids)
+                resolve_token_meta_map(
+                    state.rpc.clone(),
+                    state.index_db.clone(),
+                    &state.token_meta_cache,
+                    &token_ids,
+                )
                     .await;
             let token_meta = tokens
                 .iter()
@@ -854,6 +875,7 @@ async fn pool_detail(
 
 async fn resolve_token_meta_map(
     rpc: Arc<SorobanRpc>,
+    index_db: Arc<Mutex<IndexDb>>,
     cache: &Arc<Mutex<HashMap<String, TokenMeta>>>,
     token_ids: &HashSet<String>,
 ) -> HashMap<String, TokenMeta> {
@@ -870,11 +892,45 @@ async fn resolve_token_meta_map(
         }
     }
 
-    let mut tasks = tokio::task::JoinSet::new();
+    let mut unresolved = Vec::new();
     for token in missing {
+        let persisted = index_db
+            .lock()
+            .ok()
+            .and_then(|db| db.token_metadata(&token).ok().flatten());
+        if let Some(metadata) = persisted {
+            let meta = TokenMeta {
+                address: metadata.address,
+                symbol: metadata.symbol,
+                name: metadata.name,
+                issuer: metadata.issuer,
+                domain: metadata.domain,
+                icon: metadata.icon,
+            };
+            cache.lock().unwrap().insert(token.clone(), meta.clone());
+            out.insert(token, meta);
+        } else {
+            unresolved.push(token);
+        }
+    }
+
+    let mut tasks = tokio::task::JoinSet::new();
+    for token in unresolved {
         let rpc = Arc::clone(&rpc);
+        let index_db = Arc::clone(&index_db);
         tasks.spawn(async move {
             let meta = resolve_one_token_meta(&rpc, &token).await;
+            let row = crate::index_db::TokenMetadataRow {
+                address: meta.address.clone(),
+                symbol: meta.symbol.clone(),
+                name: meta.name.clone(),
+                issuer: meta.issuer.clone(),
+                domain: meta.domain.clone(),
+                icon: meta.icon.clone(),
+            };
+            if let Ok(db) = index_db.lock() {
+                let _ = db.upsert_token_metadata(&row);
+            }
             (token, meta)
         });
     }
@@ -980,7 +1036,13 @@ async fn pool_events(
     let token_meta_map = if token_ids.is_empty() {
         HashMap::new()
     } else {
-        resolve_token_meta_map(state.rpc.clone(), &state.token_meta_cache, &token_ids).await
+        resolve_token_meta_map(
+            state.rpc.clone(),
+            state.index_db.clone(),
+            &state.token_meta_cache,
+            &token_ids,
+        )
+        .await
     };
     let wanted = wanted_tokens_from_meta(&token_meta_map);
     let (price_map, mut quote_meta) = state.prices.prices_for_tokens(&wanted).await;
@@ -1475,7 +1537,7 @@ async fn lp_profile(
 const COPY_RECONCILE_BATCH: usize = 500;
 
 const COPY_OP_STATUSES: &[&str] = &[
-    "drafted", "skipped", "signed", "failed", "insufficient",
+    "drafted", "skipped", "signed", "failed", "insufficient", "rejected",
 ];
 
 const COPY_SESSION_STATUSES: &[&str] = &["active", "paused", "stopped"];
@@ -1501,6 +1563,12 @@ fn copy_session_json(session: &CopySessionRow) -> Value {
         "coefficient": session.coefficient,
         "status": session.status,
         "include_claims": session.include_claims,
+        "policy": {
+            "allowed_pools": session.allowed_pools,
+            "max_per_op_quote_xlm": session.max_per_op_quote_xlm,
+            "max_daily_quote_xlm": session.max_daily_quote_xlm,
+            "expires_at": session.expires_at,
+        },
         "cursor_ts": session.cursor_ts,
         "watermark_ts": session.watermark_ts,
         "watermark_event_id": session.watermark_event_id,
@@ -1569,6 +1637,24 @@ fn reconcile_copy_ops(index_db: &IndexDb, session: &mut CopySessionRow) -> Resul
             ) else {
                 continue;
             };
+            let daily_start = Utc::now()
+                .date_naive()
+                .and_hms_opt(0, 0, 0)
+                .map(|value| value.and_utc().timestamp())
+                .unwrap_or(0);
+            let (status, note) = match validate_copy_op(
+                session,
+                &event.pool_address,
+                draft.scaled_quote_xlm,
+                Utc::now().timestamp(),
+                index_db.copy_quote_used_since(&session.id, daily_start)?,
+            ) {
+                Ok(()) => ("pending".to_string(), None),
+                Err(reason) => (
+                    "rejected".to_string(),
+                    Some(format!("{}: copy policy rejected", reason.code())),
+                ),
+            };
             let op = CopyOpRow {
                 id: new_copy_entity_id(),
                 session_id: session.id.clone(),
@@ -1580,8 +1666,8 @@ fn reconcile_copy_ops(index_db: &IndexDb, session: &mut CopySessionRow) -> Resul
                 scaled_amounts_json: draft.scaled_amounts_json.to_string(),
                 leader_quote_xlm: draft.leader_quote_xlm,
                 scaled_quote_xlm: draft.scaled_quote_xlm,
-                status: "pending".into(),
-                note: None,
+                status,
+                note,
                 created_at: now,
                 updated_at: now,
             };
@@ -1613,6 +1699,10 @@ struct CreateCopySessionBody {
     leader_address: String,
     coefficient: f64,
     include_claims: Option<bool>,
+    allowed_pools: Option<Vec<String>>,
+    max_per_op_quote_xlm: Option<f64>,
+    max_daily_quote_xlm: Option<f64>,
+    expires_at: Option<i64>,
 }
 
 async fn create_copy_session(
@@ -1641,6 +1731,25 @@ async fn create_copy_session(
             .into_response();
     }
 
+    let max_per_op = body.max_per_op_quote_xlm.unwrap_or(0.0);
+    let max_daily = body.max_daily_quote_xlm.unwrap_or(0.0);
+    if !max_per_op.is_finite() || max_per_op < 0.0 || !max_daily.is_finite() || max_daily < 0.0 {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "policy limits must be finite and >= 0", "code": "bad_policy" })),
+        )
+            .into_response();
+    }
+    if let Some(expires_at) = body.expires_at {
+        if expires_at <= Utc::now().timestamp() {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "expires_at must be in the future", "code": "bad_policy" })),
+            )
+                .into_response();
+        }
+    }
+
     let include_claims = body.include_claims.unwrap_or(false);
     let index_db = state.index_db.lock().unwrap();
     match index_db.create_copy_session(
@@ -1648,6 +1757,10 @@ async fn create_copy_session(
         &body.leader_address,
         body.coefficient,
         include_claims,
+        body.allowed_pools.as_deref().unwrap_or(&[]),
+        max_per_op,
+        max_daily,
+        body.expires_at,
     ) {
         Ok(session) => Json(copy_session_json(&session)).into_response(),
         Err(error) => (
