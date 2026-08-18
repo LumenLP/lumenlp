@@ -395,6 +395,27 @@ mod test {
     #[contract]
     struct MockPool;
 
+    #[contract]
+    struct MockToken;
+
+    #[contractimpl]
+    impl MockToken {
+        pub fn transfer(env: Env, from: Address, to: Address, amount: i128) {
+            from.require_auth();
+            env.storage().instance().set(&symbol_short!("from"), &from);
+            env.storage().instance().set(&symbol_short!("to"), &to);
+            env.storage().instance().set(&symbol_short!("amount"), &amount);
+        }
+
+        pub fn last_transfer(env: Env) -> (Address, Address, i128) {
+            (
+                env.storage().instance().get(&symbol_short!("from")).unwrap(),
+                env.storage().instance().get(&symbol_short!("to")).unwrap(),
+                env.storage().instance().get(&symbol_short!("amount")).unwrap(),
+            )
+        }
+    }
+
     #[contractimpl]
     impl MockPool {
         pub fn get_tokens(env: Env) -> Vec<Address> {
@@ -425,11 +446,32 @@ mod test {
 
         pub fn claim(env: Env, user: Address) -> u128 {
             env.storage().instance().set(&symbol_short!("user"), &user);
-            1
+            let amount: u128 = env.storage().instance().get(&symbol_short!("reward")).unwrap_or(0);
+            if amount > 0 {
+                let token: Address = env.storage().instance().get(&symbol_short!("token")).unwrap();
+                env.invoke_contract::<()>(
+                    &token,
+                    &symbol_short!("transfer"),
+                    Vec::from_array(
+                        &env,
+                        [
+                            env.current_contract_address().into_val(&env),
+                            user.into_val(&env),
+                            (amount as i128).into_val(&env),
+                        ],
+                    ),
+                );
+            }
+            amount
         }
 
-        pub fn get_user_reward(_env: Env, _user: Address) -> u128 {
-            0
+        pub fn get_user_reward(env: Env, _user: Address) -> u128 {
+            env.storage().instance().get(&symbol_short!("reward")).unwrap_or(0)
+        }
+
+        pub fn configure_reward(env: Env, token: Address, amount: u128) {
+            env.storage().instance().set(&symbol_short!("token"), &token);
+            env.storage().instance().set(&symbol_short!("reward"), &amount);
         }
 
         pub fn last_user(env: Env) -> Address {
@@ -473,6 +515,7 @@ mod test {
         env.mock_all_auths();
         let policy = env.register(CopyPolicy, ());
         let pool = env.register(MockPool, ());
+        let token = env.register(MockToken, ());
         let owner = Address::generate(&env);
         let relayer = Address::generate(&env);
         let leader = Address::generate(&env);
@@ -518,6 +561,7 @@ mod test {
         assert_eq!(pool_client.last_user(), policy);
 
         let claim_id = BytesN::from_array(&env, &[3; 32]);
+        MockPoolClient::new(&env, &pool).configure_reward(&token, &7);
         policy_client.execute_aquarius_standard_op(
             &7,
             &claim_id,
@@ -528,9 +572,13 @@ mod test {
             &0,
             &0,
             &Vec::new(&env),
-            &Address::generate(&env),
+            &token,
         );
         assert_eq!(pool_client.last_user(), policy);
+        assert_eq!(
+            MockTokenClient::new(&env, &token).last_transfer(),
+            (pool_address, policy, 7)
+        );
     }
 
     #[test]

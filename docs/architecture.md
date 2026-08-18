@@ -23,7 +23,8 @@ The current production system is RPC-first and non-custodial. The website and AP
 
 ### Deferred capabilities
 
-- Soroban policy-controlled automatic execution.
+- Soroban policy-controlled automatic execution on Testnet; production rollout
+  remains gated by security and operational validation.
 - LumenLP relayer for policy-approved operations.
 - CLMM range copy and rebalance depth.
 - Optional fee-token conversion through LumAgg.
@@ -33,33 +34,66 @@ LumenLP does not mirror arbitrary Leader swaps. A swap can be a fee exit, a posi
 
 ## System Overview
 
-```text
-                         Stellar Mainnet
-                               │
-                   Soroban RPC / local RPC node
-                               │
-             ┌─────────────────┴─────────────────┐
-             │                                   │
-       Snapshotter                         Pool Indexer
-             │                                   │
-             ▼                                   ▼
-       lpagent.db                         pool-indexer.db
-             │                                   │
-             └─────────────────┬─────────────────┘
-                               │
-                         API Server
-                               │
-                  https://api.lumenlp.xyz
-                               │
-                         HTTPS / JSON
-                               │
-                         Web Application
-                    https://lumenlp.xyz
-                               │
-                 Wallet / user-reviewed actions
+```mermaid
+flowchart LR
+    subgraph Stellar[Stellar network]
+        Contracts[DEX contracts\nAquarius and other venues]
+        RPC[Soroban RPC\nledger, events, simulation]
+        Contracts --> RPC
+    end
+
+    subgraph DataPlane[Data plane: observe and normalize]
+        Indexer[pool-indexer\ncrates/pool-indexer\ngetEvents -> parse -> rollups]
+        Snapshotter[snapshotter\ncrates/snapshotter\nstate hydration -> snapshots]
+        EventDB[(pool-indexer.db\nevents, swaps, actors, rollups)]
+        PoolDB[(lpagent.db\npools, tokens, reserves, snapshots)]
+        RPC --> Indexer
+        RPC --> Snapshotter
+        Indexer --> EventDB
+        Snapshotter --> PoolDB
+    end
+
+    subgraph ReadPlane[Read plane]
+        API[Axum API server\ncrates/api-server]
+        Web[Next.js web app\napps/web]
+        EventDB --> API
+        PoolDB --> API
+        API --> Web
+    end
+
+    subgraph ExecutionPlane[Execution plane: Copy LP]
+        Engine[Copy Engine\nsource event + coefficient]
+        Policy[Soroban Copy Policy\ncontracts/copy-policy]
+        Relayer[LumenLP relayer\nsubmits policy-approved tx]
+        Adapter[DEX adapter boundary\ncrates/dex]
+        Engine --> Policy
+        Relayer --> Policy
+        Policy --> Adapter
+        Adapter --> Contracts
+    end
+
+    EventDB --> Engine
+    Web --> Engine
+    User[User\nwallet / owner controls] --> Policy
 ```
 
-The production services run on `88.198.16.144`. The web application is statically exported and deployed to Cloudflare Pages. Nginx terminates the API domain and proxies requests to the API server on `127.0.0.1:3301`.
+The web application is statically exported and deployed to Cloudflare Pages.
+The API is exposed through `https://api.lumenlp.xyz`; private service routing
+between Nginx, the API, indexer, snapshotter, and RPC is intentionally omitted
+from this public architecture document.
+
+### Architecture at a glance
+
+| Plane | Implementation | What it does | Durable output |
+|---|---|---|---|
+| Data plane | `crates/pool-indexer` | Reads bounded Soroban `getEvents` ranges, classifies LP lifecycle events, attributes actors, advances a ledger cursor, and builds time-window rollups. | `pool-indexer.db` |
+| State plane | `crates/snapshotter` + `crates/dex` | Discovers pools, reads tokens/reserves/fees/shares through RPC simulation, resolves prices, and records snapshots. | `lpagent.db` |
+| Read plane | `crates/api-server` + `apps/web` | Joins indexed events and snapshots into pool, Leader, Copy LP, and status APIs and renders the UI. | JSON responses and user views |
+| Execution plane | `contracts/copy-policy` + relayer + `crates/dex` | Validates session scope on Soroban, authorizes only declared token movements, and invokes the selected DEX adapter. | On-chain policy state and transaction history |
+
+The key separation is intentional: the indexer observes and proposes source
+events off-chain, while the Soroban policy contract is the final authority for
+whether an automated LP operation can execute.
 
 ## Repository Structure
 
@@ -237,21 +271,131 @@ Soroban RPC is the source of truth for the current Stellar implementation:
 - Contract simulation and read calls hydrate pool state, reserves, fees, shares, and positions.
 - Transaction simulation and submission are used by the future policy-controlled execution path.
 
-The production server uses the local RPC endpoint on `88.198.16.144`. The indexer stores its cursor and never assumes that public RPC can provide history outside its retention window. If an event is older than the available RPC range, LumenLP marks the data as unavailable rather than inventing history.
+The indexer uses the configured private RPC service and stores its cursor; it
+never assumes that public RPC can provide history outside its retention window.
+If an event is older than the available RPC range, LumenLP marks the data as
+unavailable rather than inventing history.
 
 ### Soroban Policy and automated execution
 
-The grant-funded automation layer will use Soroban authorization to constrain what LumenLP can execute for a follower account.
+The repository contains a Soroban policy contract at
+`contracts/copy-policy`. The current contract is a testnet vertical slice, not
+a production vault and not a generic executor. It constrains which relayer
+calls may reach an allowlisted Aquarius pool, while keeping the follower's
+funds inside the policy contract rather than inside the relayer key.
 
-The policy will restrict:
+The implemented policy currently restricts:
 
-- Aquarius contract addresses and allowed pool addresses;
-- allowed entrypoints: deposit, withdrawal, and claim;
-- copy coefficient and integer amount scaling rules;
-- maximum quote value per operation;
-- maximum quote value per UTC day;
-- slippage, nonce, and intent expiry;
-- pause, resume, and disarm state.
+- the configured relayer address;
+- the session's allowed pool addresses;
+- the allowed LP entrypoints: `deposit`, `withdraw`, and `claim`;
+- a positive per-operation quote limit;
+- a UTC-day aggregate quote limit;
+- session expiry, pause, resume, and disarm state;
+- one-time use of each `(session_id, source_event_id)` pair.
+
+Slippage values and protocol-specific minimum amounts are passed to the
+Aquarius call by the operation payload. They are not yet stored as independent
+policy fields; the adapter still needs a stronger policy-level representation
+before production use.
+
+#### Contract implementation
+
+The contract exposes these public methods:
+
+| Method | Authorization | Responsibility |
+|---|---|---|
+| `initialize(owner, relayer)` | `owner` auth | Set the immutable instance owner and relayer. |
+| `register_session(...)` | owner auth | Store a Leader, pool allowlist, claim flag, expiry, and quote limits. |
+| `pause_session(session_id)` | owner auth | Stop a session without deleting its configuration. |
+| `resume_session(session_id)` | owner auth | Resume a non-expired session. |
+| `disarm_session(session_id)` | owner auth | Remove the session and its active configuration. |
+| `session(session_id)` | read | Inspect the stored session state. |
+| `execute_copy_op(...)` | relayer auth | Validate and record a policy-approved intent without calling a DEX. |
+| `execute_aquarius_standard_op(...)` | relayer auth | Validate the intent and call an Aquarius standard pool. |
+
+The `Session` state contains:
+
+```text
+leader
+allowed_pools
+follow_claims
+max_per_op_quote
+max_daily_quote
+expires_at
+paused
+daily_day
+daily_used_quote
+```
+
+Persistent replay state is keyed by `(session_id, source_event_id)`. The
+contract validates the relayer, replay key, session state, pool allowlist,
+claim permission, operation kind, quote limits, and expiry before it writes
+the updated daily budget and replay marker. A downstream Aquarius failure
+rolls back the Soroban transaction, including those policy writes.
+
+#### Aquarius execution and authorization
+
+`execute_aquarius_standard_op` always passes the policy contract address as the
+Aquarius `user` argument. The relayer is only the transaction submitter; it is
+not the LP owner and cannot substitute itself as the pool user.
+
+For `deposit`, the contract:
+
+1. calls Aquarius `get_tokens`;
+2. creates Soroban authorization entries for each non-zero
+   `token.transfer(policy, pool, amount)`;
+3. invokes Aquarius `deposit(policy, desired_amounts, min_shares)`.
+
+For `withdraw`, the contract:
+
+1. reads `get_tokens`, `get_reserves`, `get_total_shares`, and `share_id`;
+2. calculates each output as `floor(reserve × shares / total_shares)` using
+   Soroban `U256` arithmetic;
+3. authorizes LP share `burn(policy, share_amount)`;
+4. authorizes each `token.transfer(pool, policy, output)`;
+5. invokes Aquarius `withdraw(policy, share_amount, min_amounts)`.
+
+For `claim`, the caller supplies the expected `claim_token` address. The
+contract first reads `get_user_reward(policy)`, authorizes only
+`claim_token.transfer(pool, policy, reward_amount)`, and then invokes
+Aquarius `claim(policy)`. A wrong token address or amount causes the complete
+transaction to fail rather than widening authorization.
+
+The contract uses `authorize_as_current_contract` with explicit nested token
+invocations. This is the key custody boundary: the relayer signature permits
+submission, but the Soroban authorization tree limits the token movements that
+the policy contract can cause in that transaction.
+
+#### Error and fail-closed behavior
+
+The policy returns explicit errors for uninitialized state, missing sessions,
+paused or expired sessions, disallowed pools, disabled claims, replayed source
+events, invalid operation limits, and daily budget exhaustion. Unsupported
+operation kinds are rejected before the replay marker and budget are written.
+The adapter does not fall back to arbitrary contract calls, arbitrary swaps, or
+unknown pool interfaces.
+
+#### Testnet evidence and current boundary
+
+The v3 testnet contract is:
+
+`CDDEM34TOAN5DOG5LBJCC676QV2M27V3SSXZ7IPVA76RUSLSZEM5KLNJ`
+
+The implementation has been exercised against a real Aquarius Testnet pool:
+
+- deposit: policy-funded USDC/native deposit minted LP shares;
+- withdraw: LP shares were burned and both pool assets returned to policy;
+- claim: zero-reward claim completed successfully;
+- local fixture: positive-reward claim authorization performs a real mock token transfer.
+
+The production promotion boundary is explicit: positive-reward claim against a
+configured Aquarius reward stream, broader negative-path tests, monitoring,
+and a user recovery/manual-signing path remain required. Concentrated-liquidity
+position operations are not part of this contract's current ABI.
+
+The deployment ledger, transaction links, and promotion checklist are maintained
+in [`docs/architecture/copy-policy.md`](architecture/copy-policy.md).
 
 The execution sequence is:
 
@@ -351,7 +495,7 @@ LumenLP Copy Engine creates intent
       │ coefficient, pool, operation, limits
       ▼
 Soroban policy validates
-      │ allowlist, amount cap, daily cap, slippage, nonce, expiry
+      │ allowlist, amount cap, daily cap, replay key, expiry
       ▼
 LumenLP relayer submits approved operation
       │
@@ -434,11 +578,11 @@ The deployment process must preserve both databases. In particular, an existing 
 ## Production Deployment
 
 ```text
-88.198.16.144
-  ├── local Stellar RPC       127.0.0.1:8003
+Private deployment host
+  ├── private Stellar RPC     RPC service
   ├── pool-indexer             systemd, 30s polling
   ├── snapshotter              systemd timer, 5m interval
-  ├── api-server               127.0.0.1:3301
+  ├── api-server               internal API service
   └── nginx                    api.lumenlp.xyz → API server
 
 Cloudflare Pages
@@ -450,7 +594,9 @@ Deployment entry points:
 - `deploy/deploy.sh` syncs source, builds Rust services, installs systemd/Nginx configuration, and restarts API, indexer, and snapshotter services.
 - `deploy/deploy_site.sh` builds the static web export with `NEXT_PUBLIC_API_BASE` and deploys it to Cloudflare Pages.
 
-The API and indexer use the local RPC endpoint on the server. The public API is exposed through `api.lumenlp.xyz`; the frontend must never use `http://127.0.0.1:3301` in production because that address refers to the visitor's own machine.
+The API and indexer use the private RPC service. The public API is exposed
+through `api.lumenlp.xyz`; the frontend must never use a machine-local API URL
+in production because that address would refer to the visitor's own machine.
 
 ## Reliability and Safety Rules
 
@@ -462,7 +608,7 @@ The API and indexer use the local RPC endpoint on the server. The public API is 
 - Do not store user private keys on the server.
 - Keep Copy LP limited to declared Aquarius LP entrypoints.
 - Never silently downscale a user-selected copy coefficient.
-- Enforce pool allowlists, per-operation caps, daily caps, slippage, nonce, and expiry before automatic execution.
+- Enforce pool allowlists, per-operation caps, daily caps, replay protection, and expiry before automatic execution. Treat slippage and minimum amounts as protocol-call parameters until they are promoted into policy state.
 - Keep LumAgg swaps separate from Leader-event mirroring.
 
 ## Planned Evolution

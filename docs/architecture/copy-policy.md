@@ -69,6 +69,10 @@ withdraw calculation:
 - Initialization transaction: [3cdfe48789e7528f5236475314604469fe56d21ef2f817b598820e9363f26dad](https://stellar.expert/explorer/testnet/tx/3cdfe48789e7528f5236475314604469fe56d21ef2f817b598820e9363f26dad)
 - Session registration transaction: [e730341ca5b7fe93ed777ee06796bfba5539a11ba87daef6e3c45142eaa84c75](https://stellar.expert/explorer/testnet/tx/e730341ca5b7fe93ed777ee06796bfba5539a11ba87daef6e3c45142eaa84c75)
 - Zero-reward claim smoke test: [2352b8a75b5961d0c4d00f16e04e4da2e47ece3f8fe7f4c99f83434c131777ac](https://stellar.expert/explorer/testnet/tx/2352b8a75b5961d0c4d00f16e04e4da2e47ece3f8fe7f4c99f83434c131777ac)
+- Native SAC provisioning transaction: [f23241e2d4f814efd4ae6e16b97f959bd1d8bc42dcf6dc5db8e569850f66ea83](https://stellar.expert/explorer/testnet/tx/f23241e2d4f814efd4ae6e16b97f959bd1d8bc42dcf6dc5db8e569850f66ea83)
+- Testnet USDC provisioning transaction: [cf59900ea9470ea8a91f1918b62ec75dfdde2593a9a59575534c3aa4d99e9524](https://stellar.expert/explorer/testnet/tx/cf59900ea9470ea8a91f1918b62ec75dfdde2593a9a59575534c3aa4d99e9524)
+- Real Aquarius deposit: [ac5f3ff656cc8e0ff1113c1f0d05310806ebd5f75066913bb13e9506a26045ee](https://stellar.expert/explorer/testnet/tx/ac5f3ff656cc8e0ff1113c1f0d05310806ebd5f75066913bb13e9506a26045ee)
+- Real Aquarius withdraw: [48e6f8254814b7895ec0749269d0f4ba20c065292fa95f796e36b1885b74b541](https://stellar.expert/explorer/testnet/tx/48e6f8254814b7895ec0749269d0f4ba20c065292fa95f796e36b1885b74b541)
 
 This deployment is for contract and integration testing only. It is not
 connected to production users, production relayers, or mainnet funds.
@@ -90,7 +94,10 @@ authorization and balance setup. The v2 deposit simulation reached the real
 Aquarius `deposit` call and passed the nested SAC authorization; it currently
 stops at the expected zero-USDC balance check. The v3 claim smoke test reached
 the real Aquarius `claim` path and completed with a zero reward amount. A
-positive-reward claim and a funded withdraw remain required before promotion.
+funded deposit and withdraw were then executed against the same real pool;
+the deposit minted 5,767,331 LP shares and the withdraw burned 1,000,000
+shares while returning both pool assets. Positive-reward claim remains the
+only unverified asset path before promotion.
 
 ## Promotion Gate
 
