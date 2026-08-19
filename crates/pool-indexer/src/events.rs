@@ -367,6 +367,10 @@ fn parse_pool_event(
         .dex_by_pool
         .get(&event.contract_id)
         .is_some_and(|venue| venue == "comet");
+    let is_sushi = context
+        .dex_by_pool
+        .get(&event.contract_id)
+        .is_some_and(|venue| venue == "sushi" || venue == "sushi_v3");
     let kind_name = if is_soroswap && first_topic == "SoroswapPair" {
         topic_symbol_name(topics.get(1))?.unwrap_or_default()
     } else if is_comet && first_topic == "POOL" {
@@ -374,10 +378,13 @@ fn parse_pool_event(
     } else {
         first_topic
     };
-    let kind = match (is_soroswap || is_phoenix || is_comet, kind_name.as_str()) {
+    let kind = match (is_soroswap || is_phoenix || is_comet || is_sushi, kind_name.as_str()) {
         (true, "deposit" | "provide_liquidity") => PoolEventKind::DepositLiquidity,
         (true, "deposit_liquidity" | "join_pool") => PoolEventKind::DepositLiquidity,
         (true, "withdraw" | "withdraw_liquidity" | "exit_pool") => PoolEventKind::WithdrawLiquidity,
+        (true, "mint") => PoolEventKind::DepositLiquidity,
+        (true, "burn") => PoolEventKind::WithdrawLiquidity,
+        (true, "collect") => PoolEventKind::ClaimFees,
         (true, "swap") => PoolEventKind::Trade,
         (true, "sync") => PoolEventKind::ReservesSync,
         _ => PoolEventKind::parse(&kind_name),
@@ -395,6 +402,11 @@ fn parse_pool_event(
         actor_from_soroswap_data(&decoded_body)
     } else if is_comet {
         comet_field(&decoded_body, "caller").and_then(value_address_string)
+    } else if is_sushi {
+        sushi_field(&decoded_body, "owner")
+            .or_else(|| sushi_field(&decoded_body, "recipient"))
+            .or_else(|| sushi_field(&decoded_body, "sender"))
+            .and_then(value_address_string)
     } else {
         actor_from_topics(kind.as_str(), &decoded_topics)
     };
@@ -409,6 +421,7 @@ fn parse_pool_event(
         is_soroswap,
         is_phoenix,
         is_comet,
+        is_sushi,
     );
     let created_at = ledger_closed_at_to_unix(event.ledger_closed_at.as_deref(), event.ledger);
     let body_json = json!({
@@ -459,6 +472,7 @@ fn derive_event_fields(
     is_soroswap: bool,
     is_phoenix: bool,
     is_comet: bool,
+    is_sushi: bool,
 ) -> Value {
     let pool_fee_bps = context.fee_bps_by_pool.get(pool_address).copied();
     let pool_tokens = context
@@ -477,6 +491,9 @@ fn derive_event_fields(
             }
             if is_comet {
                 return derive_comet_swap(pool_fee_bps, data, context, actor);
+            }
+            if is_sushi {
+                return derive_sushi_swap(pool_fee_bps, &pool_tokens, data, context, actor);
             }
             let token_in = topic.get(1).and_then(value_address_string);
             let token_out = topic.get(2).and_then(value_address_string);
@@ -524,6 +541,9 @@ fn derive_event_fields(
             )
         }
         PoolEventKind::ClaimFees => {
+            if is_sushi {
+                return derive_sushi_collect(pool_fee_bps, data, context, actor);
+            }
             let token0 = topic.get(2).and_then(value_address_string);
             let token1 = topic.get(3).and_then(value_address_string);
             let amount0 = data.get(0).and_then(value_amount_string);
@@ -580,6 +600,9 @@ fn derive_event_fields(
             }
             if is_comet {
                 return derive_comet_liquidity(kind, pool_fee_bps, data, context, actor);
+            }
+            if is_sushi {
+                return derive_sushi_liquidity(kind, pool_fee_bps, data, context, actor);
             }
             let share_amount = data.first().and_then(value_amount_string);
             let token_amounts = pool_tokens
@@ -673,6 +696,8 @@ fn pool_swap_from_event(event: &PoolEvent) -> Option<PoolSwap> {
         == Some("POOL")
         && topic.get(1).and_then(|value| value.get("value")).and_then(Value::as_str)
             == Some("swap");
+    let derived_venue = derived.get("venue").and_then(Value::as_str);
+    let sushi = derived_venue == Some("sushi_v3");
     let token_in = derived
         .get("token_in")
         .and_then(Value::as_str)
@@ -700,16 +725,22 @@ fn pool_swap_from_event(event: &PoolEvent) -> Option<PoolSwap> {
         ledger: event.ledger,
         created_at: event.created_at,
         pool_address: event.pool_address.clone(),
-        dex: if soroswap {
-            "soroswap_amm"
-        } else if phoenix {
-            "phoenix"
-        } else if comet {
-            "comet"
-        } else {
-            "aquarius"
-        }
-        .to_string(),
+        dex: derived_venue
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| {
+                if soroswap {
+                    "soroswap_amm"
+                } else if phoenix {
+                    "phoenix"
+                } else if comet {
+                    "comet"
+                } else if sushi {
+                    "sushi_v3"
+                } else {
+                    "aquarius"
+                }
+                .to_string()
+            }),
         token_in,
         token_out,
         amount_in,
@@ -729,6 +760,65 @@ fn actor_from_soroswap_data(data: &[Value]) -> Option<String> {
 
 fn comet_field<'a>(data: &'a [Value], name: &str) -> Option<&'a Value> {
     data.first()?.get(name)
+}
+
+fn sushi_field<'a>(data: &'a [Value], name: &str) -> Option<&'a Value> {
+    data.first()?.get(name)
+}
+
+fn signed_amount(value: Option<String>) -> Option<(bool, String)> {
+    let value = value?;
+    let amount = value.parse::<i128>().ok()?;
+    if amount == 0 {
+        return None;
+    }
+    Some((amount > 0, amount.unsigned_abs().to_string()))
+}
+
+fn derive_sushi_swap(
+    pool_fee_bps: Option<u32>,
+    pool_tokens: &[String],
+    data: &[Value],
+    context: &PoolIndexContext,
+    actor: Option<&str>,
+) -> Value {
+    // Sushi V3 emits signed amount0/amount1 values: positive means the pool
+    // received that token, negative means the pool sent it to the trader.
+    let amount0 = signed_amount(sushi_field(data, "amount0").and_then(value_amount_string));
+    let amount1 = signed_amount(sushi_field(data, "amount1").and_then(value_amount_string));
+    let (token_in, amount_in) = if let Some((true, amount)) = amount0.clone() {
+        (pool_tokens.first().cloned(), Some(amount))
+    } else if let Some((true, amount)) = amount1.clone() {
+        (pool_tokens.get(1).cloned(), Some(amount))
+    } else {
+        (None, None)
+    };
+    let (token_out, amount_out) = if let Some((false, amount)) = amount0 {
+        (pool_tokens.first().cloned(), Some(amount))
+    } else if let Some((false, amount)) = amount1 {
+        (pool_tokens.get(1).cloned(), Some(amount))
+    } else {
+        (None, None)
+    };
+    let volume_quote_xlm = token_in
+        .as_deref()
+        .zip(amount_in.as_deref())
+        .and_then(|(token, amount)| estimate_amount_xlm(&context.price_book, token, amount));
+    let fee_quote_xlm = pool_fee_bps
+        .and_then(|bps| volume_quote_xlm.map(|volume| volume * bps as f64 / 10_000.0));
+    derived_with_actor(
+        json!({
+            "venue": "sushi_v3",
+            "pool_fee_bps": pool_fee_bps,
+            "token_in": token_in,
+            "token_out": token_out,
+            "amount_in": amount_in,
+            "amount_out": amount_out,
+            "volume_quote_xlm": volume_quote_xlm,
+            "fee_quote_xlm": fee_quote_xlm,
+        }),
+        actor,
+    )
 }
 
 fn derive_comet_swap(
@@ -1368,5 +1458,36 @@ mod tests {
         assert_eq!(derived["amount_in"], "1000000");
         assert_eq!(derived["amount_out"], "990000");
         assert_eq!(derived["actor"], "GBBO4ZDDZTSM2IUKQYBAST3CFHNPFXECGEFTGWTA3FXZASUBSONBDN3XL");
+    }
+
+    #[test]
+    fn parses_real_sushi_v3_swap_event() {
+        let pool = "CCR2CH4GQVCZHG7CHFVMNANCK45CU5DVKXZIIITDZQAU3CEJZ7RQH2MQ";
+        let event: ContractEvent = serde_json::from_value(json!({
+            "type": "contract",
+            "ledger": 64010645,
+            "ledgerClosedAt": "2026-08-18T12:17:12Z",
+            "contractId": pool,
+            "id": "sushi-real-swap",
+            "txHash": "7d0885e63a32e8aeeddeecf15652274f6a8931e507d79acb6c68986bc5e59cf2",
+            "topic": ["AAAADwAAAARzd2Fw"],
+            "value": "AAAAEQAAAAEAAAAHAAAADwAAAAdhbW91bnQwAAAAAAoAAAAAAAAAAAAAAAMLalggAAAADwAAAAdhbW91bnQxAAAAAAr///////////////+IwmF2AAAADwAAAAlsaXF1aWRpdHkAAAAAAAAJAAAAAAAAAAAAABnA+Ac5ggAAAA8AAAAJcmVjaXBpZW50AAAAAAAAEgAAAAAAAAAAg4eXTqvln7UyuhyGiCx0mY+jynWO/Nd+cfjj9joHtjUAAAAPAAAABnNlbmRlcgAAAAAAEgAAAAAAAAAAg4eXTqvln7UyuhyGiCx0mY+jynWO/Nd+cfjj9joHtjUAAAAPAAAADnNxcnRfcHJpY2VfeDk2AAAAAAALAAAAAAAAAAAAAAAAAAAAAAAAAABkRbWjZePFcSC4szAAAAAPAAAABHRpY2sAAAAE//+2xQ=="
+        })).expect("valid Sushi V3 swap fixture");
+        let context = PoolIndexContext {
+            fee_bps_by_pool: HashMap::from([(pool.to_string(), 30)]),
+            tokens_by_pool: HashMap::from([(pool.to_string(), vec![
+                "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".into(),
+                "CBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB".into(),
+            ])]),
+            dex_by_pool: HashMap::from([(pool.to_string(), "sushi".into())]),
+            price_book: PriceBook::default(),
+        };
+
+        let parsed = parse_pool_event(&event, &context, None)
+            .expect("event should decode")
+            .expect("Sushi V3 swap should be indexed");
+        assert_eq!(parsed.kind, PoolEventKind::Trade);
+        assert_eq!(pool_swap_from_event(&parsed).unwrap().dex, "sushi_v3");
+        assert!(parsed.body_json.contains("amount_in"));
     }
 }
