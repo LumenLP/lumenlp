@@ -5,13 +5,13 @@ After=network.target
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/opt/lpagent
+WorkingDirectory=/opt/lumenlp
 Environment=RPC_URL=http://127.0.0.1:8003
-Environment=INDEXER_DB_PATH=/opt/lpagent/data/pool-indexer.db
+Environment=INDEXER_DB_PATH=/opt/lumenlp/data/pool-indexer.db
 Environment=INDEXER_POLL_SECS=30
 Environment=INDEXER_VENUES=aquarius,soroswap,phoenix,sushi,comet
 Environment=RUST_LOG=info
-ExecStart=/opt/lpagent/target/release/pool-indexer run
+ExecStart=/opt/lumenlp/target/release/pool-indexer run
 Restart=on-failure
 RestartSec=5
 

@@ -552,6 +552,30 @@ mod test {
     }
 
     #[test]
+    fn disarm_removes_session_and_expiry_blocks_resume() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let policy = env.register(CopyPolicy, ());
+        let owner = Address::generate(&env);
+        let relayer = Address::generate(&env);
+        let pool = Address::generate(&env);
+        let client = CopyPolicyClient::new(&env, &policy);
+
+        client.initialize(&owner, &relayer);
+        let mut pools = Vec::new(&env);
+        pools.push_back(pool);
+        client.register_session(&13, &owner, &pools, &true, &10, &10, &100);
+        client.pause_session(&13);
+        client.resume_session(&13);
+        client.disarm_session(&13);
+        assert!(client.try_session(&13).is_err());
+
+        client.register_session(&14, &owner, &Vec::new(&env), &true, &10, &10, &100);
+        env.ledger().set_timestamp(100);
+        assert!(client.try_resume_session(&14).is_err());
+    }
+
+    #[test]
     fn standard_operations_call_pool_as_policy_contract() {
         let env = Env::default();
         env.mock_all_auths();

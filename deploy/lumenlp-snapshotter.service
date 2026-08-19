@@ -5,11 +5,11 @@ After=network.target
 [Service]
 Type=oneshot
 User=root
-WorkingDirectory=/opt/lpagent
+WorkingDirectory=/opt/lumenlp
 Environment=RPC_URL=http://127.0.0.1:8003
-Environment=DATABASE_PATH=/opt/lpagent/data/lpagent.db
+Environment=DATABASE_PATH=/opt/lumenlp/data/lumenlp.db
 Environment=SNAPSHOT_VENUES=aquarius,soroswap,phoenix,sushi,comet
 Environment=SNAPSHOT_TOP_N=600
 Environment=RUST_LOG=info
-ExecStart=/opt/lpagent/target/release/snapshotter
+ExecStart=/opt/lumenlp/target/release/snapshotter
 Nice=10

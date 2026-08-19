@@ -5,7 +5,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SERVER="${DEPLOY_HOST:-root@88.198.16.144}"
-REMOTE_DIR="${REMOTE_DIR:-/opt/lpagent}"
+REMOTE_DIR="${REMOTE_DIR:-/opt/lumenlp}"
 API_PORT="${API_PORT:-3301}"
 
 echo "=== Sync source → ${SERVER}:${REMOTE_DIR} ==="
@@ -23,11 +23,11 @@ rsync -az --delete \
   "$ROOT/" "$SERVER:${REMOTE_DIR}/"
 
 echo "=== Upload systemd + nginx units ==="
-scp "$ROOT/deploy/lpagent-api.service" \
-    "$ROOT/deploy/lpagent-indexer.service" \
-    "$ROOT/deploy/lpagent-snapshotter.service" \
-    "$ROOT/deploy/lpagent-snapshotter.timer" \
-    "$ROOT/deploy/nginx-lpagent.conf" \
+scp "$ROOT/deploy/lumenlp-api.service" \
+    "$ROOT/deploy/lumenlp-indexer.service" \
+    "$ROOT/deploy/lumenlp-snapshotter.service" \
+    "$ROOT/deploy/lumenlp-snapshotter.timer" \
+    "$ROOT/deploy/nginx-lumenlp.conf" \
     "$SERVER:${REMOTE_DIR}/deploy/"
 
 echo "=== Remote build + install (API + indexer) ==="
@@ -45,19 +45,19 @@ cd ${REMOTE_DIR}
 echo "--- cargo release build ---"
 cargo build -p api-server -p snapshotter -p pool-indexer --release
 
-install -m 644 deploy/lpagent-api.service /etc/systemd/system/lpagent-api.service
-install -m 644 deploy/lpagent-indexer.service /etc/systemd/system/lpagent-indexer.service
-install -m 644 deploy/lpagent-snapshotter.service /etc/systemd/system/lpagent-snapshotter.service
-install -m 644 deploy/lpagent-snapshotter.timer /etc/systemd/system/lpagent-snapshotter.timer
-install -m 644 deploy/nginx-lpagent.conf /etc/nginx/sites-available/lpagent
-ln -sfn /etc/nginx/sites-available/lpagent /etc/nginx/sites-enabled/lpagent
+install -m 644 deploy/lumenlp-api.service /etc/systemd/system/lumenlp-api.service
+install -m 644 deploy/lumenlp-indexer.service /etc/systemd/system/lumenlp-indexer.service
+install -m 644 deploy/lumenlp-snapshotter.service /etc/systemd/system/lumenlp-snapshotter.service
+install -m 644 deploy/lumenlp-snapshotter.timer /etc/systemd/system/lumenlp-snapshotter.timer
+install -m 644 deploy/nginx-lumenlp.conf /etc/nginx/sites-available/lumenlp
+ln -sfn /etc/nginx/sites-available/lumenlp /etc/nginx/sites-enabled/lumenlp
 
 # Stop VPS-hosted web if previously enabled
 systemctl disable --now lpagent-web.service 2>/dev/null || true
 rm -f /etc/systemd/system/lpagent-web.service
 ufw delete allow 3300/tcp 2>/dev/null || true
 
-ufw allow ${API_PORT}/tcp comment 'lpagent-api' || true
+ufw allow ${API_PORT}/tcp comment 'lumenlp-api' || true
 
 systemctl stop lpagent-api.service 2>/dev/null || true
 systemctl stop lpagent-indexer.service 2>/dev/null || true
@@ -68,9 +68,9 @@ python3 - <<'PY'
 import os
 import sqlite3
 
-src = "/opt/lpagent/data/lpagent.db"
-dst = "/opt/lpagent/data/pool-indexer.db"
-# One-time migrate from legacy lpagent.db only when indexer DB is absent.
+src = "/opt/lumenlp/data/lumenlp.db"
+dst = "/opt/lumenlp/data/pool-indexer.db"
+# One-time migrate from the primary state database only when the indexer DB is absent.
 # Never wipe an existing pool-indexer.db (destroys events / copy sessions).
 if os.path.exists(src) and not os.path.exists(dst):
     src_con = sqlite3.connect(src)
@@ -79,7 +79,7 @@ if os.path.exists(src) and not os.path.exists(dst):
     dst_con.close()
     src_con.execute("PRAGMA wal_checkpoint(TRUNCATE);")
     src_con.close()
-    print("migrated lpagent.db -> pool-indexer.db")
+    print("migrated lumenlp.db -> pool-indexer.db")
 elif os.path.exists(dst):
     print("keeping existing pool-indexer.db")
 else:
@@ -87,16 +87,16 @@ else:
 PY
 
 systemctl daemon-reload
-systemctl enable --now lpagent-api.service lpagent-indexer.service lpagent-snapshotter.timer
-systemctl restart lpagent-api.service
-systemctl restart lpagent-indexer.service
+systemctl enable --now lumenlp-api.service lumenlp-indexer.service lumenlp-snapshotter.timer
+systemctl restart lumenlp-api.service
+systemctl restart lumenlp-indexer.service
 nginx -t && systemctl reload nginx
 
-systemctl start lpagent-snapshotter.service || true
+systemctl start lumenlp-snapshotter.service || true
 
 sleep 2
-systemctl --no-pager --full status lpagent-api.service | head -12
-systemctl --no-pager --full status lpagent-indexer.service | head -12
+systemctl --no-pager --full status lumenlp-api.service | head -12
+systemctl --no-pager --full status lumenlp-indexer.service | head -12
 curl -sf http://127.0.0.1:${API_PORT}/health && echo " api health ok"
 EOF
 
