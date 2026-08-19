@@ -25,7 +25,8 @@ type IdentityCtx = {
 };
 
 const Ctx = createContext<IdentityCtx | null>(null);
-const KEY = "lpagent.activeAddress";
+const KEY = "lumenlp.activeAddress";
+const LEGACY_KEY = "lpagent.activeAddress";
 
 function isGAddress(a: string) {
   return a.startsWith("G") && a.length >= 56;
@@ -54,9 +55,10 @@ export function IdentityProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    const saved = localStorage.getItem(KEY);
+    const saved = localStorage.getItem(KEY) ?? localStorage.getItem(LEGACY_KEY);
     if (saved && isGAddress(saved)) {
       commitAddress(saved);
+      localStorage.removeItem(LEGACY_KEY);
       setStatus("connected");
     }
 

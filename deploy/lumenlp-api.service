@@ -1,5 +1,5 @@
 [Unit]
-Description=LP Agent API (Aquarius analytics)
+Description=LumenLP API (multi-DEX pool analytics and Copy LP)
 After=network.target
 
 [Service]
@@ -9,6 +9,7 @@ WorkingDirectory=/opt/lumenlp
 Environment=RPC_URL=http://127.0.0.1:8003
 Environment=DATABASE_PATH=/opt/lumenlp/data/lumenlp.db
 Environment=INDEXER_DB_PATH=/opt/lumenlp/data/pool-indexer.db
+# Optional shared response cache. Set REDIS_URL after Redis is provisioned.
 Environment=BIND=0.0.0.0:3301
 Environment=RUST_LOG=info
 ExecStart=/opt/lumenlp/target/release/api-server

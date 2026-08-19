@@ -7,6 +7,10 @@ export const metadata: Metadata = {
   title: "LumenLP — Stellar LP auto-rebalance",
   description:
     "Auto-rebalance Stellar LP positions with strategy rules, previews, and RPC-first pool analytics.",
+  icons: {
+    icon: "/icon.svg",
+    shortcut: "/icon.svg",
+  },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

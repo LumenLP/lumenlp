@@ -30,7 +30,7 @@ async fn main() -> Result<()> {
         .init();
 
     let rpc_url = std::env::var("RPC_URL").unwrap_or_else(|_| "http://127.0.0.1:8003".into());
-    let db_path = std::env::var("DATABASE_PATH").unwrap_or_else(|_| "./data/lpagent.db".into());
+    let db_path = std::env::var("DATABASE_PATH").unwrap_or_else(|_| "./data/lumenlp.db".into());
     let index_db_path =
         std::env::var("INDEXER_DB_PATH").unwrap_or_else(|_| "./data/pool-indexer.db".into());
     let bind = std::env::var("BIND").unwrap_or_else(|_| "0.0.0.0:8080".into());
@@ -40,6 +40,9 @@ async fn main() -> Result<()> {
     let index_db = Arc::new(Mutex::new(IndexDb::open(&index_db_path)?));
     let token_meta_cache = Arc::new(Mutex::new(HashMap::new()));
     let prices = Arc::new(PriceService::new());
+    let redis = std::env::var("REDIS_URL")
+        .ok()
+        .and_then(|url| redis::Client::open(url).ok());
     let state = AppState {
         rpc,
         db,
@@ -47,6 +50,7 @@ async fn main() -> Result<()> {
         token_meta_cache,
         prices,
         pool_list_cache: Arc::new(Mutex::new(None)),
+        redis,
     };
 
     let cors = CorsLayer::new()

@@ -77,7 +77,7 @@ function LeadersInner() {
   const [profile, setProfile] = useState<LpProfile | null>(null);
   const [board, setBoard] = useState<LeaderBoardRow[]>([]);
   const [boardHonesty, setBoardHonesty] = useState<string | null>(null);
-  const [windowDays, setWindowDays] = useState(30);
+  const [windowDays, setWindowDays] = useState(1);
   const [boardSort, setBoardSort] = useState<"fees" | "fee_cap">("fees");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);

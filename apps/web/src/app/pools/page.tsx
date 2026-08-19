@@ -31,6 +31,8 @@ type SortKey =
 
 type ViewMode = "table" | "card";
 
+const POOLS_PAGE_SIZE = 12;
+
 function poolTokenPairLabel(pool: PoolRow) {
   const labels =
     pool.token_meta?.map((token) => normalizedTokenLabel(token.symbol?.trim())).filter(Boolean) ??
@@ -90,6 +92,10 @@ function venueLabel(venue: string | null | undefined) {
   if (venue === "sushi" || venue === "sushi_v3") return "Sushi V3";
   if (venue === "comet") return "Comet";
   return venue || "Stellar DEX";
+}
+
+function isEmptyPool(pool: PoolRow) {
+  return !(pool.tvl != null && Number.isFinite(pool.tvl) && pool.tvl > 0);
 }
 
 function fmtActivitySummary(pool: PoolRow, xlmUsd?: number | null) {
@@ -171,6 +177,7 @@ function PoolsPageInner() {
   const [tvlBucketFilter, setTvlBucketFilter] = useState<(typeof tvlBuckets)[number]>("all");
   const [feeTvlBucketFilter, setFeeTvlBucketFilter] = useState<(typeof feeTvlBuckets)[number]>("all");
   const [q, setQ] = useState("");
+  const [page, setPage] = useState(1);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [urlReady, setUrlReady] = useState(false);
@@ -412,6 +419,11 @@ function PoolsPageInner() {
     0,
     ...filtered.map((pool) => pool.window_metrics?.[windowKey]?.samples ?? 0),
   );
+  const pageCount = Math.max(1, Math.ceil(filtered.length / POOLS_PAGE_SIZE));
+  const visiblePools = filtered.slice((page - 1) * POOLS_PAGE_SIZE, page * POOLS_PAGE_SIZE);
+  useEffect(() => {
+    setPage((current) => Math.min(current, pageCount));
+  }, [pageCount]);
   const lowSampleWarning =
     windowKey === "5m"
       ? "Current snapshot cadence is hourly, so 5m metrics are sparse until the sampler runs more frequently."
@@ -723,7 +735,7 @@ function PoolsPageInner() {
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((p) => (
+                {visiblePools.map((p) => (
                   <tr
                     key={p.address}
                     className="terminal-row"
@@ -771,11 +783,11 @@ function PoolsPageInner() {
                       </div>
                     </td>
                     <td className={metricColumnClass(["liquidity"])}>
-                      {fmtUsd(poolTvlUsd(p, windowKey, quote?.xlm_usd ?? p.quote?.xlm_usd))}
+                      {isEmptyPool(p) ? <span className="muted">Empty</span> : fmtUsd(poolTvlUsd(p, windowKey, quote?.xlm_usd ?? p.quote?.xlm_usd))}
                     </td>
-                    <td className={`metric-positive ${metricColumnClass(["fee_tvl"]) ?? ""}`.trim()}>{fmtPct(p.window_metrics?.[windowKey]?.fee_tvl ?? 0)}</td>
+                    <td className={`metric-positive ${metricColumnClass(["fee_tvl"]) ?? ""}`.trim()}>{isEmptyPool(p) ? "—" : fmtPct(p.window_metrics?.[windowKey]?.fee_tvl ?? 0)}</td>
                     <td className={metricColumnClass(["fee"])}>
-                      {fmtUsd(
+                      {isEmptyPool(p) ? "—" : fmtUsd(
                         pickUsd(
                           p.window_metrics?.[windowKey]?.fee_usd,
                           p.window_metrics?.[windowKey]?.fee,
@@ -815,7 +827,7 @@ function PoolsPageInner() {
           </div>
         ) : (
           <div className="pool-card-grid">
-            {filtered.map((pool) => (
+            {visiblePools.map((pool) => (
               <Link
                 key={pool.address}
                 href={`/pools/view?address=${encodeURIComponent(pool.address)}`}
@@ -829,6 +841,7 @@ function PoolsPageInner() {
                       <span className="badge">{pool.fee_bps} bps</span>
                       <span className="badge">{poolTypeLabel(pool.pool_type)}</span>
                       <span className="badge">{venueLabel(pool.venue)}</span>
+                      {isEmptyPool(pool) ? <span className="badge">Empty</span> : null}
                     </div>
                   </div>
                 </div>
@@ -837,7 +850,7 @@ function PoolsPageInner() {
                   <div className="pool-card-highlight">
                     <div className="watchlist-label">Fee / TVL</div>
                     <div className="pool-card-highlight-value">
-                      {fmtPct(pool.window_metrics?.[windowKey]?.fee_tvl)}
+                      {isEmptyPool(pool) ? "—" : fmtPct(pool.window_metrics?.[windowKey]?.fee_tvl)}
                     </div>
                   </div>
                 </div>
@@ -845,7 +858,7 @@ function PoolsPageInner() {
                   <div>
                     <div className="watchlist-label">Liquidity</div>
                     <div className="pool-card-money">
-                      {fmtUsd(
+                      {isEmptyPool(pool) ? "—" : fmtUsd(
                         poolTvlUsd(pool, windowKey, quote?.xlm_usd ?? pool.quote?.xlm_usd),
                       )}
                     </div>
@@ -853,7 +866,7 @@ function PoolsPageInner() {
                   <div>
                     <div className="watchlist-label">Fee ({windowKey})</div>
                     <div className="pool-card-money">
-                      {fmtUsd(
+                      {isEmptyPool(pool) ? "—" : fmtUsd(
                         pickUsd(
                           pool.window_metrics?.[windowKey]?.fee_usd,
                           pool.window_metrics?.[windowKey]?.fee,
@@ -884,7 +897,7 @@ function PoolsPageInner() {
                       <div className="pool-card-ratio-item" key={`${pool.address}-${window}`}>
                         <div className="watchlist-label">{window}</div>
                         <div className="watchlist-value metric-positive">
-                          {fmtPct(pool.window_metrics?.[window]?.fee_tvl)}
+                          {isEmptyPool(pool) ? "—" : fmtPct(pool.window_metrics?.[window]?.fee_tvl)}
                         </div>
                       </div>
                     ))}
@@ -898,6 +911,24 @@ function PoolsPageInner() {
             ))}
           </div>
         )}
+        {!loading && filtered.length > 0 ? (
+          <div className="pool-pagination" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "1rem", padding: "0.8rem 1rem", borderTop: "1px solid var(--line)" }}>
+            <span className="muted">
+              Showing {Math.min((page - 1) * POOLS_PAGE_SIZE + 1, filtered.length)}–{Math.min(page * POOLS_PAGE_SIZE, filtered.length)} of {filtered.length}
+            </span>
+            <div style={{ display: "flex", gap: "0.45rem" }}>
+              <button className="btn-ghost" disabled={page === 1} onClick={() => setPage((current) => Math.max(1, current - 1))}>
+                Previous
+              </button>
+              <span className="badge" style={{ display: "inline-flex", alignItems: "center" }}>
+                {page} / {pageCount}
+              </span>
+              <button className="btn-ghost" disabled={page === pageCount} onClick={() => setPage((current) => Math.min(pageCount, current + 1))}>
+                Next
+              </button>
+            </div>
+          </div>
+        ) : null}
         {!loading && filtered.length === 0 ? (
           <div className="empty">No pools yet — start api-server after snapshotter.</div>
         ) : null}

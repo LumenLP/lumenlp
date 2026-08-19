@@ -51,6 +51,9 @@ install -m 644 deploy/lumenlp-snapshotter.service /etc/systemd/system/lumenlp-sn
 install -m 644 deploy/lumenlp-snapshotter.timer /etc/systemd/system/lumenlp-snapshotter.timer
 install -m 644 deploy/nginx-lumenlp.conf /etc/nginx/sites-available/lumenlp
 ln -sfn /etc/nginx/sites-available/lumenlp /etc/nginx/sites-enabled/lumenlp
+# The old lpagent site can still match api.lumenlp.xyz and override this vhost.
+# Keep its available config for rollback, but remove only the enabled symlink.
+rm -f /etc/nginx/sites-enabled/lpagent
 
 # Stop VPS-hosted web if previously enabled
 systemctl disable --now lpagent-web.service 2>/dev/null || true

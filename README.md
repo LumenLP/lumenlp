@@ -53,9 +53,9 @@ mkdir -p data
 ### Backend
 
 ```bash
-RPC_URL=... DATABASE_PATH=./data/lpagent.db cargo run -p snapshotter --release
+RPC_URL=... DATABASE_PATH=./data/lumenlp.db cargo run -p snapshotter --release
 RPC_URL=... INDEXER_DB_PATH=./data/pool-indexer.db cargo run -p pool-indexer --release -- run
-RPC_URL=... DATABASE_PATH=./data/lpagent.db INDEXER_DB_PATH=./data/pool-indexer.db \
+RPC_URL=... DATABASE_PATH=./data/lumenlp.db INDEXER_DB_PATH=./data/pool-indexer.db \
   BIND=0.0.0.0:3301 cargo run -p api-server --release
 ```
 

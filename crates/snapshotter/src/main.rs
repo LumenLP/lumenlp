@@ -28,7 +28,7 @@ async fn main() -> Result<()> {
         .init();
 
     let rpc_url = std::env::var("RPC_URL").unwrap_or_else(|_| "http://127.0.0.1:8003".into());
-    let db_path = std::env::var("DATABASE_PATH").unwrap_or_else(|_| "./data/lpagent.db".into());
+    let db_path = std::env::var("DATABASE_PATH").unwrap_or_else(|_| "./data/lumenlp.db".into());
     let top_n: usize = std::env::var("SNAPSHOT_TOP_N")
         .ok()
         .and_then(|s| s.parse().ok())

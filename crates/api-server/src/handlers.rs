@@ -22,6 +22,7 @@ use {
         Json, Router,
     },
     chrono::{DateTime, Duration, Utc},
+    redis::AsyncCommands,
     serde::Deserialize,
     serde_json::{json, Value},
     std::{
@@ -39,6 +40,7 @@ pub struct AppState {
     pub token_meta_cache: Arc<Mutex<HashMap<String, TokenMeta>>>,
     pub prices: Arc<PriceService>,
     pub pool_list_cache: Arc<Mutex<Option<(StdInstant, Value)>>>,
+    pub redis: Option<redis::Client>,
 }
 
 #[derive(Debug, Clone)]
@@ -93,16 +95,18 @@ fn pool_score_json(
     activity_summary: Option<&PoolActivitySummaryRow>,
     volume_24h_override: Option<f64>,
     net_liq_override: Option<f64>,
+    fee_24h_override: Option<f64>,
 ) -> Value {
+    let has_liquidity = tvl.is_finite() && tvl > 0.0;
     let metrics_24h = window_metrics.get("24h");
     let reported_fee_tvl = metrics_24h
         .and_then(|v| v.get("fee_tvl"))
         .and_then(|v| v.as_f64())
         .unwrap_or(0.0);
-    let fee = metrics_24h
+    let fee = fee_24h_override.or_else(|| metrics_24h
         .and_then(|v| v.get("fee"))
         .and_then(|v| v.as_f64())
-        .filter(|value| value.is_finite() && *value >= 0.0);
+        .filter(|value| value.is_finite() && *value >= 0.0));
     let volume = volume_24h_override.unwrap_or_else(|| {
         metrics_24h
             .and_then(|v| v.get("volume"))
@@ -113,16 +117,21 @@ fn pool_score_json(
     // of fees. Keep that signal visible, but prevent it from dominating rank.
     let liquidity = tvl.max(SCORE_TVL_FLOOR);
     let fee_tvl = fee
+        .filter(|_| has_liquidity)
         .map(|value| value / liquidity)
         .unwrap_or_else(|| if tvl >= SCORE_TVL_FLOOR { reported_fee_tvl } else { 0.0 });
-    let volume_efficiency = volume / liquidity;
+    let volume_efficiency = if has_liquidity { volume / liquidity } else { 0.0 };
     let net_liq = net_liq_override.unwrap_or_else(|| {
         activity_summary
             .map(|s| s.net_liquidity_delta_quote_24h)
             .unwrap_or(0.0)
     });
-    let net_liq_ratio = net_liq / liquidity;
-    let cadence = cadence_sort_value(activity_summary.and_then(|s| s.avg_update_interval_secs_24h));
+    let net_liq_ratio = if has_liquidity { net_liq / liquidity } else { 0.0 };
+    let cadence = if has_liquidity {
+        cadence_sort_value(activity_summary.and_then(|s| s.avg_update_interval_secs_24h))
+    } else {
+        0.0
+    };
 
     let fee_tvl_component = fee_tvl * 10_000.0;
     let volume_component = volume_efficiency * 200.0;
@@ -344,27 +353,34 @@ fn score_with_usd_preference(
     tvl_usd: Option<f64>,
     metrics: &Value,
     activity_summary: Option<&PoolActivitySummaryRow>,
-    coverage: &str,
     xlm_usd: Option<f64>,
 ) -> Value {
     let volume_usd = metrics
         .get("24h")
         .and_then(|v| v.get("volume_usd"))
         .and_then(|v| v.as_f64());
-    let use_usd = coverage == "full" && tvl_usd.is_some() && volume_usd.is_some();
+    // `tvl_usd` and window USD values are currently bridged from the XLM quote
+    // even when individual token prices are incomplete. Keep list and detail
+    // scoring consistent instead of falling back based on global coverage.
+    let use_usd = tvl_usd.is_some() && volume_usd.is_some();
     if use_usd {
         let net_liq_usd = activity_summary.and_then(|s| {
             xlm_usd.and_then(|px| xlm_quote_to_usd(s.net_liquidity_delta_quote_24h, px))
         });
+        let fee_usd = metrics
+            .get("24h")
+            .and_then(|v| v.get("fee_usd"))
+            .and_then(|v| v.as_f64());
         pool_score_json(
             tvl_usd.unwrap_or(latest_tvl),
             metrics,
             activity_summary,
             volume_usd,
             net_liq_usd,
+            fee_usd,
         )
     } else {
-        pool_score_json(latest_tvl, metrics, activity_summary, None, None)
+        pool_score_json(latest_tvl, metrics, activity_summary, None, None, None)
     }
 }
 
@@ -540,6 +556,22 @@ async fn indexer_status(State(state): State<AppState>) -> impl IntoResponse {
 
 async fn list_pools(State(state): State<AppState>) -> impl IntoResponse {
     const POOL_LIST_CACHE_SECS: u64 = 30;
+    const REDIS_POOL_LIST_KEY: &str = "lumenlp:pools:v1";
+    if let Some(client) = state.redis.clone() {
+        if let Ok(mut connection) = client.get_multiplexed_async_connection().await {
+            let cached: redis::RedisResult<Option<String>> = connection.get(REDIS_POOL_LIST_KEY).await;
+            if let Ok(Some(serialized)) = cached {
+                if let Ok(body) = serde_json::from_str::<Value>(&serialized) {
+                    let mut response = Json(body).into_response();
+                    response.headers_mut().insert(
+                        CACHE_CONTROL,
+                        HeaderValue::from_static("public, max-age=30, s-maxage=30, stale-while-revalidate=60"),
+                    );
+                    return response;
+                }
+            }
+        }
+    }
     if let Some(body) = {
         let cache = state.pool_list_cache.lock().unwrap();
         cache.as_ref().and_then(|(expires_at, body)| {
@@ -610,8 +642,6 @@ async fn list_pools(State(state): State<AppState>) -> impl IntoResponse {
             if xlm_usd.is_some() {
                 quote_meta.source = "xlm_bridge".into();
             }
-            let coverage = quote_meta.coverage.clone();
-
             for row in &mut rows {
                 let Some(obj) = row.as_object_mut() else {
                     continue;
@@ -654,7 +684,6 @@ async fn list_pools(State(state): State<AppState>) -> impl IntoResponse {
                     tvl_usd,
                     &metrics,
                     activity_summary,
-                    &coverage,
                     xlm_usd,
                 );
                 obj.insert("tvl_usd".into(), json!(tvl_usd));
@@ -703,6 +732,17 @@ async fn list_pools(State(state): State<AppState>) -> impl IntoResponse {
                     StdInstant::now() + StdDuration::from_secs(POOL_LIST_CACHE_SECS),
                     body.clone(),
                 ));
+            }
+            if let Some(client) = state.redis.clone() {
+                if let Ok(serialized) = serde_json::to_string(&body) {
+                    tokio::spawn(async move {
+                        if let Ok(mut connection) = client.get_multiplexed_async_connection().await {
+                            let _: redis::RedisResult<()> = connection
+                                .set_ex(REDIS_POOL_LIST_KEY, serialized, POOL_LIST_CACHE_SECS)
+                                .await;
+                        }
+                    });
+                }
             }
             let mut response = Json(body).into_response();
             response.headers_mut().insert(
@@ -792,8 +832,6 @@ async fn pool_detail(
     if xlm_usd.is_some() {
         quote_meta.source = "xlm_bridge".into();
     }
-    let coverage = quote_meta.coverage.clone();
-
     let fee_bps = meta.as_ref().map(|m| m.2 as u32).unwrap_or(0);
     let mut latest_tvl = latest.map(|row| row.tvl).unwrap_or(0.0);
     let mut tvl_source = if latest_tvl > 0.0 {
@@ -833,7 +871,6 @@ async fn pool_detail(
         tvl_usd,
         &window_metrics,
         activity_summary.as_ref(),
-        &coverage,
         xlm_usd,
     );
     let activity_summary_value = activity_summary.as_ref().map(|summary| {
@@ -2008,11 +2045,50 @@ mod tests {
         let metrics = json!({
             "24h": {"fee_tvl": 10.48, "volume": 0.20}
         });
-        let score = pool_score_json(0.031, &metrics, None, None, None)
+        let score = pool_score_json(0.031, &metrics, None, None, None, None)
             .get("score")
             .and_then(Value::as_f64)
             .unwrap();
         assert!(score < 10.0, "micro-pool score={score}");
+    }
+
+    #[test]
+    fn zero_liquidity_score_is_zero_even_with_activity() {
+        let metrics = json!({
+            "24h": {"fee": 0.01, "volume": 10.0, "fee_tvl": 10.0}
+        });
+        let score = pool_score_json(0.0, &metrics, None, None, None, None)
+            .get("score")
+            .and_then(Value::as_f64)
+            .unwrap();
+        assert_eq!(score, 0.0);
+    }
+
+    #[test]
+    fn score_uses_usd_bridge_consistently_for_partial_global_coverage() {
+        let metrics = json!({
+            "24h": {
+                "fee": 0.001,
+                "fee_usd": 0.00015,
+                "volume": 0.20,
+                "volume_usd": 0.03
+            }
+        });
+        let score = score_with_usd_preference(
+            0.4,
+            Some(0.06),
+            &metrics,
+            None,
+            Some(0.15),
+        );
+        let inputs = score
+            .get("score_breakdown")
+            .and_then(|v| v.get("inputs"))
+            .unwrap();
+        assert_eq!(inputs.get("tvl").and_then(Value::as_f64), Some(0.06));
+        assert_eq!(inputs.get("volume_24h").and_then(Value::as_f64), Some(0.03));
+        let fee_tvl = inputs.get("fee_tvl_24h").and_then(Value::as_f64).unwrap();
+        assert!((fee_tvl - 0.000015).abs() < 1e-12, "fee_tvl={fee_tvl}");
     }
 
     #[test]
