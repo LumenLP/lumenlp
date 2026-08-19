@@ -390,7 +390,7 @@ fn proportional_floor(env: &Env, reserve: u128, shares: u128, total_shares: u128
 #[cfg(test)]
 mod test {
     use super::*;
-    use soroban_sdk::testutils::Address as _;
+    use soroban_sdk::testutils::{Address as _, Ledger as _};
 
     #[contract]
     struct MockPool;
@@ -435,6 +435,9 @@ mod test {
         }
 
         pub fn deposit(env: Env, user: Address, desired_amounts: Vec<u128>, _min_shares: u128) -> (Vec<u128>, u128) {
+            if env.storage().instance().get(&symbol_short!("fail")).unwrap_or(false) {
+                panic!("configured mock pool failure");
+            }
             env.storage().instance().set(&symbol_short!("user"), &user);
             (desired_amounts, 1)
         }
@@ -447,6 +450,7 @@ mod test {
         pub fn claim(env: Env, user: Address) -> u128 {
             env.storage().instance().set(&symbol_short!("user"), &user);
             let amount: u128 = env.storage().instance().get(&symbol_short!("reward")).unwrap_or(0);
+            env.storage().instance().set(&symbol_short!("claimed"), &amount);
             if amount > 0 {
                 let token: Address = env.storage().instance().get(&symbol_short!("token")).unwrap();
                 env.invoke_contract::<()>(
@@ -474,8 +478,16 @@ mod test {
             env.storage().instance().set(&symbol_short!("reward"), &amount);
         }
 
+        pub fn configure_failure(env: Env, fail: bool) {
+            env.storage().instance().set(&symbol_short!("fail"), &fail);
+        }
+
         pub fn last_user(env: Env) -> Address {
             env.storage().instance().get(&symbol_short!("user")).unwrap()
+        }
+
+        pub fn last_claim_amount(env: Env) -> u128 {
+            env.storage().instance().get(&symbol_short!("claimed")).unwrap_or(0)
         }
     }
 
@@ -507,6 +519,36 @@ mod test {
                 .try_execute_copy_op(&1, &second, &pool, &symbol_short!("deposit"), &1)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn daily_limit_and_expiry_are_enforced_on_chain() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let policy = env.register(CopyPolicy, ());
+        let owner = Address::generate(&env);
+        let relayer = Address::generate(&env);
+        let pool = Address::generate(&env);
+        let client = CopyPolicyClient::new(&env, &policy);
+
+        client.initialize(&owner, &relayer);
+        let mut pools = Vec::new(&env);
+        pools.push_back(pool.clone());
+        client.register_session(&12, &owner, &pools, &true, &10, &10, &100);
+
+        let first = BytesN::from_array(&env, &[12; 32]);
+        client.execute_copy_op(&12, &first, &pool, &symbol_short!("deposit"), &7);
+        let second = BytesN::from_array(&env, &[13; 32]);
+        assert!(client
+            .try_execute_copy_op(&12, &second, &pool, &symbol_short!("deposit"), &4)
+            .is_err());
+        assert_eq!(client.session(&12).daily_used_quote, 7);
+
+        env.ledger().set_timestamp(100);
+        let expired = BytesN::from_array(&env, &[14; 32]);
+        assert!(client
+            .try_execute_copy_op(&12, &expired, &pool, &symbol_short!("deposit"), &1)
+            .is_err());
     }
 
     #[test]
@@ -575,10 +617,96 @@ mod test {
             &token,
         );
         assert_eq!(pool_client.last_user(), policy);
+        assert_eq!(pool_client.last_claim_amount(), 7);
         assert_eq!(
             MockTokenClient::new(&env, &token).last_transfer(),
             (pool_address, policy, 7)
         );
+    }
+
+    #[test]
+    fn claim_is_rejected_when_session_disables_claims() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let policy = env.register(CopyPolicy, ());
+        let pool = env.register(MockPool, ());
+        let owner = Address::generate(&env);
+        let relayer = Address::generate(&env);
+        let leader = Address::generate(&env);
+        let pool_address = pool.clone();
+        let client = CopyPolicyClient::new(&env, &policy);
+
+        client.initialize(&owner, &relayer);
+        let mut pools = Vec::new(&env);
+        pools.push_back(pool_address.clone());
+        client.register_session(&9, &leader, &pools, &false, &100, &300, &100_000);
+
+        let claim_id = BytesN::from_array(&env, &[9; 32]);
+        assert!(client
+            .try_execute_aquarius_standard_op(
+                &9,
+                &claim_id,
+                &pool_address,
+                &symbol_short!("claim"),
+                &10,
+                &Vec::new(&env),
+                &0,
+                &0,
+                &Vec::new(&env),
+                &Address::generate(&env),
+            )
+            .is_err());
+    }
+
+    #[test]
+    fn downstream_failure_rolls_back_budget_and_replay_marker() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let policy = env.register(CopyPolicy, ());
+        let pool = env.register(MockPool, ());
+        let owner = Address::generate(&env);
+        let relayer = Address::generate(&env);
+        let leader = Address::generate(&env);
+        let pool_address = pool.clone();
+        let client = CopyPolicyClient::new(&env, &policy);
+
+        client.initialize(&owner, &relayer);
+        let mut pools = Vec::new(&env);
+        pools.push_back(pool_address.clone());
+        client.register_session(&11, &leader, &pools, &true, &10, &10, &100_000);
+        MockPoolClient::new(&env, &pool).configure_failure(&true);
+
+        let source_event_id = BytesN::from_array(&env, &[11; 32]);
+        assert!(client
+            .try_execute_aquarius_standard_op(
+                &11,
+                &source_event_id,
+                &pool_address,
+                &symbol_short!("deposit"),
+                &10,
+                &Vec::new(&env),
+                &0,
+                &0,
+                &Vec::new(&env),
+                &Address::generate(&env),
+            )
+            .is_err());
+        assert_eq!(client.session(&11).daily_used_quote, 0);
+
+        MockPoolClient::new(&env, &pool).configure_failure(&false);
+        client.execute_aquarius_standard_op(
+            &11,
+            &source_event_id,
+            &pool_address,
+            &symbol_short!("deposit"),
+            &10,
+            &Vec::new(&env),
+            &0,
+            &0,
+            &Vec::new(&env),
+            &Address::generate(&env),
+        );
+        assert_eq!(client.session(&11).daily_used_quote, 10);
     }
 
     #[test]

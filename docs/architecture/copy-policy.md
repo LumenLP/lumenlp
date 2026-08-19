@@ -93,11 +93,13 @@ contract with the relevant Testnet assets and completing the Aquarius-specific
 authorization and balance setup. The v2 deposit simulation reached the real
 Aquarius `deposit` call and passed the nested SAC authorization; it currently
 stops at the expected zero-USDC balance check. The v3 claim smoke test reached
-the real Aquarius `claim` path and completed with a zero reward amount. A
-funded deposit and withdraw were then executed against the same real pool;
+the real Aquarius `claim` path and completed with a zero reward amount. The
+local deterministic fixture also covers a positive reward and verifies the
+exact pool-to-policy token transfer. A funded deposit and withdraw were then
+executed against the same real pool;
 the deposit minted 5,767,331 LP shares and the withdraw burned 1,000,000
-shares while returning both pool assets. Positive-reward claim remains the
-only unverified asset path before promotion.
+shares while returning both pool assets. A funded positive-reward claim against
+the real Aquarius reward stream remains a promotion-gate item.
 
 ## Promotion Gate
 
@@ -105,9 +107,9 @@ Do not deploy this contract as a production policy until the following are
 complete:
 
 1. Aquarius deposit, withdrawal, and claim calls with deterministic contract
-   fixtures, including rollback when the downstream call fails. The current
-   local build covers deposit, withdraw, and claim authorization setup; all
-   three paths still require real Aquarius execution verification.
+   fixtures, including rollback when the downstream call fails. The local
+   build covers all three authorization paths; funded real-Aquarius claim
+   verification and downstream rollback coverage remain.
 2. End-to-end tests for insufficient balance, expired sessions, replay,
    pause/disarm, daily limits, and relayer downtime.
 3. Public transaction hashes and a documented recovery/manual-signing path.

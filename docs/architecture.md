@@ -2,6 +2,25 @@
 
 LumenLP is a Stellar-native LP discovery, analytics, and Copy LP product. It starts with Aquarius and uses Soroban RPC plus a local event indexer as its data foundation.
 
+## Contents
+
+- [Executive Summary](#executive-summary)
+- [Product Boundary](#product-boundary)
+- [System Overview](#system-overview)
+- [Repository Structure](#repository-structure)
+- [Data Flow](#data-flow)
+- [Metric Methodology](#metric-methodology)
+- [Planned Stellar Integration](#planned-stellar-integration)
+  - [Soroban Policy and Automated Execution](#soroban-policy-and-automated-execution)
+  - [Trust Boundaries and Threat Model](#trust-boundaries-and-threat-model)
+  - [Grant Deliverable Traceability](#grant-deliverable-traceability)
+- [Copy LP Architecture](#copy-lp-architecture)
+- [Frontend Architecture](#frontend-architecture)
+- [Persistence](#persistence)
+- [Production Deployment](#production-deployment)
+- [Reliability and Safety Rules](#reliability-and-safety-rules)
+- [Planned Evolution](#planned-evolution)
+
 ## Executive Summary
 
 LumenLP is a deployed analytics and user-reviewed Copy LP MVP. It observes
