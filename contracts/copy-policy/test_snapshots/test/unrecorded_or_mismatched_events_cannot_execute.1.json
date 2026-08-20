@@ -57,7 +57,7 @@
               "function_name": "register_session",
               "args": [
                 {
-                  "u32": 12
+                  "u32": 21
                 },
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
@@ -73,13 +73,13 @@
                   "bool": true
                 },
                 {
-                  "i128": "10"
+                  "i128": "100"
                 },
                 {
-                  "i128": "10"
+                  "i128": "100"
                 },
                 {
-                  "u64": "100"
+                  "u64": "100000"
                 }
               ]
             }
@@ -88,6 +88,7 @@
         }
       ]
     ],
+    [],
     [
       [
         "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4",
@@ -98,7 +99,7 @@
               "function_name": "record_leader_event",
               "args": [
                 {
-                  "bytes": "0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c"
+                  "bytes": "1515151515151515151515151515151515151515151515151515151515151515"
                 },
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
@@ -117,7 +118,7 @@
                   ]
                 },
                 {
-                  "i128": "7"
+                  "i128": "10"
                 },
                 {
                   "u32": 1
@@ -129,6 +130,8 @@
         }
       ]
     ],
+    [],
+    [],
     [
       [
         "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M",
@@ -139,10 +142,10 @@
               "function_name": "execute_copy_op",
               "args": [
                 {
-                  "u32": 12
+                  "u32": 21
                 },
                 {
-                  "bytes": "0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c"
+                  "bytes": "1515151515151515151515151515151515151515151515151515151515151515"
                 },
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM"
@@ -151,7 +154,7 @@
                   "symbol": "deposit"
                 },
                 {
-                  "i128": "7"
+                  "i128": "10"
                 }
               ]
             }
@@ -159,15 +162,12 @@
           "sub_invocations": []
         }
       ]
-    ],
-    [],
-    [],
-    []
+    ]
   ],
   "ledger": {
     "protocol_version": 25,
     "sequence_number": 0,
-    "timestamp": 100,
+    "timestamp": 0,
     "network_id": "0000000000000000000000000000000000000000000000000000000000000000",
     "base_reserve": 0,
     "min_persistent_entry_ttl": 4096,
@@ -187,7 +187,7 @@
                     "symbol": "LeaderEvent"
                   },
                   {
-                    "bytes": "0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c"
+                    "bytes": "1515151515151515151515151515151515151515151515151515151515151515"
                   }
                 ]
               },
@@ -243,7 +243,7 @@
                       "symbol": "quote"
                     },
                     "val": {
-                      "i128": "7"
+                      "i128": "10"
                     }
                   },
                   {
@@ -275,10 +275,10 @@
                     "symbol": "Replay"
                   },
                   {
-                    "u32": 12
+                    "u32": 21
                   },
                   {
-                    "bytes": "0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c"
+                    "bytes": "1515151515151515151515151515151515151515151515151515151515151515"
                   }
                 ]
               },
@@ -305,7 +305,7 @@
                     "symbol": "Session"
                   },
                   {
-                    "u32": 12
+                    "u32": 21
                   }
                 ]
               },
@@ -345,7 +345,7 @@
                       "symbol": "daily_used_quote"
                     },
                     "val": {
-                      "i128": "7"
+                      "i128": "10"
                     }
                   },
                   {
@@ -353,7 +353,7 @@
                       "symbol": "expires_at"
                     },
                     "val": {
-                      "u64": "100"
+                      "u64": "100000"
                     }
                   },
                   {
@@ -377,7 +377,7 @@
                       "symbol": "max_daily_quote"
                     },
                     "val": {
-                      "i128": "10"
+                      "i128": "100"
                     }
                   },
                   {
@@ -385,7 +385,7 @@
                       "symbol": "max_per_op_quote"
                     },
                     "val": {
-                      "i128": "10"
+                      "i128": "100"
                     }
                   },
                   {
@@ -580,5 +580,42 @@
       }
     ]
   },
-  "events": []
+  "events": [
+    {
+      "event": {
+        "ext": "v0",
+        "contract_id": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+        "type_": "contract",
+        "body": {
+          "v0": {
+            "topics": [
+              {
+                "symbol": "copy"
+              },
+              {
+                "u32": 21
+              }
+            ],
+            "data": {
+              "vec": [
+                {
+                  "bytes": "1515151515151515151515151515151515151515151515151515151515151515"
+                },
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM"
+                },
+                {
+                  "symbol": "deposit"
+                },
+                {
+                  "i128": "10"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "failed_call": false
+    }
+  ]
 }

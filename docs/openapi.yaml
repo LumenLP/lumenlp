@@ -223,6 +223,31 @@ components:
         leader_address: { type: string }
         coefficient: { type: number }
         include_claims: { type: boolean }
+        allowed_pools:
+          type: array
+          items: { type: string }
+        max_per_op_quote_xlm: { type: number }
+        max_daily_quote_xlm: { type: number }
+        expires_at: { type: integer, format: int64, nullable: true }
+    CopySession:
+      type: object
+      properties:
+        id: { type: string }
+        follower_address: { type: string }
+        leader_address: { type: string }
+        coefficient: { type: number }
+        coefficient_ppm: { type: integer, minimum: 1, maximum: 10000000, nullable: true }
+        status: { type: string, enum: [active, paused, stopped] }
+        include_claims: { type: boolean }
+        policy:
+          type: object
+          properties:
+            allowed_pools:
+              type: array
+              items: { type: string }
+            max_per_op_quote_xlm: { type: number }
+            max_daily_quote_xlm: { type: number }
+            expires_at: { type: integer, format: int64, nullable: true }
     LpProfile:
       type: object
       properties:

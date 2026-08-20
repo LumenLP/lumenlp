@@ -107,10 +107,15 @@ flowchart TB
     subgraph ExecutionPlane[Execution plane: Copy LP]
         direction TB
         Engine[Copy Engine\nsource event + coefficient]
+        Outbox[Recorder outbox\ncanonical event + retry state]
+        Recorder[Recorder worker\nindependent signer boundary]
         Policy[Soroban Copy Policy\ncontracts/copy-policy]
         Relayer[LumenLP relayer\nsubmits policy-approved tx]
         Adapter[DEX adapter boundary\ncrates/dex]
         Engine --> Policy
+        Engine --> Outbox
+        Outbox --> Recorder
+        Recorder --> Policy
         Relayer --> Policy
         Policy --> Adapter
         Adapter --> Contracts
@@ -133,11 +138,22 @@ from this public architecture document.
 | Data plane | `crates/pool-indexer` | Reads bounded Soroban `getEvents` ranges, classifies LP lifecycle events, attributes actors, advances a ledger cursor, and builds time-window rollups. | `pool-indexer.db` |
 | State plane | `crates/snapshotter` + `crates/dex` | Discovers pools, reads tokens/reserves/fees/shares through RPC simulation, resolves prices, and records snapshots. | `lumenlp.db` |
 | Read plane | `crates/api-server` + `apps/web` | Joins indexed events and snapshots into pool, Leader, Copy LP, and status APIs and renders the UI. | JSON responses and user views |
-| Execution plane | `contracts/copy-policy` + relayer + `crates/dex` | Validates session scope on Soroban, authorizes only declared token movements, and invokes the selected DEX adapter. | On-chain policy state and transaction history |
+| Execution plane | `contracts/copy-policy` + recorder boundary + relayer + `crates/dex` | Normalizes accepted source events, persists an idempotent recorder payload, validates session scope on Soroban, and authorizes only declared token movements through the selected DEX adapter. | Recorder outbox, on-chain policy state, and transaction history |
 
 The key separation is intentional: the indexer observes and proposes source
 events off-chain, while the Soroban policy contract is the final authority for
 whether an automated LP operation can execute.
+
+The Copy Engine does not submit arbitrary event data directly to Soroban. For
+an event that passes the follower's off-chain policy checks, the API creates a
+canonical recorder payload and stores it in the `recorder_outbox` table. The
+payload contains the source event identifier, Leader, pool, normalized action,
+integer token amounts, and the quote in stroops. The source event identifier is
+the idempotency key, so retries cannot create a second recorder event. A future
+recorder worker can consume this queue with a separately controlled signing
+boundary; the API itself does not hold that signing key. The Soroban policy
+contract still re-checks the recorded event, coefficient, pool, action, and
+limits before any DEX call.
 
 ## Repository Structure
 
@@ -388,11 +404,15 @@ The policy prototype currently exercises restrictions on:
 
 - the configured relayer address;
 - the session's allowed pool addresses;
+- the session's fixed-point coefficient (parts per million);
 - the allowed LP entrypoints: `deposit`, `withdraw`, and `claim`;
 - a positive per-operation quote limit;
 - a UTC-day aggregate quote limit;
 - session expiry, pause, resume, and disarm state;
-- one-time use of each `(session_id, source_event_id)` pair.
+- one-time use of each `(session_id, source_event_id)` pair;
+- an owner-configured `EVENT_RECORDER` role for source-event notarization;
+- rejection of copy intents whose source event is missing or whose pool, kind,
+  or scaled quote does not match the recorded payload.
 
 Slippage values and protocol-specific minimum amounts are passed to the
 Aquarius call by the operation payload. They are not yet stored as independent
@@ -406,11 +426,15 @@ The contract exposes these public methods:
 | Method | Authorization | Responsibility |
 |---|---|---|
 | `initialize(owner, relayer)` | `owner` auth | Set the immutable instance owner and relayer. |
-| `register_session(...)` | owner auth | Store a Leader, pool allowlist, claim flag, expiry, and quote limits. |
+| `set_event_recorder(recorder)` | owner auth | Set the role allowed to record indexed Leader events. |
+| `register_session(...)` | owner auth | Store a 1:1 compatibility session with pool allowlist, claim flag, expiry, and quote limits. |
+| `register_session_coeff(...)` | owner auth | Store a session with an on-chain parts-per-million copy coefficient. |
 | `pause_session(session_id)` | owner auth | Stop a session without deleting its configuration. |
 | `resume_session(session_id)` | owner auth | Resume a non-expired session. |
 | `disarm_session(session_id)` | owner auth | Remove the session and its active configuration. |
 | `session(session_id)` | read | Inspect the stored session state. |
+| `record_leader_event(...)` | recorder auth | Store an idempotent canonical source event for later execution. |
+| `leader_event(source_event_id)` | read | Inspect a recorded source event. |
 | `execute_copy_op(...)` | relayer auth | Validate and record a policy-approved intent without calling a DEX. |
 | `execute_aquarius_standard_op(...)` | relayer auth | Validate the intent and call an Aquarius standard pool. |
 
@@ -419,6 +443,7 @@ The `Session` state contains:
 ```text
 leader
 allowed_pools
+coefficient_ppm
 follow_claims
 max_per_op_quote
 max_daily_quote
@@ -428,11 +453,32 @@ daily_day
 daily_used_quote
 ```
 
-Persistent replay state is keyed by `(session_id, source_event_id)`. The
-contract validates the relayer, replay key, session state, pool allowlist,
-claim permission, operation kind, quote limits, and expiry before it writes
-the updated daily budget and replay marker. A downstream Aquarius failure
-rolls back the Soroban transaction, including those policy writes.
+Persistent source events are keyed by `source_event_id` and are written only by
+the configured recorder role. Persistent replay state is keyed by
+`(session_id, source_event_id)`. The contract validates the relayer, recorded
+event identity, replay key, session state, pool allowlist, claim permission,
+operation kind, quote limits, and expiry before it writes the updated daily
+budget and replay marker. A downstream Aquarius failure rolls back the
+Soroban transaction, including those policy writes.
+
+For coefficient-enabled sessions, the contract computes the scaled quote as
+`floor(recorded_quote × coefficient_ppm / 1,000,000)`. Deposit token amounts
+are scaled with checked `U256` arithmetic and compared against the submitted
+amounts before Aquarius is called. The relayer cannot choose a different
+coefficient or submit an independently scaled deposit.
+
+The recorder is an explicit trust boundary in this stage: it is fed by the
+existing indexer and is not permissionless. A compromised recorder could still
+not widen the DEX entrypoint scope, session limits, or pool allowlist, but it
+could attest a false source event. Production hardening therefore requires a
+multisig recorder, stronger event proofs, or an equivalent independent
+verification path before unrestricted mainnet use.
+
+The recorded-event guard is now applied to the policy-only `execute_copy_op`
+path. The fund-moving Aquarius adapter path still requires the same recorded
+payload model to be wired into its deposit, withdrawal, and claim arguments;
+until then it remains a testnet vertical slice and must not be treated as a
+production automation vault.
 
 #### Aquarius execution and authorization
 

@@ -206,6 +206,14 @@
                   },
                   {
                     "key": {
+                      "symbol": "coefficient_ppm"
+                    },
+                    "val": {
+                      "u32": 1000000
+                    }
+                  },
+                  {
+                    "key": {
                       "symbol": "daily_day"
                     },
                     "val": {

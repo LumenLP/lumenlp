@@ -110,9 +110,9 @@ impl VenueCapabilities {
             DraftOpKind::Deposit => self.deposit,
             DraftOpKind::Withdraw => self.withdraw,
             DraftOpKind::Claim => self.claim,
-            DraftOpKind::OpenRange
-            | DraftOpKind::CloseRange
-            | DraftOpKind::AdjustRange => self.draft_ops,
+            DraftOpKind::OpenRange | DraftOpKind::CloseRange | DraftOpKind::AdjustRange => {
+                self.draft_ops
+            }
         }
     }
 }
@@ -269,7 +269,9 @@ pub trait DexAdaptor: Send + Sync {
             ));
         }
         if event.event_id.is_empty() || event.pool_address.is_empty() {
-            return Err(anyhow!("liquidity event requires event_id and pool_address"));
+            return Err(anyhow!(
+                "liquidity event requires event_id and pool_address"
+            ));
         }
         Ok(event)
     }
@@ -277,7 +279,9 @@ pub trait DexAdaptor: Send + Sync {
     /// Build a normalized unsigned operation or fail closed when unsupported.
     fn build_draft_op(&self, request: DraftRequest) -> Result<DraftOp> {
         if request.pool_address.is_empty() || request.position_key.is_empty() {
-            return Err(anyhow!("draft operation requires pool_address and position_key"));
+            return Err(anyhow!(
+                "draft operation requires pool_address and position_key"
+            ));
         }
         if !self.capabilities().supports(request.kind) {
             return Err(anyhow!(
@@ -401,8 +405,8 @@ pub fn default_venue_registry() -> Vec<Box<dyn DexAdaptor>> {
         Box::new(IndexedAnalyticsAdaptor {
             venue_id: VenueId::SushiV3,
             name: "Sushi V3",
-            capabilities: VenueCapabilities::indexed_analytics(false),
-            notes: "Read-only indexed CLMM analytics; Copy LP execution is fail-closed.",
+            capabilities: VenueCapabilities::indexed_analytics(true),
+            notes: "Read-only indexed CLMM analytics and LP lifecycle events; Copy LP execution is fail-closed.",
         }),
         Box::new(IndexedAnalyticsAdaptor {
             venue_id: VenueId::Phoenix,

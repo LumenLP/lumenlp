@@ -16,8 +16,7 @@ use {
     stellar_xdr::curr as xdr,
 };
 
-pub const COMET_MAINNET_FACTORY: &str =
-    "CA2LVIPU6HJHHPPD6EDDYJTV2QEUBPGOAVJ4VIYNTMFUCRM4LFK3TJKF";
+pub const COMET_MAINNET_FACTORY: &str = "CA2LVIPU6HJHHPPD6EDDYJTV2QEUBPGOAVJ4VIYNTMFUCRM4LFK3TJKF";
 pub const COMET_MAINNET_SEED_POOL: &str =
     "CAS3FL6TLZKDGGSISDBWGGPXT3NRR4DYTZD7YOD3HMYO6LTJUVGRVEAM";
 
@@ -44,30 +43,24 @@ pub async fn discover_mainnet_pool_addresses(rpc: &SorobanRpc) -> Result<Vec<Str
                 .map(str::to_owned),
         );
     }
-    let factory = std::env::var("COMET_FACTORY")
-        .unwrap_or_else(|_| COMET_MAINNET_FACTORY.to_owned());
+    let factory =
+        std::env::var("COMET_FACTORY").unwrap_or_else(|_| COMET_MAINNET_FACTORY.to_owned());
     let health = rpc.get_health().await?;
     let latest = health.latest_ledger;
     let window = std::env::var("COMET_FACTORY_EVENTS_LEDGER_WINDOW")
         .ok()
         .and_then(|value| value.parse::<u32>().ok())
         .unwrap_or(50_000);
-    let start_ledger = latest
-        .saturating_sub(window)
-        .max(health.oldest_ledger);
+    let start_ledger = latest.saturating_sub(window).max(health.oldest_ledger);
     let events = rpc
-        .get_events(
-            start_ledger,
-            Some(latest),
-            &[factory.clone()],
-            10_000,
-        )
+        .get_events(start_ledger, Some(latest), &[factory.clone()], 10_000)
         .await?;
     for event in events {
-        let Some(encoded) = event
-            .get("value")
-            .and_then(|value| value.as_str().or_else(|| value.get("xdr").and_then(|xdr| xdr.as_str())))
-        else {
+        let Some(encoded) = event.get("value").and_then(|value| {
+            value
+                .as_str()
+                .or_else(|| value.get("xdr").and_then(|xdr| xdr.as_str()))
+        }) else {
             continue;
         };
         let Some(hash) = contract_hash_from_xdr(encoded) else {
@@ -76,7 +69,8 @@ pub async fn discover_mainnet_pool_addresses(rpc: &SorobanRpc) -> Result<Vec<Str
         let address = format!("{}", stellar_strkey::Contract(hash));
         let address_value = address_scval(&address)?;
         if matches!(
-            rpc.simulate_call(&factory, "is_c_pool", vec![address_value]).await,
+            rpc.simulate_call(&factory, "is_c_pool", vec![address_value])
+                .await,
             Ok(xdr::ScVal::Bool(true))
         ) {
             pools.push(address);
@@ -91,9 +85,9 @@ fn address_scval(address: &str) -> Result<xdr::ScVal> {
     let hash = stellar_strkey::Contract::from_string(address)
         .map_err(|error| anyhow!("invalid Comet pool address {address}: {error:?}"))?
         .0;
-    Ok(xdr::ScVal::Address(xdr::ScAddress::Contract(xdr::ContractId(
-        xdr::Hash(hash),
-    ))))
+    Ok(xdr::ScVal::Address(xdr::ScAddress::Contract(
+        xdr::ContractId(xdr::Hash(hash)),
+    )))
 }
 
 fn contract_hash_from_xdr(encoded: &str) -> Option<[u8; 32]> {
@@ -172,7 +166,10 @@ mod tests {
 
     #[test]
     fn comet_fee_uses_stroop_scale() {
-        assert_eq!(nonnegative_integer(&xdr::ScVal::I128(xdr::Int128Parts { hi: 0, lo: 30_000 })), Some(30_000));
+        assert_eq!(
+            nonnegative_integer(&xdr::ScVal::I128(xdr::Int128Parts { hi: 0, lo: 30_000 })),
+            Some(30_000)
+        );
         assert_eq!((30_000u128 / 1_000) as u32, 30);
     }
 

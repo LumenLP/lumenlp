@@ -1,5 +1,21 @@
 use crate::index_db::CopySessionRow;
 
+pub const COEFFICIENT_SCALE: f64 = 1_000_000.0;
+pub const MAX_COEFFICIENT_PPM: u32 = 10_000_000;
+
+/// Convert the API's human-friendly coefficient into the fixed-point value
+/// expected by the Soroban policy contract.
+pub fn coefficient_ppm(coefficient: f64) -> Option<u32> {
+    if !coefficient.is_finite() || coefficient <= 0.0 {
+        return None;
+    }
+    let ppm = (coefficient * COEFFICIENT_SCALE).round();
+    if !ppm.is_finite() || ppm < 1.0 || ppm > f64::from(MAX_COEFFICIENT_PPM) {
+        return None;
+    }
+    Some(ppm as u32)
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum PolicyReject {
     Expired,
@@ -29,12 +45,18 @@ pub fn validate_copy_op(
     now: i64,
     daily_used_xlm: f64,
 ) -> Result<(), PolicyReject> {
-    if session.expires_at.is_some_and(|expires_at| now >= expires_at) {
+    if session
+        .expires_at
+        .is_some_and(|expires_at| now >= expires_at)
+    {
         return Err(PolicyReject::Expired);
     }
 
     if !session.allowed_pools.is_empty()
-        && !session.allowed_pools.iter().any(|pool| pool == pool_address)
+        && !session
+            .allowed_pools
+            .iter()
+            .any(|pool| pool == pool_address)
     {
         return Err(PolicyReject::PoolNotAllowed);
     }
@@ -43,9 +65,7 @@ pub fn validate_copy_op(
     if session.max_per_op_quote_xlm > 0.0 && quote > session.max_per_op_quote_xlm {
         return Err(PolicyReject::OperationLimit);
     }
-    if session.max_daily_quote_xlm > 0.0
-        && daily_used_xlm + quote > session.max_daily_quote_xlm
-    {
+    if session.max_daily_quote_xlm > 0.0 && daily_used_xlm + quote > session.max_daily_quote_xlm {
         return Err(PolicyReject::DailyLimit);
     }
     Ok(())
@@ -98,5 +118,14 @@ mod tests {
             validate_copy_op(&session(), "CPOOL", Some(1.0), 2_000, 0.0),
             Err(PolicyReject::Expired)
         );
+    }
+
+    #[test]
+    fn coefficient_ppm_matches_contract_scale_and_bounds() {
+        assert_eq!(coefficient_ppm(0.1), Some(100_000));
+        assert_eq!(coefficient_ppm(1.0), Some(1_000_000));
+        assert_eq!(coefficient_ppm(10.0), Some(10_000_000));
+        assert_eq!(coefficient_ppm(0.0), None);
+        assert_eq!(coefficient_ppm(10.000_001), None);
     }
 }

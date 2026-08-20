@@ -112,12 +112,10 @@ fn leader_amounts_for_kind(event_kind: &str, derived: &Value) -> Option<Value> {
 
 fn leader_quote_for_kind(event_kind: &str, derived: &Value) -> Option<f64> {
     match event_kind {
-        "deposit_liquidity" | "withdraw_liquidity" => derived
-            .get("total_quote_xlm")
-            .and_then(Value::as_f64),
-        "claim_fees" | "claim_protocol_fee" => derived
-            .get("fee_quote_xlm")
-            .and_then(Value::as_f64),
+        "deposit_liquidity" | "withdraw_liquidity" => {
+            derived.get("total_quote_xlm").and_then(Value::as_f64)
+        }
+        "claim_fees" | "claim_protocol_fee" => derived.get("fee_quote_xlm").and_then(Value::as_f64),
         _ => None,
     }
 }

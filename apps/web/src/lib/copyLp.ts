@@ -5,8 +5,15 @@ export type CopySession = {
   follower_address: string;
   leader_address: string;
   coefficient: number;
+  coefficient_ppm?: number | null;
   status: "active" | "paused" | "stopped";
   include_claims: boolean;
+  policy?: {
+    allowed_pools?: string[];
+    max_per_op_quote_xlm?: number;
+    max_daily_quote_xlm?: number;
+    expires_at?: number | null;
+  };
   cursor_ts: number;
   watermark_ts?: number;
   watermark_event_id?: string;
@@ -100,6 +107,10 @@ export async function createCopySession(body: {
   leader_address: string;
   coefficient: number;
   include_claims?: boolean;
+  allowed_pools?: string[];
+  max_per_op_quote_xlm?: number;
+  max_daily_quote_xlm?: number;
+  expires_at?: number | null;
 }): Promise<CopySession> {
   return postJson<CopySession>("/v1/copy/sessions", body);
 }

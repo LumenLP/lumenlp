@@ -3,12 +3,13 @@ mod copy_policy;
 mod handlers;
 mod index_db;
 mod pricing;
+mod recorder;
 mod token_registry;
 
 use {
     anyhow::Result,
-    dex::{db::Db, SorobanRpc, MAINNET_PASSPHRASE},
     axum::Router,
+    dex::{db::Db, SorobanRpc, MAINNET_PASSPHRASE},
     handlers::AppState,
     index_db::IndexDb,
     pricing::service::PriceService,

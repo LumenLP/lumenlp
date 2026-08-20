@@ -1,4 +1,5 @@
 use {
+    crate::recorder::RecorderEvent,
     anyhow::{Context, Result},
     rusqlite::{params, Connection},
     serde_json::Value,
@@ -85,6 +86,22 @@ pub struct CopyOpRow {
     pub updated_at: i64,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecorderOutboxRow {
+    pub source_event_id: String,
+    pub leader_address: String,
+    pub pool_address: String,
+    pub kind: String,
+    pub amounts: Vec<u128>,
+    pub quote_stroops: i128,
+    pub ledger: u32,
+    pub status: String,
+    pub attempts: u32,
+    pub last_error: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ActorLiquidityActivity {
     pub since_ts: i64,
@@ -126,6 +143,15 @@ pub struct ActorLifetimeTotals {
     pub distinct_pools: usize,
     pub first_activity_at: Option<i64>,
     pub last_activity_at: Option<i64>,
+}
+
+/// A concentrated-liquidity range observed for an actor in indexed events.
+/// The range is a candidate for an on-chain `get_position` verification.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PositionRangeCandidate {
+    pub pool_address: String,
+    pub tick_lower: i32,
+    pub tick_upper: i32,
 }
 
 #[derive(Debug, Clone)]
@@ -213,6 +239,23 @@ impl IndexDb {
             );
             CREATE INDEX IF NOT EXISTS idx_copy_ops_session ON copy_ops(session_id, created_at DESC);
 
+            CREATE TABLE IF NOT EXISTS recorder_outbox (
+              source_event_id TEXT PRIMARY KEY,
+              leader_address TEXT NOT NULL,
+              pool_address TEXT NOT NULL,
+              kind TEXT NOT NULL,
+              amounts_json TEXT NOT NULL,
+              quote_stroops TEXT NOT NULL,
+              ledger INTEGER NOT NULL,
+              status TEXT NOT NULL,
+              attempts INTEGER NOT NULL DEFAULT 0,
+              last_error TEXT,
+              created_at INTEGER NOT NULL,
+              updated_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_recorder_outbox_status
+              ON recorder_outbox(status, created_at ASC);
+
             CREATE TABLE IF NOT EXISTS token_metadata (
               address TEXT PRIMARY KEY,
               symbol TEXT NOT NULL,
@@ -229,9 +272,21 @@ impl IndexDb {
             "watermark_event_id",
             "TEXT NOT NULL DEFAULT ''",
         )?;
-        self.ensure_column("copy_sessions", "allowed_pools_json", "TEXT NOT NULL DEFAULT '[]'")?;
-        self.ensure_column("copy_sessions", "max_per_op_quote_xlm", "REAL NOT NULL DEFAULT 0")?;
-        self.ensure_column("copy_sessions", "max_daily_quote_xlm", "REAL NOT NULL DEFAULT 0")?;
+        self.ensure_column(
+            "copy_sessions",
+            "allowed_pools_json",
+            "TEXT NOT NULL DEFAULT '[]'",
+        )?;
+        self.ensure_column(
+            "copy_sessions",
+            "max_per_op_quote_xlm",
+            "REAL NOT NULL DEFAULT 0",
+        )?;
+        self.ensure_column(
+            "copy_sessions",
+            "max_daily_quote_xlm",
+            "REAL NOT NULL DEFAULT 0",
+        )?;
         self.ensure_column("copy_sessions", "expires_at", "INTEGER")?;
         Ok(())
     }
@@ -245,8 +300,10 @@ impl IndexDb {
                 return Ok(());
             }
         }
-        self.conn
-            .execute(&format!("ALTER TABLE {table} ADD COLUMN {column} {decl}"), [])?;
+        self.conn.execute(
+            &format!("ALTER TABLE {table} ADD COLUMN {column} {decl}"),
+            [],
+        )?;
         Ok(())
     }
 
@@ -447,11 +504,99 @@ impl IndexDb {
         Ok(rows > 0)
     }
 
-    pub fn list_copy_ops(
+    /// Persist a canonical event exactly once for a future recorder worker.
+    /// The worker is deliberately separate so this API process never needs a
+    /// Soroban signing key.
+    pub fn enqueue_recorder_event(&self, event: &RecorderEvent) -> Result<bool> {
+        let now = chrono::Utc::now().timestamp();
+        let amounts_json = serde_json::to_string(&event.amounts)?;
+        let rows = self.conn.execute(
+            r#"
+            INSERT OR IGNORE INTO recorder_outbox (
+              source_event_id, leader_address, pool_address, kind, amounts_json,
+              quote_stroops, ledger, status, attempts, last_error, created_at, updated_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'pending', 0, NULL, ?8, ?9)
+            "#,
+            params![
+                event.source_event_id,
+                event.leader_address,
+                event.pool_address,
+                event.kind,
+                amounts_json,
+                event.quote_stroops.to_string(),
+                event.ledger,
+                event.created_at,
+                now,
+            ],
+        )?;
+        Ok(rows > 0)
+    }
+
+    pub fn pending_recorder_events(&self, limit: usize) -> Result<Vec<RecorderOutboxRow>> {
+        let limit = limit.clamp(1, 1_000) as i64;
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT source_event_id, leader_address, pool_address, kind, amounts_json,
+                   quote_stroops, ledger, status, attempts, last_error, created_at, updated_at
+            FROM recorder_outbox
+            WHERE status = 'pending'
+            ORDER BY created_at ASC
+            LIMIT ?1
+            "#,
+        )?;
+        let rows = stmt.query_map(params![limit], |row| {
+            let amounts_json: String = row.get(4)?;
+            let quote_stroops: String = row.get(5)?;
+            Ok(RecorderOutboxRow {
+                source_event_id: row.get(0)?,
+                leader_address: row.get(1)?,
+                pool_address: row.get(2)?,
+                kind: row.get(3)?,
+                amounts: serde_json::from_str(&amounts_json).map_err(|error| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        4,
+                        rusqlite::types::Type::Text,
+                        Box::new(error),
+                    )
+                })?,
+                quote_stroops: quote_stroops.parse().map_err(|error| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        5,
+                        rusqlite::types::Type::Text,
+                        Box::new(error),
+                    )
+                })?,
+                ledger: row.get(6)?,
+                status: row.get(7)?,
+                attempts: row.get(8)?,
+                last_error: row.get(9)?,
+                created_at: row.get(10)?,
+                updated_at: row.get(11)?,
+            })
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    pub fn update_recorder_event(
         &self,
-        session_id: &str,
-        status: Option<&str>,
-    ) -> Result<Vec<CopyOpRow>> {
+        source_event_id: &str,
+        status: &str,
+        error: Option<&str>,
+    ) -> Result<()> {
+        let now = chrono::Utc::now().timestamp();
+        self.conn.execute(
+            r#"
+            UPDATE recorder_outbox
+            SET status = ?2, attempts = attempts + 1, last_error = ?3, updated_at = ?4
+            WHERE source_event_id = ?1
+            "#,
+            params![source_event_id, status, error, now],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_copy_ops(&self, session_id: &str, status: Option<&str>) -> Result<Vec<CopyOpRow>> {
         if let Some(status) = status {
             let mut stmt = self.conn.prepare(
                 r#"
@@ -481,12 +626,7 @@ impl IndexDb {
         }
     }
 
-    pub fn update_copy_op_status(
-        &self,
-        id: &str,
-        status: &str,
-        note: Option<&str>,
-    ) -> Result<()> {
+    pub fn update_copy_op_status(&self, id: &str, status: &str, note: Option<&str>) -> Result<()> {
         let updated_at = chrono::Utc::now().timestamp();
         let rows = self.conn.execute(
             r#"
@@ -675,7 +815,11 @@ impl IndexDb {
                 (None, b) => b,
                 (a, None) => a,
             };
-            let q = if quote.is_finite() && quote > 0.0 { quote } else { 0.0 };
+            let q = if quote.is_finite() && quote > 0.0 {
+                quote
+            } else {
+                0.0
+            };
             match kind.as_str() {
                 "deposit_liquidity" => {
                     totals.deposit_count += count;
@@ -730,6 +874,70 @@ impl IndexDb {
         Ok(out)
     }
 
+    /// Return Sushi V3 tick ranges observed for an actor. Sushi pools expose
+    /// point reads for a known range, not an enumerable owner-position list;
+    /// callers must verify these candidates against current contract state.
+    pub fn sushi_position_range_candidates(
+        &self,
+        actor: &str,
+        since_ts: i64,
+        limit_events: usize,
+    ) -> Result<Vec<PositionRangeCandidate>> {
+        let limit = limit_events.max(1).min(10_000) as i64;
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT event_id, tx_hash, ledger, created_at, pool_address, kind, body_json
+            FROM pool_events
+            WHERE kind IN ('deposit_liquidity', 'withdraw_liquidity')
+              AND json_extract(body_json, '$.derived.actor') = ?1
+              AND created_at >= ?2
+            ORDER BY created_at DESC, event_id DESC
+            LIMIT ?3
+            "#,
+        )?;
+        let rows = stmt.query_map(params![actor, since_ts, limit], map_event_row)?;
+        let events = collect_event_rows(rows)?;
+        let mut seen = HashSet::new();
+        let mut out = Vec::new();
+        for event in events {
+            let derived = event.body.get("derived").unwrap_or(&Value::Null);
+            if derived.get("venue").and_then(Value::as_str) != Some("sushi_v3") {
+                continue;
+            }
+            let Some(lower) = derived.get("tick_lower").and_then(Value::as_i64) else {
+                continue;
+            };
+            let Some(upper) = derived.get("tick_upper").and_then(Value::as_i64) else {
+                continue;
+            };
+            let Ok(tick_lower) = i32::try_from(lower) else {
+                continue;
+            };
+            let Ok(tick_upper) = i32::try_from(upper) else {
+                continue;
+            };
+            if tick_lower >= tick_upper {
+                continue;
+            }
+            let key = format!("{}:{tick_lower}:{tick_upper}", event.pool_address);
+            if seen.insert(key) {
+                out.push(PositionRangeCandidate {
+                    pool_address: event.pool_address,
+                    tick_lower,
+                    tick_upper,
+                });
+            }
+        }
+        out.sort_by(|a, b| {
+            (&a.pool_address, a.tick_lower, a.tick_upper).cmp(&(
+                &b.pool_address,
+                b.tick_lower,
+                b.tick_upper,
+            ))
+        });
+        Ok(out)
+    }
+
     /// Ranked actors by claimed fee quote (then deposits) over a window — Smart LP–style board.
     pub fn top_liquidity_actors(
         &self,
@@ -775,10 +983,12 @@ impl IndexDb {
             if !actor.starts_with('G') {
                 continue;
             }
-            let entry = by_actor.entry(actor.clone()).or_insert_with(|| TopLiquidityActor {
-                address: actor.clone(),
-                ..Default::default()
-            });
+            let entry = by_actor
+                .entry(actor.clone())
+                .or_insert_with(|| TopLiquidityActor {
+                    address: actor.clone(),
+                    ..Default::default()
+                });
             entry.event_count += 1;
             entry.last_activity_at = entry
                 .last_activity_at
@@ -1544,9 +1754,9 @@ fn collect_copy_op_rows(
 }
 
 fn new_copy_id() -> String {
-    let ts = chrono::Utc::now().timestamp_nanos_opt().unwrap_or_else(|| {
-        chrono::Utc::now().timestamp().saturating_mul(1_000_000_000)
-    });
+    let ts = chrono::Utc::now()
+        .timestamp_nanos_opt()
+        .unwrap_or_else(|| chrono::Utc::now().timestamp().saturating_mul(1_000_000_000));
     format!("{ts:x}")
 }
 
@@ -1623,7 +1833,33 @@ mod tests {
         let db = test_db();
         assert!(db.table_exists("copy_sessions"));
         assert!(db.table_exists("copy_ops"));
+        assert!(db.table_exists("recorder_outbox"));
         assert!(db.table_exists("token_metadata"));
+    }
+
+    #[test]
+    fn recorder_outbox_is_idempotent_and_readable() {
+        let db = test_db();
+        let event = RecorderEvent {
+            source_event_id: "evt-1".into(),
+            leader_address: "GLEADER".into(),
+            pool_address: "CPOOL".into(),
+            kind: "deposit".into(),
+            amounts: vec![100, 200],
+            quote_stroops: 129_000_000,
+            ledger: 123,
+            created_at: 456,
+        };
+        assert!(db.enqueue_recorder_event(&event).unwrap());
+        assert!(!db.enqueue_recorder_event(&event).unwrap());
+        let pending = db.pending_recorder_events(10).unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].quote_stroops, 129_000_000);
+        assert_eq!(pending[0].amounts, vec![100, 200]);
+
+        db.update_recorder_event("evt-1", "submitted", None)
+            .unwrap();
+        assert!(db.pending_recorder_events(10).unwrap().is_empty());
     }
 
     #[test]
@@ -1639,7 +1875,10 @@ mod tests {
         };
         db.upsert_token_metadata(&metadata).unwrap();
         assert_eq!(
-            db.token_metadata(&metadata.address).unwrap().unwrap().symbol,
+            db.token_metadata(&metadata.address)
+                .unwrap()
+                .unwrap()
+                .symbol,
             "AQUA"
         );
     }

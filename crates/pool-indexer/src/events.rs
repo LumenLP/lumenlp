@@ -3,17 +3,26 @@ use {
         db::{CachedPoolState, IndexDb},
         types::{PoolEvent, PoolEventKind, PoolSwap},
     },
-        anyhow::{anyhow, Context, Result},
+    anyhow::{anyhow, Context, Result},
     base64::{engine::general_purpose::STANDARD as BASE64, Engine as _},
     chrono::DateTime,
     dex::{
-        comet::{discover_mainnet_pool_addresses as discover_comet_pool_addresses, hydrate_pool as hydrate_comet_pool},
         aquarius::{
             pool::hydrate_pool, pricing::price_book_from_pools, router::discover_pool_addresses,
         },
-        phoenix::{discover_mainnet_pool_addresses as discover_phoenix_pool_addresses, hydrate_pool as hydrate_phoenix_pool},
+        comet::{
+            discover_mainnet_pool_addresses as discover_comet_pool_addresses,
+            hydrate_pool as hydrate_comet_pool,
+        },
+        phoenix::{
+            discover_mainnet_pool_addresses as discover_phoenix_pool_addresses,
+            hydrate_pool as hydrate_phoenix_pool,
+        },
         soroswap::{discover_mainnet_pool_addresses, hydrate_pool as hydrate_soroswap_pool},
-        sushi::{discover_mainnet_pool_addresses as discover_sushi_pool_addresses, hydrate_pool as hydrate_sushi_pool},
+        sushi::{
+            discover_mainnet_pool_addresses as discover_sushi_pool_addresses,
+            hydrate_pool as hydrate_sushi_pool,
+        },
         PoolType, SharePoolState, SorobanRpc,
     },
     metrics::PriceBook,
@@ -65,7 +74,8 @@ pub struct PoolEventScanner {
 
 impl PoolEventScanner {
     pub async fn discover(rpc: &SorobanRpc, db: &IndexDb) -> Result<Self> {
-        let venues = std::env::var("INDEXER_VENUES").unwrap_or_else(|_| "aquarius,soroswap,phoenix,sushi,comet".into());
+        let venues = std::env::var("INDEXER_VENUES")
+            .unwrap_or_else(|_| "aquarius,soroswap,phoenix,sushi,comet".into());
         let mut pool_venues = Vec::new();
         for venue in venues
             .split(',')
@@ -378,7 +388,10 @@ fn parse_pool_event(
     } else {
         first_topic
     };
-    let kind = match (is_soroswap || is_phoenix || is_comet || is_sushi, kind_name.as_str()) {
+    let kind = match (
+        is_soroswap || is_phoenix || is_comet || is_sushi,
+        kind_name.as_str(),
+    ) {
         (true, "deposit" | "provide_liquidity") => PoolEventKind::DepositLiquidity,
         (true, "deposit_liquidity" | "join_pool") => PoolEventKind::DepositLiquidity,
         (true, "withdraw" | "withdraw_liquidity" | "exit_pool") => PoolEventKind::WithdrawLiquidity,
@@ -542,7 +555,7 @@ fn derive_event_fields(
         }
         PoolEventKind::ClaimFees => {
             if is_sushi {
-                return derive_sushi_collect(pool_fee_bps, data, context, actor);
+                return derive_sushi_collect(pool_fee_bps, &pool_tokens, data, context, actor);
             }
             let token0 = topic.get(2).and_then(value_address_string);
             let token1 = topic.get(3).and_then(value_address_string);
@@ -602,7 +615,14 @@ fn derive_event_fields(
                 return derive_comet_liquidity(kind, pool_fee_bps, data, context, actor);
             }
             if is_sushi {
-                return derive_sushi_liquidity(kind, pool_fee_bps, data, context, actor);
+                return derive_sushi_liquidity(
+                    kind,
+                    pool_fee_bps,
+                    &pool_tokens,
+                    data,
+                    context,
+                    actor,
+                );
             }
             let share_amount = data.first().and_then(value_amount_string);
             let token_amounts = pool_tokens
@@ -692,9 +712,15 @@ fn pool_swap_from_event(event: &PoolEvent) -> Option<PoolSwap> {
         .and_then(|value| value.get("value"))
         .and_then(Value::as_str)
         == Some("swap");
-    let comet = topic.first().and_then(|value| value.get("value")).and_then(Value::as_str)
+    let comet = topic
+        .first()
+        .and_then(|value| value.get("value"))
+        .and_then(Value::as_str)
         == Some("POOL")
-        && topic.get(1).and_then(|value| value.get("value")).and_then(Value::as_str)
+        && topic
+            .get(1)
+            .and_then(|value| value.get("value"))
+            .and_then(Value::as_str)
             == Some("swap");
     let derived_venue = derived.get("venue").and_then(Value::as_str);
     let sushi = derived_venue == Some("sushi_v3");
@@ -725,22 +751,20 @@ fn pool_swap_from_event(event: &PoolEvent) -> Option<PoolSwap> {
         ledger: event.ledger,
         created_at: event.created_at,
         pool_address: event.pool_address.clone(),
-        dex: derived_venue
-            .map(ToOwned::to_owned)
-            .unwrap_or_else(|| {
-                if soroswap {
-                    "soroswap_amm"
-                } else if phoenix {
-                    "phoenix"
-                } else if comet {
-                    "comet"
-                } else if sushi {
-                    "sushi_v3"
-                } else {
-                    "aquarius"
-                }
-                .to_string()
-            }),
+        dex: derived_venue.map(ToOwned::to_owned).unwrap_or_else(|| {
+            if soroswap {
+                "soroswap_amm"
+            } else if phoenix {
+                "phoenix"
+            } else if comet {
+                "comet"
+            } else if sushi {
+                "sushi_v3"
+            } else {
+                "aquarius"
+            }
+            .to_string()
+        }),
         token_in,
         token_out,
         amount_in,
@@ -804,8 +828,8 @@ fn derive_sushi_swap(
         .as_deref()
         .zip(amount_in.as_deref())
         .and_then(|(token, amount)| estimate_amount_xlm(&context.price_book, token, amount));
-    let fee_quote_xlm = pool_fee_bps
-        .and_then(|bps| volume_quote_xlm.map(|volume| volume * bps as f64 / 10_000.0));
+    let fee_quote_xlm =
+        pool_fee_bps.and_then(|bps| volume_quote_xlm.map(|volume| volume * bps as f64 / 10_000.0));
     derived_with_actor(
         json!({
             "venue": "sushi_v3",
@@ -816,6 +840,79 @@ fn derive_sushi_swap(
             "amount_out": amount_out,
             "volume_quote_xlm": volume_quote_xlm,
             "fee_quote_xlm": fee_quote_xlm,
+        }),
+        actor,
+    )
+}
+
+fn derive_sushi_liquidity(
+    kind: &PoolEventKind,
+    pool_fee_bps: Option<u32>,
+    pool_tokens: &[String],
+    data: &[Value],
+    context: &PoolIndexContext,
+    actor: Option<&str>,
+) -> Value {
+    let amount0 = sushi_field(data, "amount0")
+        .and_then(value_amount_string)
+        .and_then(|value| value.parse::<i128>().ok())
+        .map(|value| value.unsigned_abs().to_string());
+    let amount1 = sushi_field(data, "amount1")
+        .and_then(value_amount_string)
+        .and_then(|value| value.parse::<i128>().ok())
+        .map(|value| value.unsigned_abs().to_string());
+    let total_quote_xlm = estimate_two_token_amounts_xlm(
+        &context.price_book,
+        pool_tokens.first().map(String::as_str),
+        amount0.as_deref(),
+        pool_tokens.get(1).map(String::as_str),
+        amount1.as_deref(),
+    );
+    let token_amounts = json!([
+        {"token": pool_tokens.first(), "amount": amount0},
+        {"token": pool_tokens.get(1), "amount": amount1}
+    ]);
+    derived_with_actor(
+        json!({
+            "venue": "sushi_v3",
+            "pool_fee_bps": pool_fee_bps,
+            "action": if *kind == PoolEventKind::DepositLiquidity { "mint" } else { "burn" },
+            "share_amount": sushi_field(data, "amount").and_then(value_amount_string),
+            "token_amounts": token_amounts,
+            "tick_lower": sushi_field(data, "tick_lower").and_then(Value::as_i64),
+            "tick_upper": sushi_field(data, "tick_upper").and_then(Value::as_i64),
+            "total_quote_xlm": total_quote_xlm,
+        }),
+        actor,
+    )
+}
+
+fn derive_sushi_collect(
+    pool_fee_bps: Option<u32>,
+    pool_tokens: &[String],
+    data: &[Value],
+    context: &PoolIndexContext,
+    actor: Option<&str>,
+) -> Value {
+    let amount0 = sushi_field(data, "amount0").and_then(value_amount_string);
+    let amount1 = sushi_field(data, "amount1").and_then(value_amount_string);
+    let total_quote_xlm = estimate_two_token_amounts_xlm(
+        &context.price_book,
+        pool_tokens.first().map(String::as_str),
+        amount0.as_deref(),
+        pool_tokens.get(1).map(String::as_str),
+        amount1.as_deref(),
+    );
+    derived_with_actor(
+        json!({
+            "venue": "sushi_v3",
+            "pool_fee_bps": pool_fee_bps,
+            "action": "claim_fees",
+            "token_amounts": [
+                {"token": pool_tokens.first(), "amount": amount0},
+                {"token": pool_tokens.get(1), "amount": amount1}
+            ],
+            "total_quote_xlm": total_quote_xlm,
         }),
         actor,
     )
@@ -841,8 +938,8 @@ fn derive_comet_swap(
                 .zip(amount_out.as_deref())
                 .and_then(|(token, amount)| estimate_amount_xlm(&context.price_book, token, amount))
         });
-    let fee_quote_xlm = pool_fee_bps
-        .and_then(|bps| volume_quote_xlm.map(|volume| volume * bps as f64 / 10_000.0));
+    let fee_quote_xlm =
+        pool_fee_bps.and_then(|bps| volume_quote_xlm.map(|volume| volume * bps as f64 / 10_000.0));
     derived_with_actor(
         json!({
             "pool_fee_bps": pool_fee_bps,
@@ -1402,7 +1499,13 @@ mod tests {
         let pool = event.contract_id.clone();
         let context = PoolIndexContext {
             fee_bps_by_pool: HashMap::from([(pool.clone(), 50)]),
-            tokens_by_pool: HashMap::from([(pool.clone(), vec!["CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".into(), "CBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB".into()])]),
+            tokens_by_pool: HashMap::from([(
+                pool.clone(),
+                vec![
+                    "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".into(),
+                    "CBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB".into(),
+                ],
+            )]),
             dex_by_pool: HashMap::from([(pool, "phoenix".into())]),
             price_book: PriceBook::default(),
         };
@@ -1457,7 +1560,10 @@ mod tests {
         );
         assert_eq!(derived["amount_in"], "1000000");
         assert_eq!(derived["amount_out"], "990000");
-        assert_eq!(derived["actor"], "GBBO4ZDDZTSM2IUKQYBAST3CFHNPFXECGEFTGWTA3FXZASUBSONBDN3XL");
+        assert_eq!(
+            derived["actor"],
+            "GBBO4ZDDZTSM2IUKQYBAST3CFHNPFXECGEFTGWTA3FXZASUBSONBDN3XL"
+        );
     }
 
     #[test]
@@ -1475,10 +1581,13 @@ mod tests {
         })).expect("valid Sushi V3 swap fixture");
         let context = PoolIndexContext {
             fee_bps_by_pool: HashMap::from([(pool.to_string(), 30)]),
-            tokens_by_pool: HashMap::from([(pool.to_string(), vec![
-                "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".into(),
-                "CBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB".into(),
-            ])]),
+            tokens_by_pool: HashMap::from([(
+                pool.to_string(),
+                vec![
+                    "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".into(),
+                    "CBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB".into(),
+                ],
+            )]),
             dex_by_pool: HashMap::from([(pool.to_string(), "sushi".into())]),
             price_book: PriceBook::default(),
         };
@@ -1489,5 +1598,66 @@ mod tests {
         assert_eq!(parsed.kind, PoolEventKind::Trade);
         assert_eq!(pool_swap_from_event(&parsed).unwrap().dex, "sushi_v3");
         assert!(parsed.body_json.contains("amount_in"));
+    }
+
+    #[test]
+    fn classifies_sushi_v3_lp_lifecycle_events() {
+        let pool = "CCR2CH4GQVCZHG7CHFVMNANCK45CU5DVKXZIIITDZQAU3CEJZ7RQH2MQ";
+        let context = PoolIndexContext {
+            fee_bps_by_pool: HashMap::from([(pool.to_string(), 30)]),
+            tokens_by_pool: HashMap::from([(
+                pool.to_string(),
+                vec![
+                    "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".into(),
+                    "CBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB".into(),
+                ],
+            )]),
+            dex_by_pool: HashMap::from([(pool.to_string(), "sushi".into())]),
+            price_book: PriceBook::default(),
+        };
+        for (topic, value, expected, expected_action) in [
+            (
+                "AAAADwAAAARtaW50",
+                "AAAAEQAAAAEAAAAHAAAADwAAAAZhbW91bnQAAAAAAAkAAAAAAAAAAAAAAAAZMH9OAAAADwAAAAdhbW91bnQwAAAAAAkAAAAAAAAAAAAAAAAAPQgwAAAADwAAAAdhbW91bnQxAAAAAAkAAAAAAAAAAAAAAAAAFPNpAAAADwAAAAVvd25lcgAAAAAAABIAAAABIzovoLDzgMm/PSicyUIChIApn2d5n/jeVHAlcu+O3HoAAAAPAAAABnNlbmRlcgAAAAAAEgAAAAAAAAAAsUBFWsfZgznE75zcJIP9R7xGDvA4CHIth3vupMPv6LsAAAAPAAAACnRpY2tfbG93ZXIAAAAAAAT//7bgAAAADwAAAAp0aWNrX3VwcGVyAAAAAAAE//+30A==",
+                PoolEventKind::DepositLiquidity,
+                "mint",
+            ),
+            (
+                "AAAADwAAAARidXJu",
+                "AAAAEQAAAAEAAAAHAAAADwAAAAZhbW91bnQAAAAAAAkAAAAAAAAAAAAAAAAZMH9OAAAADwAAAAdhbW91bnQwAAAAAAkAAAAAAAAAAAAAAAAAPQgwAAAADwAAAAdhbW91bnQxAAAAAAkAAAAAAAAAAAAAAAAAFPNpAAAADwAAAAVvd25lcgAAAAAAABIAAAABIzovoLDzgMm/PSicyUIChIApn2d5n/jeVHAlcu+O3HoAAAAPAAAABnNlbmRlcgAAAAAAEgAAAAAAAAAAsUBFWsfZgznE75zcJIP9R7xGDvA4CHIth3vupMPv6LsAAAAPAAAACnRpY2tfbG93ZXIAAAAAAAT//7bgAAAADwAAAAp0aWNrX3VwcGVyAAAAAAAE//+30A==",
+                PoolEventKind::WithdrawLiquidity,
+                "burn",
+            ),
+            (
+                "AAAADwAAAAdjb2xsZWN0AA==",
+                "AAAAEQAAAAEAAAAGAAAADwAAAAdhbW91bnQwAAAAAAkAAAAAAAAAAAAAAAAAPayhAAAADwAAAAdhbW91bnQxAAAAAAkAAAAAAAAAAAAAAAAAFScGAAAADwAAAAVvd25lcgAAAAAAABIAAAABIzovoLDzgMm/PSicyUIChIApn2d5n/jeVHAlcu+3O3HoAAAAPAAAACXJlY2lwaWVudAAAAAAAABIAAAAAAAAAALFARVrH2YM5xO+c3CSD/Ue8Rg7wOAhyLYd77qTD7+i7AAAADwAAAAp0aWNrX2xvd2VyAAAAAAAE//+24AAAAA8AAAAKdGlja191cHBlcgAAAAAABP//t9A=",
+                PoolEventKind::ClaimFees,
+                "claim_fees",
+            ),
+        ] {
+            let event: ContractEvent = serde_json::from_value(json!({
+                "type": "contract",
+                "ledger": 64021358,
+                "contractId": pool,
+                "id": format!("sushi-{topic}"),
+                "topic": [topic],
+                "value": if topic == "AAAADwAAAARtaW50" {
+                    Value::String(value.to_string())
+                } else {
+                    Value::Null
+                }
+            })).expect("valid Sushi lifecycle fixture");
+            let parsed = parse_pool_event(&event, &context, None)
+                .expect("event should decode")
+                .expect("Sushi lifecycle event should be indexed");
+            assert_eq!(parsed.kind, expected);
+            assert!(parsed.body_json.contains(expected_action));
+            if expected == PoolEventKind::DepositLiquidity {
+                assert!(parsed.body_json.contains("CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"));
+                assert!(parsed.body_json.contains("CBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"));
+                assert!(parsed.body_json.contains("tick_lower"));
+                assert!(parsed.body_json.contains("tick_upper"));
+            }
+        }
     }
 }

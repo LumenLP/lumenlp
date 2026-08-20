@@ -1,19 +1,14 @@
 use {
     crate::copy_lp::build_scaled_op_payload,
-    crate::copy_policy::validate_copy_op,
+    crate::copy_policy::{coefficient_ppm, validate_copy_op},
     crate::index_db::{
-        CopyOpRow, CopySessionRow, IndexDb, IndexerStatus, PoolActivityRow,
-        PoolActivitySummaryRow, PoolEventRow, PoolRollupRow,
+        CopyOpRow, CopySessionRow, IndexDb, IndexerStatus, PoolActivityRow, PoolActivitySummaryRow,
+        PoolEventRow, PoolRollupRow,
     },
     crate::pricing::service::{PriceService, QuoteMeta},
     crate::pricing::value::{coverage_for, xlm_quote_to_usd, QuoteCoverage, UsdPriceMap},
+    crate::recorder::canonical_event,
     crate::token_registry,
-    dex::{
-        aquarius::positions::positions_for_address,
-        db::Db,
-        rpc::scval_to_symbol_string,
-        support_matrix, SorobanRpc, NATIVE_SAC,
-    },
     axum::{
         extract::{Path, Query, State},
         http::{header::CACHE_CONTROL, HeaderValue, StatusCode},
@@ -22,6 +17,15 @@ use {
         Json, Router,
     },
     chrono::{DateTime, Duration, Utc},
+    dex::{
+        aquarius::positions::positions_for_address,
+        db::Db,
+        rpc::scval_to_symbol_string,
+        support_matrix,
+        sushi::{positions_for_candidates, SushiPositionRangeCandidate},
+        types::UserPosition,
+        SorobanRpc, NATIVE_SAC,
+    },
     redis::AsyncCommands,
     serde::Deserialize,
     serde_json::{json, Value},
@@ -70,10 +74,7 @@ pub fn router() -> Router<AppState> {
             "/v1/copy/sessions",
             post(create_copy_session).get(list_copy_sessions),
         )
-        .route(
-            "/v1/copy/sessions/{id}",
-            patch(update_copy_session_handler),
-        )
+        .route("/v1/copy/sessions/{id}", patch(update_copy_session_handler))
         .route("/v1/copy/sessions/{id}/ops", get(list_copy_ops))
         .route("/v1/copy/ops/{id}", get(get_copy_op))
         .route("/v1/copy/ops/{id}/status", post(set_copy_op_status))
@@ -103,10 +104,12 @@ fn pool_score_json(
         .and_then(|v| v.get("fee_tvl"))
         .and_then(|v| v.as_f64())
         .unwrap_or(0.0);
-    let fee = fee_24h_override.or_else(|| metrics_24h
-        .and_then(|v| v.get("fee"))
-        .and_then(|v| v.as_f64())
-        .filter(|value| value.is_finite() && *value >= 0.0));
+    let fee = fee_24h_override.or_else(|| {
+        metrics_24h
+            .and_then(|v| v.get("fee"))
+            .and_then(|v| v.as_f64())
+            .filter(|value| value.is_finite() && *value >= 0.0)
+    });
     let volume = volume_24h_override.unwrap_or_else(|| {
         metrics_24h
             .and_then(|v| v.get("volume"))
@@ -119,14 +122,28 @@ fn pool_score_json(
     let fee_tvl = fee
         .filter(|_| has_liquidity)
         .map(|value| value / liquidity)
-        .unwrap_or_else(|| if tvl >= SCORE_TVL_FLOOR { reported_fee_tvl } else { 0.0 });
-    let volume_efficiency = if has_liquidity { volume / liquidity } else { 0.0 };
+        .unwrap_or_else(|| {
+            if tvl >= SCORE_TVL_FLOOR {
+                reported_fee_tvl
+            } else {
+                0.0
+            }
+        });
+    let volume_efficiency = if has_liquidity {
+        volume / liquidity
+    } else {
+        0.0
+    };
     let net_liq = net_liq_override.unwrap_or_else(|| {
         activity_summary
             .map(|s| s.net_liquidity_delta_quote_24h)
             .unwrap_or(0.0)
     });
-    let net_liq_ratio = if has_liquidity { net_liq / liquidity } else { 0.0 };
+    let net_liq_ratio = if has_liquidity {
+        net_liq / liquidity
+    } else {
+        0.0
+    };
     let cadence = if has_liquidity {
         cadence_sort_value(activity_summary.and_then(|s| s.avg_update_interval_secs_24h))
     } else {
@@ -223,7 +240,7 @@ fn latest_reserves_quote_xlm_from_events(events: &[PoolEventRow]) -> Option<(i64
                     .body
                     .pointer("/derived/reserves_quote_xlm")
                     .and_then(|v| v.as_f64())
-        });
+            });
         if let Some(q) = quote.filter(|v| v.is_finite() && *v > 0.0) {
             return Some((event.created_at, q));
         }
@@ -260,7 +277,14 @@ fn fill_window_from_activity(metrics: &mut Value, summary: Option<&PoolActivityS
     let fee = w.get("fee").and_then(|v| v.as_f64()).unwrap_or(0.0);
     if volume <= 0.0 && summary.volume_quote_24h > 0.0 {
         w.insert("volume".into(), json!(summary.volume_quote_24h));
-        w.insert("samples".into(), json!(w.get("samples").and_then(|v| v.as_u64()).unwrap_or(0).max(1)));
+        w.insert(
+            "samples".into(),
+            json!(w
+                .get("samples")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0)
+                .max(1)),
+        );
     }
     if fee <= 0.0 && summary.fee_quote_24h > 0.0 {
         w.insert("fee".into(), json!(summary.fee_quote_24h));
@@ -559,13 +583,16 @@ async fn list_pools(State(state): State<AppState>) -> impl IntoResponse {
     const REDIS_POOL_LIST_KEY: &str = "lumenlp:pools:v1";
     if let Some(client) = state.redis.clone() {
         if let Ok(mut connection) = client.get_multiplexed_async_connection().await {
-            let cached: redis::RedisResult<Option<String>> = connection.get(REDIS_POOL_LIST_KEY).await;
+            let cached: redis::RedisResult<Option<String>> =
+                connection.get(REDIS_POOL_LIST_KEY).await;
             if let Ok(Some(serialized)) = cached {
                 if let Ok(body) = serde_json::from_str::<Value>(&serialized) {
                     let mut response = Json(body).into_response();
                     response.headers_mut().insert(
                         CACHE_CONTROL,
-                        HeaderValue::from_static("public, max-age=30, s-maxage=30, stale-while-revalidate=60"),
+                        HeaderValue::from_static(
+                            "public, max-age=30, s-maxage=30, stale-while-revalidate=60",
+                        ),
                     );
                     return response;
                 }
@@ -574,9 +601,9 @@ async fn list_pools(State(state): State<AppState>) -> impl IntoResponse {
     }
     if let Some(body) = {
         let cache = state.pool_list_cache.lock().unwrap();
-        cache.as_ref().and_then(|(expires_at, body)| {
-            (*expires_at > StdInstant::now()).then(|| body.clone())
-        })
+        cache
+            .as_ref()
+            .and_then(|(expires_at, body)| (*expires_at > StdInstant::now()).then(|| body.clone()))
     } {
         let mut response = Json(body).into_response();
         response.headers_mut().insert(
@@ -625,14 +652,13 @@ async fn list_pools(State(state): State<AppState>) -> impl IntoResponse {
                 .flat_map(|tokens| tokens.into_iter())
                 .filter_map(|token| token.as_str().map(ToOwned::to_owned))
                 .collect();
-            let token_meta_map =
-                resolve_token_meta_map(
-                    state.rpc.clone(),
-                    state.index_db.clone(),
-                    &state.token_meta_cache,
-                    &token_ids,
-                )
-                    .await;
+            let token_meta_map = resolve_token_meta_map(
+                state.rpc.clone(),
+                state.index_db.clone(),
+                &state.token_meta_cache,
+                &token_ids,
+            )
+            .await;
             let wanted = wanted_tokens_from_meta(&token_meta_map);
             let (price_map, mut quote_meta) = state.prices.prices_for_tokens(&wanted).await;
             let all_token_ids: Vec<String> = token_ids.iter().cloned().collect();
@@ -736,7 +762,8 @@ async fn list_pools(State(state): State<AppState>) -> impl IntoResponse {
             if let Some(client) = state.redis.clone() {
                 if let Ok(serialized) = serde_json::to_string(&body) {
                     tokio::spawn(async move {
-                        if let Ok(mut connection) = client.get_multiplexed_async_connection().await {
+                        if let Ok(mut connection) = client.get_multiplexed_async_connection().await
+                        {
                             let _: redis::RedisResult<()> = connection
                                 .set_ex(REDIS_POOL_LIST_KEY, serialized, POOL_LIST_CACHE_SECS)
                                 .await;
@@ -747,7 +774,9 @@ async fn list_pools(State(state): State<AppState>) -> impl IntoResponse {
             let mut response = Json(body).into_response();
             response.headers_mut().insert(
                 CACHE_CONTROL,
-                HeaderValue::from_static("public, max-age=30, s-maxage=30, stale-while-revalidate=60"),
+                HeaderValue::from_static(
+                    "public, max-age=30, s-maxage=30, stale-while-revalidate=60",
+                ),
             );
             response
         }
@@ -807,14 +836,13 @@ async fn pool_detail(
             (Vec::new(), HashMap::new(), tokens)
         } else {
             let token_ids: HashSet<String> = tokens.iter().cloned().collect();
-            let map =
-                resolve_token_meta_map(
-                    state.rpc.clone(),
-                    state.index_db.clone(),
-                    &state.token_meta_cache,
-                    &token_ids,
-                )
-                    .await;
+            let map = resolve_token_meta_map(
+                state.rpc.clone(),
+                state.index_db.clone(),
+                &state.token_meta_cache,
+                &token_ids,
+            )
+            .await;
             let token_meta = tokens
                 .iter()
                 .filter_map(|token| map.get(token))
@@ -834,12 +862,13 @@ async fn pool_detail(
     }
     let fee_bps = meta.as_ref().map(|m| m.2 as u32).unwrap_or(0);
     let mut latest_tvl = latest.map(|row| row.tvl).unwrap_or(0.0);
-    let mut tvl_source = if latest_tvl > 0.0 {
-        "snapshot"
-    } else {
-        "none"
-    };
-    if let Ok(events) = state.index_db.lock().unwrap().recent_pool_events(&address, 40) {
+    let mut tvl_source = if latest_tvl > 0.0 { "snapshot" } else { "none" };
+    if let Ok(events) = state
+        .index_db
+        .lock()
+        .unwrap()
+        .recent_pool_events(&address, 40)
+    {
         if let Some((event_ts, reserves_xlm)) = latest_reserves_quote_xlm_from_events(&events) {
             // A pool can receive reserve updates between snapshotter runs. Do not
             // serve an older snapshot as the current TVL in that case.
@@ -856,7 +885,10 @@ async fn pool_detail(
     };
     fill_window_from_activity(&mut window_metrics, activity_summary.as_ref());
     // Keep avg_tvl / fee_tvl coherent when we only have event-derived TVL.
-    if let Some(w24) = window_metrics.get_mut("24h").and_then(|v| v.as_object_mut()) {
+    if let Some(w24) = window_metrics
+        .get_mut("24h")
+        .and_then(|v| v.as_object_mut())
+    {
         let avg = w24.get("avg_tvl").and_then(|v| v.as_f64()).unwrap_or(0.0);
         if avg <= 0.0 && latest_tvl > 0.0 {
             w24.insert("avg_tvl".into(), json!(latest_tvl));
@@ -1198,6 +1230,29 @@ async fn lp_leaders(
     .into_response()
 }
 
+async fn load_sushi_positions(
+    state: &AppState,
+    address: &str,
+    pricing: &[dex::types::SharePoolState],
+) -> Vec<UserPosition> {
+    let candidates = {
+        let db = state.index_db.lock().unwrap();
+        db.sushi_position_range_candidates(address, Utc::now().timestamp() - 90 * 86_400, 500)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|candidate| SushiPositionRangeCandidate {
+                pool_address: candidate.pool_address,
+                tick_lower: candidate.tick_lower,
+                tick_upper: candidate.tick_upper,
+            })
+            .collect::<Vec<_>>()
+    };
+    if candidates.is_empty() {
+        return Vec::new();
+    }
+    positions_for_candidates(state.rpc.as_ref(), address, &candidates, pricing).await
+}
+
 async fn list_positions(
     State(state): State<AppState>,
     Query(q): Query<AddressQuery>,
@@ -1209,37 +1264,33 @@ async fn list_positions(
         )
             .into_response();
     }
-    let pools = {
+    let indexed_pools = {
         let db = state.db.lock().unwrap();
         db.list_pool_addresses().unwrap_or_default()
     };
-    let stats = {
-        let db = state.db.lock().unwrap();
-        db.stats().ok()
+    let pools = {
+        let db = state.index_db.lock().unwrap();
+        db.actor_pool_addresses(&q.address, Utc::now().timestamp() - 90 * 86_400)
+            .unwrap_or_default()
     };
-    if pools.is_empty() {
-        return Json(json!({
-            "address": q.address,
-            "positions": [],
-            "indexed_pool_count": 0,
-            "last_snapshot_at": stats.and_then(|s| s.latest_snapshot_at),
-            "note": "No indexed pools yet — run snapshotter first"
-        }))
-        .into_response();
-    }
     let pricing = {
         let db = state.db.lock().unwrap();
         db.pool_states_for_pricing().unwrap_or_default()
     };
-    let positions = positions_for_address(state.rpc.as_ref(), &q.address, &pools, &pricing).await;
+    let mut positions =
+        positions_for_address(state.rpc.as_ref(), &q.address, &pools, &pricing).await;
+    positions.extend(load_sushi_positions(&state, &q.address, &pricing).await);
     let stats = {
         let db = state.db.lock().unwrap();
         db.stats().ok()
     };
-    let pool_count = stats.as_ref().map(|s| s.pool_count).unwrap_or(pools.len());
+    let pool_count = stats
+        .as_ref()
+        .map(|s| s.pool_count)
+        .unwrap_or(indexed_pools.len());
     let last_snapshot_at = stats.and_then(|s| s.latest_snapshot_at);
     let note = if positions.is_empty() {
-        Some("No Aquarius LP found for this address in the current indexed pool set")
+        Some("No active LP position found in the recent indexed pool set")
     } else {
         None
     };
@@ -1264,9 +1315,14 @@ async fn positions_summary(
         )
             .into_response();
     }
-    let pools = {
+    let indexed_pools = {
         let db = state.db.lock().unwrap();
         db.list_pool_addresses().unwrap_or_default()
+    };
+    let pools = {
+        let db = state.index_db.lock().unwrap();
+        db.actor_pool_addresses(&q.address, Utc::now().timestamp() - 90 * 86_400)
+            .unwrap_or_default()
     };
     let stats = {
         let db = state.db.lock().unwrap();
@@ -1276,7 +1332,9 @@ async fn positions_summary(
         let db = state.db.lock().unwrap();
         db.pool_states_for_pricing().unwrap_or_default()
     };
-    let positions = positions_for_address(state.rpc.as_ref(), &q.address, &pools, &pricing).await;
+    let mut positions =
+        positions_for_address(state.rpc.as_ref(), &q.address, &pools, &pricing).await;
+    positions.extend(load_sushi_positions(&state, &q.address, &pricing).await);
     let mut net_worth = 0.0;
     let mut fees = 0.0;
     let mut il_sum = 0.0;
@@ -1299,12 +1357,12 @@ async fn positions_summary(
         "fees_unclaimed": fees,
         "il_est_avg": if il_n > 0 { Some(il_sum / il_n as f64) } else { None },
         "position_count": positions.len(),
-        "indexed_pool_count": stats.as_ref().map(|s| s.pool_count).unwrap_or(pools.len()),
+        "indexed_pool_count": stats.as_ref().map(|s| s.pool_count).unwrap_or(indexed_pools.len()),
         "last_snapshot_at": stats.and_then(|s| s.latest_snapshot_at),
         "note": if pools.is_empty() {
             Some("No indexed pools yet — run snapshotter first")
         } else if positions.is_empty() {
-            Some("No Aquarius LP found for this address in the current indexed pool set")
+            Some("No active LP position found in the recent indexed pool set")
         } else {
             None::<&str>
         },
@@ -1336,9 +1394,7 @@ async fn lp_profile(
     };
     let indexed_pool_count = {
         let db = state.db.lock().unwrap();
-        db.list_pool_addresses()
-            .map(|p| p.len())
-            .unwrap_or(0)
+        db.list_pool_addresses().map(|p| p.len()).unwrap_or(0)
     };
 
     let now_ts = Utc::now().timestamp();
@@ -1574,7 +1630,12 @@ async fn lp_profile(
 const COPY_RECONCILE_BATCH: usize = 500;
 
 const COPY_OP_STATUSES: &[&str] = &[
-    "drafted", "skipped", "signed", "failed", "insufficient", "rejected",
+    "drafted",
+    "skipped",
+    "signed",
+    "failed",
+    "insufficient",
+    "rejected",
 ];
 
 const COPY_SESSION_STATUSES: &[&str] = &["active", "paused", "stopped"];
@@ -1584,11 +1645,9 @@ fn valid_stellar_address(address: &str) -> bool {
 }
 
 fn new_copy_entity_id() -> String {
-    let ts = chrono::Utc::now().timestamp_nanos_opt().unwrap_or_else(|| {
-        chrono::Utc::now()
-            .timestamp()
-            .saturating_mul(1_000_000_000)
-    });
+    let ts = chrono::Utc::now()
+        .timestamp_nanos_opt()
+        .unwrap_or_else(|| chrono::Utc::now().timestamp().saturating_mul(1_000_000_000));
     format!("{ts:x}")
 }
 
@@ -1598,6 +1657,7 @@ fn copy_session_json(session: &CopySessionRow) -> Value {
         "follower_address": session.follower_address,
         "leader_address": session.leader_address,
         "coefficient": session.coefficient,
+        "coefficient_ppm": coefficient_ppm(session.coefficient),
         "status": session.status,
         "include_claims": session.include_claims,
         "policy": {
@@ -1615,10 +1675,8 @@ fn copy_session_json(session: &CopySessionRow) -> Value {
 }
 
 fn copy_op_json(op: &CopyOpRow) -> Value {
-    let leader_amounts =
-        serde_json::from_str(&op.leader_amounts_json).unwrap_or(Value::Null);
-    let scaled_amounts =
-        serde_json::from_str(&op.scaled_amounts_json).unwrap_or(Value::Null);
+    let leader_amounts = serde_json::from_str(&op.leader_amounts_json).unwrap_or(Value::Null);
+    let scaled_amounts = serde_json::from_str(&op.scaled_amounts_json).unwrap_or(Value::Null);
     json!({
         "id": op.id,
         "session_id": op.session_id,
@@ -1637,7 +1695,10 @@ fn copy_op_json(op: &CopyOpRow) -> Value {
     })
 }
 
-fn reconcile_copy_ops(index_db: &IndexDb, session: &mut CopySessionRow) -> Result<(), anyhow::Error> {
+fn reconcile_copy_ops(
+    index_db: &IndexDb,
+    session: &mut CopySessionRow,
+) -> Result<(), anyhow::Error> {
     if session.status != "active" {
         return Ok(());
     }
@@ -1679,19 +1740,25 @@ fn reconcile_copy_ops(index_db: &IndexDb, session: &mut CopySessionRow) -> Resul
                 .and_hms_opt(0, 0, 0)
                 .map(|value| value.and_utc().timestamp())
                 .unwrap_or(0);
-            let (status, note) = match validate_copy_op(
+            let policy_result = validate_copy_op(
                 session,
                 &event.pool_address,
                 draft.scaled_quote_xlm,
                 Utc::now().timestamp(),
                 index_db.copy_quote_used_since(&session.id, daily_start)?,
-            ) {
+            );
+            let (status, note) = match policy_result {
                 Ok(()) => ("pending".to_string(), None),
                 Err(reason) => (
                     "rejected".to_string(),
                     Some(format!("{}: copy policy rejected", reason.code())),
                 ),
             };
+            if status == "pending" {
+                if let Some(recorder_event) = canonical_event(event, &session.leader_address) {
+                    index_db.enqueue_recorder_event(&recorder_event)?;
+                }
+            }
             let op = CopyOpRow {
                 id: new_copy_entity_id(),
                 session_id: session.id.clone(),
@@ -1760,7 +1827,7 @@ async fn create_copy_session(
         )
             .into_response();
     }
-    if !body.coefficient.is_finite() || body.coefficient <= 0.0 {
+    if coefficient_ppm(body.coefficient).is_none() {
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({ "error": "coefficient must be > 0", "code": "bad_coefficient" })),
@@ -1864,7 +1931,7 @@ async fn update_copy_session_handler(
         }
     }
     if let Some(coefficient) = body.coefficient {
-        if !coefficient.is_finite() || coefficient <= 0.0 {
+        if coefficient_ppm(coefficient).is_none() {
             return (
                 StatusCode::BAD_REQUEST,
                 Json(json!({ "error": "coefficient must be > 0", "code": "bad_coefficient" })),
@@ -1975,10 +2042,7 @@ struct SetCopyOpStatusBody {
     note: Option<String>,
 }
 
-async fn get_copy_op(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-) -> impl IntoResponse {
+async fn get_copy_op(State(state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
     let index_db = state.index_db.lock().unwrap();
     match index_db.get_copy_op(&id) {
         Ok(Some(op)) => Json(copy_op_json(&op)).into_response(),
@@ -2027,7 +2091,6 @@ async fn set_copy_op_status(
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2074,13 +2137,7 @@ mod tests {
                 "volume_usd": 0.03
             }
         });
-        let score = score_with_usd_preference(
-            0.4,
-            Some(0.06),
-            &metrics,
-            None,
-            Some(0.15),
-        );
+        let score = score_with_usd_preference(0.4, Some(0.06), &metrics, None, Some(0.15));
         let inputs = score
             .get("score_breakdown")
             .and_then(|v| v.get("inputs"))
@@ -2113,10 +2170,7 @@ mod tests {
                 body: json!({"derived": {"reserves_quote_xlm": 7669055.87}}),
             },
         ];
-        assert_eq!(
-            reserves_quote_xlm_from_events(&events),
-            Some(7669055.87)
-        );
+        assert_eq!(reserves_quote_xlm_from_events(&events), Some(7669055.87));
     }
 
     #[test]

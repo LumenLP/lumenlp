@@ -510,7 +510,10 @@ mod tests {
         let result: Value = serde_json::from_str(MAINNET_GET_TX_FIXTURE).unwrap();
         let account = source_account_from_get_transaction(&result).unwrap();
         assert!(account.starts_with('G'));
-        assert_eq!(account, "GBS3LFM2PIMRGZUC65G2GNMSWTQIX3FYSKB7ZF62ZLPVLG7MDXFUHQ64");
+        assert_eq!(
+            account,
+            "GBS3LFM2PIMRGZUC65G2GNMSWTQIX3FYSKB7ZF62ZLPVLG7MDXFUHQ64"
+        );
     }
 
     #[test]
@@ -561,6 +564,9 @@ mod tests {
         let result = json!({ "envelopeXdr": MAINNET_ENVELOPE_XDR });
         let account = source_account_from_get_transaction(&result).unwrap();
         assert!(account.starts_with('G'));
-        assert_eq!(account, "GBS3LFM2PIMRGZUC65G2GNMSWTQIX3FYSKB7ZF62ZLPVLG7MDXFUHQ64");
+        assert_eq!(
+            account,
+            "GBS3LFM2PIMRGZUC65G2GNMSWTQIX3FYSKB7ZF62ZLPVLG7MDXFUHQ64"
+        );
     }
 }

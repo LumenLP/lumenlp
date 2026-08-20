@@ -1,7 +1,6 @@
 //! Map Soroban contract IDs + token meta → Freighter token ids.
 
-pub const NATIVE_SAC_MAINNET: &str =
-    "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA";
+pub const NATIVE_SAC_MAINNET: &str = "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FreighterAssetId {
@@ -72,8 +71,9 @@ mod tests {
 
     #[test]
     fn native_sac_maps_to_native() {
-        let id = resolve_freighter_asset_id(NATIVE_SAC_MAINNET, Some("native"), Some("native"), None)
-            .expect("native");
+        let id =
+            resolve_freighter_asset_id(NATIVE_SAC_MAINNET, Some("native"), Some("native"), None)
+                .expect("native");
         assert_eq!(id, FreighterAssetId::Native);
         assert_eq!(id.as_freighter_key(), "native");
     }

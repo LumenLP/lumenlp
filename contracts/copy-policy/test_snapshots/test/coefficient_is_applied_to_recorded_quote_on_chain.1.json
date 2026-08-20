@@ -54,10 +54,10 @@
           "function": {
             "contract_fn": {
               "contract_address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
-              "function_name": "register_session",
+              "function_name": "register_session_coeff",
               "args": [
                 {
-                  "u32": 12
+                  "u32": 22
                 },
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
@@ -70,16 +70,19 @@
                   ]
                 },
                 {
+                  "u32": 250000
+                },
+                {
                   "bool": true
                 },
                 {
-                  "i128": "10"
+                  "i128": "25"
                 },
                 {
-                  "i128": "10"
+                  "i128": "25"
                 },
                 {
-                  "u64": "100"
+                  "u64": "100000"
                 }
               ]
             }
@@ -98,7 +101,7 @@
               "function_name": "record_leader_event",
               "args": [
                 {
-                  "bytes": "0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c"
+                  "bytes": "1616161616161616161616161616161616161616161616161616161616161616"
                 },
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
@@ -117,7 +120,7 @@
                   ]
                 },
                 {
-                  "i128": "7"
+                  "i128": "100"
                 },
                 {
                   "u32": 1
@@ -129,6 +132,7 @@
         }
       ]
     ],
+    [],
     [
       [
         "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M",
@@ -139,10 +143,10 @@
               "function_name": "execute_copy_op",
               "args": [
                 {
-                  "u32": 12
+                  "u32": 22
                 },
                 {
-                  "bytes": "0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c"
+                  "bytes": "1616161616161616161616161616161616161616161616161616161616161616"
                 },
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM"
@@ -151,7 +155,7 @@
                   "symbol": "deposit"
                 },
                 {
-                  "i128": "7"
+                  "i128": "25"
                 }
               ]
             }
@@ -160,14 +164,12 @@
         }
       ]
     ],
-    [],
-    [],
     []
   ],
   "ledger": {
     "protocol_version": 25,
     "sequence_number": 0,
-    "timestamp": 100,
+    "timestamp": 0,
     "network_id": "0000000000000000000000000000000000000000000000000000000000000000",
     "base_reserve": 0,
     "min_persistent_entry_ttl": 4096,
@@ -187,7 +189,7 @@
                     "symbol": "LeaderEvent"
                   },
                   {
-                    "bytes": "0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c"
+                    "bytes": "1616161616161616161616161616161616161616161616161616161616161616"
                   }
                 ]
               },
@@ -243,7 +245,7 @@
                       "symbol": "quote"
                     },
                     "val": {
-                      "i128": "7"
+                      "i128": "100"
                     }
                   },
                   {
@@ -275,10 +277,10 @@
                     "symbol": "Replay"
                   },
                   {
-                    "u32": 12
+                    "u32": 22
                   },
                   {
-                    "bytes": "0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c"
+                    "bytes": "1616161616161616161616161616161616161616161616161616161616161616"
                   }
                 ]
               },
@@ -305,7 +307,7 @@
                     "symbol": "Session"
                   },
                   {
-                    "u32": 12
+                    "u32": 22
                   }
                 ]
               },
@@ -329,7 +331,7 @@
                       "symbol": "coefficient_ppm"
                     },
                     "val": {
-                      "u32": 1000000
+                      "u32": 250000
                     }
                   },
                   {
@@ -345,7 +347,7 @@
                       "symbol": "daily_used_quote"
                     },
                     "val": {
-                      "i128": "7"
+                      "i128": "25"
                     }
                   },
                   {
@@ -353,7 +355,7 @@
                       "symbol": "expires_at"
                     },
                     "val": {
-                      "u64": "100"
+                      "u64": "100000"
                     }
                   },
                   {
@@ -377,7 +379,7 @@
                       "symbol": "max_daily_quote"
                     },
                     "val": {
-                      "i128": "10"
+                      "i128": "25"
                     }
                   },
                   {
@@ -385,7 +387,7 @@
                       "symbol": "max_per_op_quote"
                     },
                     "val": {
-                      "i128": "10"
+                      "i128": "25"
                     }
                   },
                   {

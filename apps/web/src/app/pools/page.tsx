@@ -168,7 +168,7 @@ function PoolsPageInner() {
   } | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [windowKey, setWindowKey] = useState<(typeof windows)[number]>("24h");
-  const [sortKey, setSortKey] = useState<(typeof sortOptions)[number]>("score");
+  const [sortKey, setSortKey] = useState<(typeof sortOptions)[number]>("fee_tvl");
   const [viewMode, setViewMode] = useState<ViewMode>("card");
   const [venueFilter, setVenueFilter] = useState<string>("aquarius");
   const [poolTypeFilter, setPoolTypeFilter] = useState<string>("all");
@@ -268,7 +268,7 @@ function PoolsPageInner() {
   function buildCurrentQuery() {
     const params = new URLSearchParams();
     if (windowKey !== "24h") params.set("window", windowKey);
-    if (sortKey !== "score") params.set("sort", sortKey);
+    if (sortKey !== "fee_tvl") params.set("sort", sortKey);
     if (viewMode !== "card") params.set("view", viewMode);
     if (venueFilter !== "aquarius") params.set("dex", venueFilter);
     if (poolTypeFilter !== "all") params.set("type", poolTypeFilter);
@@ -282,7 +282,7 @@ function PoolsPageInner() {
 
   function resetFilters() {
     setWindowKey("24h");
-    setSortKey("score");
+    setSortKey("fee_tvl");
     setViewMode("card");
     setVenueFilter("aquarius");
     setPoolTypeFilter("all");
@@ -438,11 +438,11 @@ function PoolsPageInner() {
     windowKey !== "24h"
       ? { key: "window", label: `Window: ${windowKey}`, clear: () => setWindowKey("24h") }
       : null,
-    sortKey !== "score"
+    sortKey !== "fee_tvl"
       ? {
           key: "sort",
           label: `Sort: ${sortKey.replaceAll("_", " ")}`,
-          clear: () => setSortKey("score"),
+          clear: () => setSortKey("fee_tvl"),
         }
       : null,
     venueFilter !== "aquarius"

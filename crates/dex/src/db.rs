@@ -263,9 +263,9 @@ impl Db {
     }
 
     pub fn pool_meta(&self, address: &str) -> Result<Option<(String, String, i64, String)>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT pool_type, tokens_json, fee_bps, venue FROM pools WHERE address = ?1")?;
+        let mut stmt = self.conn.prepare(
+            "SELECT pool_type, tokens_json, fee_bps, venue FROM pools WHERE address = ?1",
+        )?;
         let mut rows = stmt.query(params![address])?;
         if let Some(r) = rows.next()? {
             Ok(Some((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
@@ -301,7 +301,9 @@ impl Db {
         let snaps = self.latest_snapshots()?;
         let mut out = Vec::new();
         for s in snaps {
-            let Some((pool_type, tokens_json, fee_bps, _venue)) = self.pool_meta(&s.pool_address)? else {
+            let Some((pool_type, tokens_json, fee_bps, _venue)) =
+                self.pool_meta(&s.pool_address)?
+            else {
                 continue;
             };
             let tokens: Vec<String> = serde_json::from_str(&tokens_json).unwrap_or_default();

@@ -79,9 +79,7 @@ impl PriceService {
 
         let cache_covers = cache_snapshot
             .as_ref()
-            .map(|(prices, fresh)| {
-                *fresh && needed_keys.iter().all(|k| prices.contains_key(k))
-            })
+            .map(|(prices, fresh)| *fresh && needed_keys.iter().all(|k| prices.contains_key(k)))
             .unwrap_or(false);
 
         let mut prices_by_key: HashMap<String, f64> = if cache_covers {
@@ -214,9 +212,7 @@ impl PriceService {
             return None;
         }
         let asset: ExpertAsset = resp.json().await.ok()?;
-        asset
-            .price
-            .filter(|p| p.is_finite() && *p > 0.0)
+        asset.price.filter(|p| p.is_finite() && *p > 0.0)
     }
 }
 
@@ -294,7 +290,11 @@ mod tests {
             ),
         ];
         let (map, meta) = svc.prices_for_tokens(&wanted).await;
-        assert!(meta.xlm_usd.is_some_and(|p| p > 0.0), "xlm_usd={:?}", meta.xlm_usd);
+        assert!(
+            meta.xlm_usd.is_some_and(|p| p > 0.0),
+            "xlm_usd={:?}",
+            meta.xlm_usd
+        );
         assert!(
             map.contains_key(NATIVE_SAC_MAINNET),
             "map keys={:?}",
