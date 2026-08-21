@@ -1,11 +1,11 @@
 //! User LP positions from on-chain state (RPC-first).
 
 use {
-    crate::aquarius::{
-        pool::{hydrate_pool, share_balance},
-        pricing::price_book_from_pools,
-    },
     crate::{
+        aquarius::{
+            pool::{hydrate_pool, share_balance},
+            pricing::price_book_from_pools,
+        },
         rpc::{account_address_scval, parse_u128_vec, scval_to_i32, scval_to_u128, SorobanRpc},
         types::{ClPositionRange, PoolType, SharePoolState, UserPosition},
     },
@@ -33,33 +33,16 @@ pub async fn positions_for_address(
             Ok(None) => {}
             Err(e) => {
                 warn!(pool = %addr, error = %e, "position load failed");
-                out.push(UserPosition {
-                    pool_address: addr.clone(),
-                    pool_type: PoolType::Unknown,
-                    tokens: vec![],
-                    fee_bps: 0,
-                    amounts: vec![],
-                    value_quote: None,
-                    il_est: None,
-                    pnl: None,
-                    fees_unclaimed_quote: None,
-                    status: "error".into(),
-                    shares: None,
-                    cl_ranges: None,
-                    note: Some(e.to_string()),
-                });
+                // Actor history is multi-DEX, while this scanner is Aquarius
+                // specific. A non-Aquarius pool can fail the Aquarius probe;
+                // that is not evidence of an open position.
             }
         }
     }
     out
 }
 
-async fn load_position(
-    rpc: &SorobanRpc,
-    user: &str,
-    pool: &str,
-    book: &PriceBook,
-) -> Result<Option<UserPosition>> {
+async fn load_position(rpc: &SorobanRpc, user: &str, pool: &str, book: &PriceBook) -> Result<Option<UserPosition>> {
     let state = hydrate_pool(rpc, pool).await?;
     match state.pool_type {
         PoolType::ConstantProduct | PoolType::Stable => {
@@ -71,12 +54,7 @@ async fn load_position(
                 return Ok(None);
             }
             let (a, b) = if state.reserves.len() >= 2 {
-                cp_position_amounts(
-                    shares,
-                    state.total_shares,
-                    state.reserves[0],
-                    state.reserves[1],
-                )
+                cp_position_amounts(shares, state.total_shares, state.reserves[0], state.reserves[1])
             } else {
                 (0.0, 0.0)
             };
@@ -117,11 +95,7 @@ async fn load_cl_position(
 ) -> Result<Option<UserPosition>> {
     let user_val = account_address_scval(user)?;
     let snap = rpc
-        .simulate_call(
-            state.address.as_str(),
-            "get_user_position_snapshot",
-            vec![user_val],
-        )
+        .simulate_call(state.address.as_str(), "get_user_position_snapshot", vec![user_val])
         .await?;
 
     let ranges = parse_cl_ranges(&snap)?;
@@ -130,10 +104,7 @@ async fn load_cl_position(
     }
 
     let slot0 = rpc.call_no_args(&state.address, "get_slot0").await.ok();
-    let current_tick = slot0
-        .as_ref()
-        .and_then(|v| parse_slot0_tick(v))
-        .unwrap_or(0);
+    let current_tick = slot0.as_ref().and_then(|v| parse_slot0_tick(v)).unwrap_or(0);
 
     let mut cl_ranges = Vec::new();
     let mut amount0 = 0.0f64;
@@ -182,9 +153,7 @@ async fn load_cl_position(
         status: "ok".into(),
         shares: None,
         cl_ranges: Some(cl_ranges),
-        note: Some(
-            "CL amounts from liquidity+ticks; fees in amounts+fees_unclaimed; il/pnl=n/a".into(),
-        ),
+        note: Some("CL amounts from liquidity+ticks; fees in amounts+fees_unclaimed; il/pnl=n/a".into()),
     }))
 }
 
@@ -272,19 +241,12 @@ async fn fetch_position_data(
 #[allow(dead_code)]
 pub async fn try_pending_rewards(rpc: &SorobanRpc, pool: &str, user: &str) -> Option<u128> {
     let user_val = account_address_scval(user).ok()?;
-    let val = rpc
-        .simulate_call(pool, "get_user_reward", vec![user_val])
-        .await
-        .ok()?;
+    let val = rpc.simulate_call(pool, "get_user_reward", vec![user_val]).await.ok()?;
     scval_to_u128(&val).ok()
 }
 
 #[allow(dead_code)]
-pub async fn try_get_all_position_fees(
-    rpc: &SorobanRpc,
-    pool: &str,
-    user: &str,
-) -> Option<Vec<u128>> {
+pub async fn try_get_all_position_fees(rpc: &SorobanRpc, pool: &str, user: &str) -> Option<Vec<u128>> {
     let user_val = account_address_scval(user).ok()?;
     let val = rpc
         .simulate_call(pool, "get_all_position_fees", vec![user_val])

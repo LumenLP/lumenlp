@@ -17,17 +17,14 @@ use {
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
-        )
+        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .init();
 
     let args = std::env::args().skip(1).collect::<Vec<_>>();
     let cmd = args.first().map(String::as_str).unwrap_or("run");
 
     let rpc_url = std::env::var("RPC_URL").unwrap_or_else(|_| "http://127.0.0.1:8003".into());
-    let db_path =
-        std::env::var("INDEXER_DB_PATH").unwrap_or_else(|_| "./data/pool-indexer.db".into());
+    let db_path = std::env::var("INDEXER_DB_PATH").unwrap_or_else(|_| "./data/pool-indexer.db".into());
     let poll_secs: u64 = std::env::var("INDEXER_POLL_SECS")
         .ok()
         .and_then(|s| s.parse().ok())

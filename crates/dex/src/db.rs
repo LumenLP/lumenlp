@@ -126,9 +126,7 @@ impl Db {
     }
 
     pub fn list_pool_addresses(&self) -> Result<Vec<String>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT address FROM pools ORDER BY address")?;
+        let mut stmt = self.conn.prepare("SELECT address FROM pools ORDER BY address")?;
         let rows = stmt.query_map([], |r| r.get(0))?;
         let mut out = Vec::new();
         for row in rows {
@@ -138,9 +136,7 @@ impl Db {
     }
 
     pub fn stats(&self) -> Result<DbStats> {
-        let pool_count: i64 = self
-            .conn
-            .query_row("SELECT COUNT(*) FROM pools", [], |r| r.get(0))?;
+        let pool_count: i64 = self.conn.query_row("SELECT COUNT(*) FROM pools", [], |r| r.get(0))?;
         let latest_snapshot_at = self
             .conn
             .query_row("SELECT MAX(ts) FROM pool_snapshots", [], |r| r.get(0))
@@ -263,9 +259,9 @@ impl Db {
     }
 
     pub fn pool_meta(&self, address: &str) -> Result<Option<(String, String, i64, String)>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT pool_type, tokens_json, fee_bps, venue FROM pools WHERE address = ?1",
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT pool_type, tokens_json, fee_bps, venue FROM pools WHERE address = ?1")?;
         let mut rows = stmt.query(params![address])?;
         if let Some(r) = rows.next()? {
             Ok(Some((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
@@ -301,9 +297,7 @@ impl Db {
         let snaps = self.latest_snapshots()?;
         let mut out = Vec::new();
         for s in snaps {
-            let Some((pool_type, tokens_json, fee_bps, _venue)) =
-                self.pool_meta(&s.pool_address)?
-            else {
+            let Some((pool_type, tokens_json, fee_bps, _venue)) = self.pool_meta(&s.pool_address)? else {
                 continue;
             };
             let tokens: Vec<String> = serde_json::from_str(&tokens_json).unwrap_or_default();
@@ -337,19 +331,14 @@ fn open_sqlite_with_retry(path: &str) -> Result<Connection> {
                     "#,
                 ) {
                     Ok(_) => return Ok(conn),
-                    Err(error)
-                        if error.to_string().contains("database is locked")
-                            && attempt < ATTEMPTS =>
-                    {
+                    Err(error) if error.to_string().contains("database is locked") && attempt < ATTEMPTS => {
                         std::thread::sleep(std::time::Duration::from_millis(500));
                         continue;
                     }
                     Err(error) => return Err(error.into()),
                 }
             }
-            Err(error)
-                if error.to_string().contains("database is locked") && attempt < ATTEMPTS =>
-            {
+            Err(error) if error.to_string().contains("database is locked") && attempt < ATTEMPTS => {
                 std::thread::sleep(std::time::Duration::from_millis(500));
                 continue;
             }

@@ -24,7 +24,8 @@ impl FreighterAssetId {
     }
 }
 
-/// Resolve Freighter id from contract address, optional registry issuer, optional on-chain name.
+/// Resolve Freighter id from contract address, optional registry issuer,
+/// optional on-chain name.
 pub fn resolve_freighter_asset_id(
     contract: &str,
     symbol: Option<&str>,
@@ -71,9 +72,7 @@ mod tests {
 
     #[test]
     fn native_sac_maps_to_native() {
-        let id =
-            resolve_freighter_asset_id(NATIVE_SAC_MAINNET, Some("native"), Some("native"), None)
-                .expect("native");
+        let id = resolve_freighter_asset_id(NATIVE_SAC_MAINNET, Some("native"), Some("native"), None).expect("native");
         assert_eq!(id, FreighterAssetId::Native);
         assert_eq!(id.as_freighter_key(), "native");
     }

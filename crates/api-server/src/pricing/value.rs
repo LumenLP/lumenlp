@@ -11,7 +11,8 @@ pub fn amount_to_usd(human_amount: f64, usd_price: f64) -> Option<f64> {
 }
 
 /// Sum reserve_i * price_i. Returns None if any listed token lacks a price.
-/// Handlers currently bridge TVL via XLM until human reserves + decimals are available.
+/// Handlers currently bridge TVL via XLM until human reserves + decimals are
+/// available.
 #[allow(dead_code)]
 pub fn tvl_usd(tokens: &[String], human_reserves: &[f64], prices: &UsdPriceMap) -> Option<f64> {
     if tokens.len() != human_reserves.len() || tokens.is_empty() {
@@ -19,10 +20,7 @@ pub fn tvl_usd(tokens: &[String], human_reserves: &[f64], prices: &UsdPriceMap) 
     }
     let mut sum = 0.0;
     for (token, amt) in tokens.iter().zip(human_reserves.iter()) {
-        let price = prices
-            .get(token)
-            .copied()
-            .filter(|p| p.is_finite() && *p > 0.0)?;
+        let price = prices.get(token).copied().filter(|p| p.is_finite() && *p > 0.0)?;
         if !amt.is_finite() {
             return None;
         }
@@ -48,11 +46,7 @@ pub fn coverage_for(tokens: &[String], prices: &UsdPriceMap) -> QuoteCoverage {
     }
     let priced = tokens
         .iter()
-        .filter(|t| {
-            prices
-                .get(t.as_str())
-                .is_some_and(|p| p.is_finite() && *p > 0.0)
-        })
+        .filter(|t| prices.get(t.as_str()).is_some_and(|p| p.is_finite() && *p > 0.0))
         .count();
     if priced == 0 {
         QuoteCoverage::None
@@ -78,10 +72,7 @@ mod tests {
         prices.insert("A".into(), 1.0);
         assert!(tvl_usd(&["A".into(), "B".into()], &[10.0, 20.0], &prices).is_none());
         prices.insert("B".into(), 2.0);
-        assert!(
-            (tvl_usd(&["A".into(), "B".into()], &[10.0, 20.0], &prices).unwrap() - 50.0).abs()
-                < 1e-9
-        );
+        assert!((tvl_usd(&["A".into(), "B".into()], &[10.0, 20.0], &prices).unwrap() - 50.0).abs() < 1e-9);
     }
 
     #[test]
@@ -93,18 +84,9 @@ mod tests {
     fn coverage_levels() {
         let mut prices = UsdPriceMap::new();
         prices.insert("A".into(), 1.0);
-        assert_eq!(
-            coverage_for(&["A".into(), "B".into()], &prices),
-            QuoteCoverage::Partial
-        );
+        assert_eq!(coverage_for(&["A".into(), "B".into()], &prices), QuoteCoverage::Partial);
         prices.insert("B".into(), 1.0);
-        assert_eq!(
-            coverage_for(&["A".into(), "B".into()], &prices),
-            QuoteCoverage::Full
-        );
-        assert_eq!(
-            coverage_for(&["C".into()], &UsdPriceMap::new()),
-            QuoteCoverage::None
-        );
+        assert_eq!(coverage_for(&["A".into(), "B".into()], &prices), QuoteCoverage::Full);
+        assert_eq!(coverage_for(&["C".into()], &UsdPriceMap::new()), QuoteCoverage::None);
     }
 }

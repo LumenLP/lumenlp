@@ -45,19 +45,11 @@ pub fn validate_copy_op(
     now: i64,
     daily_used_xlm: f64,
 ) -> Result<(), PolicyReject> {
-    if session
-        .expires_at
-        .is_some_and(|expires_at| now >= expires_at)
-    {
+    if session.expires_at.is_some_and(|expires_at| now >= expires_at) {
         return Err(PolicyReject::Expired);
     }
 
-    if !session.allowed_pools.is_empty()
-        && !session
-            .allowed_pools
-            .iter()
-            .any(|pool| pool == pool_address)
-    {
+    if !session.allowed_pools.is_empty() && !session.allowed_pools.iter().any(|pool| pool == pool_address) {
         return Err(PolicyReject::PoolNotAllowed);
     }
 
@@ -73,8 +65,7 @@ pub fn validate_copy_op(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::index_db::CopySessionRow;
+    use {super::*, crate::index_db::CopySessionRow};
 
     fn session() -> CopySessionRow {
         CopySessionRow {

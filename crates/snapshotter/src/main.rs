@@ -8,20 +8,13 @@ use {
             pricing::price_book_from_pools,
             router::discover_pool_addresses,
         },
-        comet::{
-            discover_mainnet_pool_addresses as discover_comet_pool_addresses,
-            hydrate_pool as hydrate_comet_pool,
-        },
+        comet::{discover_mainnet_pool_addresses as discover_comet_pool_addresses, hydrate_pool as hydrate_comet_pool},
         db::Db,
         phoenix::{
-            discover_mainnet_pool_addresses as discover_phoenix_pool_addresses,
-            hydrate_pool as hydrate_phoenix_pool,
+            discover_mainnet_pool_addresses as discover_phoenix_pool_addresses, hydrate_pool as hydrate_phoenix_pool,
         },
         soroswap::{discover_mainnet_pool_addresses, hydrate_pool as hydrate_soroswap_pool},
-        sushi::{
-            discover_mainnet_pool_addresses as discover_sushi_pool_addresses,
-            hydrate_pool as hydrate_sushi_pool,
-        },
+        sushi::{discover_mainnet_pool_addresses as discover_sushi_pool_addresses, hydrate_pool as hydrate_sushi_pool},
         SorobanRpc, MAINNET_PASSPHRASE,
     },
     metrics::{fee_apr_24h, tvl_from_reserves},
@@ -31,9 +24,7 @@ use {
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
-        )
+        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .init();
 
     let rpc_url = std::env::var("RPC_URL").unwrap_or_else(|_| "http://127.0.0.1:8003".into());
@@ -48,32 +39,26 @@ async fn main() -> Result<()> {
 
     info!(%rpc_url, %db_path, top_n, "snapshotter starting");
 
-    let venues = std::env::var("SNAPSHOT_VENUES")
-        .unwrap_or_else(|_| "aquarius,soroswap,phoenix,sushi,comet".into());
+    let venues = std::env::var("SNAPSHOT_VENUES").unwrap_or_else(|_| "aquarius,soroswap,phoenix,sushi,comet".into());
     let mut pools = Vec::new();
-    for venue in venues
-        .split(',')
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
+    for venue in venues.split(',').map(str::trim).filter(|value| !value.is_empty()) {
         let discovered = match venue {
-            "aquarius" => discover_pool_addresses(&rpc).await?,
-            "soroswap" | "soroswap_amm" => discover_mainnet_pool_addresses(&rpc).await?,
-            "phoenix" => discover_phoenix_pool_addresses(&rpc).await?,
-            "sushi" | "sushi_v3" => discover_sushi_pool_addresses(&rpc).await?,
-            "comet" => discover_comet_pool_addresses(&rpc).await?,
+            "aquarius" => discover_pool_addresses(&rpc).await,
+            "soroswap" | "soroswap_amm" => discover_mainnet_pool_addresses(&rpc).await,
+            "phoenix" => discover_phoenix_pool_addresses(&rpc).await,
+            "sushi" | "sushi_v3" => discover_sushi_pool_addresses(&rpc).await,
+            "comet" => discover_comet_pool_addresses(&rpc).await,
             other => anyhow::bail!("unknown snapshot venue: {other}"),
         };
-        info!(
-            venue,
-            discovered = discovered.len(),
-            "venue pools discovered"
-        );
-        pools.extend(
-            discovered
-                .into_iter()
-                .map(|address| (venue.to_string(), address)),
-        );
+        let discovered = match discovered {
+            Ok(pools) => pools,
+            Err(error) => {
+                warn!(venue, %error, "venue discovery failed; continuing with remaining venues");
+                continue;
+            }
+        };
+        info!(venue, discovered = discovered.len(), "venue pools discovered");
+        pools.extend(discovered.into_iter().map(|address| (venue.to_string(), address)));
     }
     pools.sort_by(|a, b| a.1.cmp(&b.1));
     pools.dedup_by(|a, b| a.1 == b.1);
@@ -120,8 +105,7 @@ async fn main() -> Result<()> {
 
         let volume_24h = match db.previous_snapshot(&state.address)? {
             Some(prev) => {
-                let prev_reserves: Vec<u128> =
-                    serde_json::from_str(&prev.reserves_json).unwrap_or_default();
+                let prev_reserves: Vec<u128> = serde_json::from_str(&prev.reserves_json).unwrap_or_default();
                 let mut delta = 0.0f64;
                 for (i, r) in state.reserves.iter().enumerate() {
                     let p = prices.get(i).copied().unwrap_or(0.0);

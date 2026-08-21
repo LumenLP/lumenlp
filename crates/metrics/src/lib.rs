@@ -3,8 +3,10 @@
 pub mod clmm;
 pub mod pricing;
 
-pub use clmm::{cl_position_amounts, cl_ranges_amounts, tick_to_sqrt_price};
-pub use pricing::{build_xlm_price_book, value_xlm, PriceBook};
+pub use {
+    clmm::{cl_position_amounts, cl_ranges_amounts, tick_to_sqrt_price},
+    pricing::{build_xlm_price_book, value_xlm, PriceBook},
+};
 
 /// Annualized fee APR from 24h volume and TVL.
 /// `fee_bps` e.g. 30 = 0.3%.
@@ -17,12 +19,7 @@ pub fn fee_apr_24h(fee_bps: u32, volume_24h: f64, tvl: f64) -> f64 {
 }
 
 /// User's token amounts from CP/stable share ownership.
-pub fn cp_position_amounts(
-    user_shares: u128,
-    total_shares: u128,
-    reserve_a: u128,
-    reserve_b: u128,
-) -> (f64, f64) {
+pub fn cp_position_amounts(user_shares: u128, total_shares: u128, reserve_a: u128, reserve_b: u128) -> (f64, f64) {
     if total_shares == 0 || user_shares == 0 {
         return (0.0, 0.0);
     }
@@ -37,9 +34,9 @@ pub fn position_value(amount_a: f64, amount_b: f64, price_a: f64, price_b: f64) 
 
 /// Classic CP IL vs HODL: `v_lp / v_hodl - 1` (negative ⇒ underperformance).
 ///
-/// Given entry amounts `(a0, b0)` and current prices `(price_a, price_b)` in the
-/// same quote currency, a constant-product LP that never rebalanced holds value
-/// `2 * sqrt(a0 * b0 * price_a * price_b)`.
+/// Given entry amounts `(a0, b0)` and current prices `(price_a, price_b)` in
+/// the same quote currency, a constant-product LP that never rebalanced holds
+/// value `2 * sqrt(a0 * b0 * price_a * price_b)`.
 pub fn cp_il_vs_hodl(amount_a0: f64, amount_b0: f64, price_a: f64, price_b: f64) -> f64 {
     if amount_a0 <= 0.0 || amount_b0 <= 0.0 || price_a <= 0.0 || price_b <= 0.0 {
         return 0.0;

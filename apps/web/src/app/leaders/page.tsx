@@ -252,11 +252,11 @@ function LeadersInner() {
                   role="button"
                   tabIndex={0}
                   className={`leaders-board-card${active ? " is-active" : ""}`}
-                  onClick={() => void load(row.address)}
+                  onClick={() => router.push(`/leaders/view?address=${encodeURIComponent(row.address)}`)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" || e.key === " ") {
                       e.preventDefault();
-                      void load(row.address);
+                      router.push(`/leaders/view?address=${encodeURIComponent(row.address)}`);
                     }
                   }}
                 >

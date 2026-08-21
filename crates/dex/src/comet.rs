@@ -17,8 +17,7 @@ use {
 };
 
 pub const COMET_MAINNET_FACTORY: &str = "CA2LVIPU6HJHHPPD6EDDYJTV2QEUBPGOAVJ4VIYNTMFUCRM4LFK3TJKF";
-pub const COMET_MAINNET_SEED_POOL: &str =
-    "CAS3FL6TLZKDGGSISDBWGGPXT3NRR4DYTZD7YOD3HMYO6LTJUVGRVEAM";
+pub const COMET_MAINNET_SEED_POOL: &str = "CAS3FL6TLZKDGGSISDBWGGPXT3NRR4DYTZD7YOD3HMYO6LTJUVGRVEAM";
 
 pub fn scaffold() -> ScaffoldAdaptor {
     ScaffoldAdaptor {
@@ -43,8 +42,7 @@ pub async fn discover_mainnet_pool_addresses(rpc: &SorobanRpc) -> Result<Vec<Str
                 .map(str::to_owned),
         );
     }
-    let factory =
-        std::env::var("COMET_FACTORY").unwrap_or_else(|_| COMET_MAINNET_FACTORY.to_owned());
+    let factory = std::env::var("COMET_FACTORY").unwrap_or_else(|_| COMET_MAINNET_FACTORY.to_owned());
     let health = rpc.get_health().await?;
     let latest = health.latest_ledger;
     let window = std::env::var("COMET_FACTORY_EVENTS_LEDGER_WINDOW")
@@ -56,11 +54,10 @@ pub async fn discover_mainnet_pool_addresses(rpc: &SorobanRpc) -> Result<Vec<Str
         .get_events(start_ledger, Some(latest), &[factory.clone()], 10_000)
         .await?;
     for event in events {
-        let Some(encoded) = event.get("value").and_then(|value| {
-            value
-                .as_str()
-                .or_else(|| value.get("xdr").and_then(|xdr| xdr.as_str()))
-        }) else {
+        let Some(encoded) = event
+            .get("value")
+            .and_then(|value| value.as_str().or_else(|| value.get("xdr").and_then(|xdr| xdr.as_str())))
+        else {
             continue;
         };
         let Some(hash) = contract_hash_from_xdr(encoded) else {
@@ -69,8 +66,7 @@ pub async fn discover_mainnet_pool_addresses(rpc: &SorobanRpc) -> Result<Vec<Str
         let address = format!("{}", stellar_strkey::Contract(hash));
         let address_value = address_scval(&address)?;
         if matches!(
-            rpc.simulate_call(&factory, "is_c_pool", vec![address_value])
-                .await,
+            rpc.simulate_call(&factory, "is_c_pool", vec![address_value]).await,
             Ok(xdr::ScVal::Bool(true))
         ) {
             pools.push(address);
@@ -85,9 +81,9 @@ fn address_scval(address: &str) -> Result<xdr::ScVal> {
     let hash = stellar_strkey::Contract::from_string(address)
         .map_err(|error| anyhow!("invalid Comet pool address {address}: {error:?}"))?
         .0;
-    Ok(xdr::ScVal::Address(xdr::ScAddress::Contract(
-        xdr::ContractId(xdr::Hash(hash)),
-    )))
+    Ok(xdr::ScVal::Address(xdr::ScAddress::Contract(xdr::ContractId(
+        xdr::Hash(hash),
+    ))))
 }
 
 fn contract_hash_from_xdr(encoded: &str) -> Option<[u8; 32]> {
@@ -105,11 +101,7 @@ fn contract_hash_from_xdr(encoded: &str) -> Option<[u8; 32]> {
 
 pub async fn hydrate_pool(rpc: &SorobanRpc, pool_address: &str) -> Result<SharePoolState> {
     let tokens = match rpc.call_no_args(pool_address, "get_tokens").await? {
-        xdr::ScVal::Vec(Some(values)) => values
-            .0
-            .iter()
-            .map(scval_to_address)
-            .collect::<Result<Vec<_>>>()?,
+        xdr::ScVal::Vec(Some(values)) => values.0.iter().map(scval_to_address).collect::<Result<Vec<_>>>()?,
         _ => return Err(anyhow!("Comet get_tokens returned no vector")),
     };
     if tokens.len() < 2 {
@@ -124,6 +116,14 @@ pub async fn hydrate_pool(rpc: &SorobanRpc, pool_address: &str) -> Result<ShareP
         .and_then(nonnegative_integer)
         .unwrap_or(30_000);
     let fee_bps = (fee_raw / 1_000).min(u32::MAX as u128) as u32;
+    // Some Comet deployments do not expose a usable total supply yet. Keep
+    // pool analytics available and let position reads require a non-zero value.
+    let total_shares = rpc
+        .call_no_args(pool_address, "get_total_supply")
+        .await
+        .ok()
+        .and_then(|value| nonnegative_integer(&value))
+        .unwrap_or(0);
 
     let mut reserves = Vec::with_capacity(tokens.len());
     for token in &tokens {
@@ -132,10 +132,8 @@ pub async fn hydrate_pool(rpc: &SorobanRpc, pool_address: &str) -> Result<ShareP
             .simulate_call(pool_address, "get_balance", vec![token_value])
             .await
             .map_err(|error| anyhow!("Comet get_balance failed for {token}: {error}"))?;
-        reserves.push(
-            nonnegative_integer(&balance)
-                .ok_or_else(|| anyhow!("Comet returned invalid balance for {token}"))?,
-        );
+        reserves
+            .push(nonnegative_integer(&balance).ok_or_else(|| anyhow!("Comet returned invalid balance for {token}"))?);
     }
 
     Ok(SharePoolState {
@@ -144,8 +142,8 @@ pub async fn hydrate_pool(rpc: &SorobanRpc, pool_address: &str) -> Result<ShareP
         tokens,
         reserves,
         fee_bps,
-        total_shares: 0,
-        share_token: None,
+        total_shares,
+        share_token: Some(pool_address.to_owned()),
         amp: None,
     })
 }

@@ -23,8 +23,7 @@ pub const DEPOSIT_EVENT: &str = "deposit";
 pub const WITHDRAW_EVENT: &str = "withdraw";
 pub const SWAP_EVENT: &str = "swap";
 pub const SYNC_EVENT: &str = "sync";
-pub const SOROSWAP_MAINNET_FACTORY: &str =
-    "CA4HEQTL2WPEUYKYKCDOHCDNIV4QHNJ7EL4J4NQ6VADP7SYHVRYZ7AW2";
+pub const SOROSWAP_MAINNET_FACTORY: &str = "CA4HEQTL2WPEUYKYKCDOHCDNIV4QHNJ7EL4J4NQ6VADP7SYHVRYZ7AW2";
 
 pub fn scaffold() -> ScaffoldAdaptor {
     ScaffoldAdaptor {
@@ -38,10 +37,7 @@ pub fn adaptor() -> impl DexAdaptor {
     scaffold()
 }
 
-pub async fn discover_pool_addresses(
-    rpc: &SorobanRpc,
-    factory_address: &str,
-) -> Result<Vec<String>> {
+pub async fn discover_pool_addresses(rpc: &SorobanRpc, factory_address: &str) -> Result<Vec<String>> {
     let length = parse_u32(
         &rpc.call_no_args(factory_address, FACTORY_ALL_PAIRS_LENGTH_METHOD)
             .await?,
@@ -49,11 +45,7 @@ pub async fn discover_pool_addresses(
     let mut pools = Vec::with_capacity(length as usize);
     for index in 0..length {
         let value = rpc
-            .simulate_call(
-                factory_address,
-                FACTORY_ALL_PAIRS_METHOD,
-                vec![xdr::ScVal::U32(index)],
-            )
+            .simulate_call(factory_address, FACTORY_ALL_PAIRS_METHOD, vec![xdr::ScVal::U32(index)])
             .await?;
         pools.push(scval_to_address(&value)?);
     }
@@ -82,6 +74,14 @@ pub async fn hydrate_pool(rpc: &SorobanRpc, pool_address: &str) -> Result<ShareP
         rpc.call_no_args(pool_address, PAIR_TOKEN_1_METHOD),
         rpc.call_no_args(pool_address, PAIR_GET_RESERVES_METHOD),
     )?;
+    // Older Soroswap pairs may not expose the token interface. Keep the pool
+    // visible for analytics; share-based position reads simply stay disabled.
+    let total_shares = rpc
+        .call_no_args(pool_address, "total_supply")
+        .await
+        .ok()
+        .and_then(|value| scval_to_u128(&value).ok())
+        .unwrap_or(0);
     let reserves = parse_reserves(&reserves)?;
     Ok(SharePoolState {
         address: pool_address.to_owned(),
@@ -89,8 +89,9 @@ pub async fn hydrate_pool(rpc: &SorobanRpc, pool_address: &str) -> Result<ShareP
         tokens: vec![scval_to_address(&token_a)?, scval_to_address(&token_b)?],
         reserves: vec![reserves.0, reserves.1],
         fee_bps: 30,
-        total_shares: 0,
-        share_token: None,
+        total_shares,
+        // Soroswap Pair is also the LP token contract.
+        share_token: Some(pool_address.to_owned()),
         amp: None,
     })
 }
@@ -99,9 +100,7 @@ fn parse_u32(value: &xdr::ScVal) -> Result<u32> {
     match value {
         xdr::ScVal::U32(value) => Ok(*value),
         xdr::ScVal::I32(value) if *value >= 0 => Ok(*value as u32),
-        _ => {
-            u32::try_from(scval_to_u128(value)?).map_err(|_| anyhow!("Soroswap value exceeds u32"))
-        }
+        _ => u32::try_from(scval_to_u128(value)?).map_err(|_| anyhow!("Soroswap value exceeds u32")),
     }
 }
 
@@ -110,9 +109,7 @@ fn parse_reserves(value: &xdr::ScVal) -> Result<(u128, u128)> {
         return Err(anyhow!("Soroswap get_reserves returned no vector"));
     };
     if values.0.len() < 2 {
-        return Err(anyhow!(
-            "Soroswap get_reserves returned fewer than two values"
-        ));
+        return Err(anyhow!("Soroswap get_reserves returned fewer than two values"));
     }
     let reserve = |value: &xdr::ScVal| scval_to_u128(value);
     Ok((reserve(&values.0[0])?, reserve(&values.0[1])?))

@@ -56,8 +56,7 @@ impl SorobanRpc {
                 Err(e) => {
                     last_err = anyhow!("RPC request failed: {e}");
                     if attempt < MAX_ATTEMPTS {
-                        tokio::time::sleep(std::time::Duration::from_millis(200 * attempt as u64))
-                            .await;
+                        tokio::time::sleep(std::time::Duration::from_millis(200 * attempt as u64)).await;
                     }
                     continue;
                 }
@@ -67,8 +66,7 @@ impl SorobanRpc {
                 Err(e) => {
                     last_err = anyhow!("RPC response read failed: {e}");
                     if attempt < MAX_ATTEMPTS {
-                        tokio::time::sleep(std::time::Duration::from_millis(200 * attempt as u64))
-                            .await;
+                        tokio::time::sleep(std::time::Duration::from_millis(200 * attempt as u64)).await;
                     }
                     continue;
                 }
@@ -78,8 +76,7 @@ impl SorobanRpc {
                 Err(e) => {
                     last_err = anyhow!("RPC response parse failed: {e}");
                     if attempt < MAX_ATTEMPTS {
-                        tokio::time::sleep(std::time::Duration::from_millis(200 * attempt as u64))
-                            .await;
+                        tokio::time::sleep(std::time::Duration::from_millis(200 * attempt as u64)).await;
                     }
                 }
             }
@@ -101,9 +98,7 @@ impl SorobanRpc {
 
         let invoke_args = xdr::InvokeContractArgs {
             contract_address: xdr::ScAddress::Contract(xdr::ContractId(xdr::Hash(contract_hash))),
-            function_name: function_name
-                .try_into()
-                .map_err(|_| anyhow!("Invalid function name"))?,
+            function_name: function_name.try_into().map_err(|_| anyhow!("Invalid function name"))?,
             args: args.try_into().map_err(|_| anyhow!("Too many args"))?,
         };
 
@@ -162,8 +157,7 @@ impl SorobanRpc {
             .get("xdr")
             .and_then(|x| x.as_str())
             .ok_or_else(|| anyhow!("No xdr in result"))?;
-        xdr::ScVal::from_xdr_base64(xdr_b64, Limits::none())
-            .map_err(|e| anyhow!("ScVal decode error: {e:?}"))
+        xdr::ScVal::from_xdr_base64(xdr_b64, Limits::none()).map_err(|e| anyhow!("ScVal decode error: {e:?}"))
     }
 
     pub async fn call_no_args(&self, contract: &str, function: &str) -> Result<xdr::ScVal> {
@@ -193,9 +187,9 @@ impl SorobanRpc {
         })
     }
 
-    /// Fetch contract events in `[start_ledger, end_ledger)` (end exclusive, per RPC).
-    /// Follows `pagination.cursor` until the page is exhausted so hot pools are not truncated
-    /// at the default/page limit.
+    /// Fetch contract events in `[start_ledger, end_ledger)` (end exclusive,
+    /// per RPC). Follows `pagination.cursor` until the page is exhausted so
+    /// hot pools are not truncated at the default/page limit.
     pub async fn get_events(
         &self,
         start_ledger: u32,
@@ -249,16 +243,11 @@ impl SorobanRpc {
                 .and_then(|v| v.as_array())
                 .cloned()
                 .unwrap_or_default();
-            let next_cursor = result
-                .get("cursor")
-                .and_then(|v| v.as_str())
-                .map(str::to_owned);
+            let next_cursor = result.get("cursor").and_then(|v| v.as_str()).map(str::to_owned);
             let page_len = page.len();
             all.extend(page);
-            let exhausted = page_len == 0
-                || page_len < limit as usize
-                || next_cursor.is_none()
-                || all.len() >= MAX_EVENTS;
+            let exhausted =
+                page_len == 0 || page_len < limit as usize || next_cursor.is_none() || all.len() >= MAX_EVENTS;
             if exhausted {
                 break;
             }
@@ -330,10 +319,7 @@ pub fn scval_to_u128(val: &xdr::ScVal) -> Result<u128> {
             let v = ((parts.hi as i128) << 64) | (parts.lo as u64 as i128);
             u128::try_from(v).map_err(|_| anyhow!("negative i128"))
         }
-        _ => Err(anyhow!(
-            "Expected U128, got {:?}",
-            std::mem::discriminant(val)
-        )),
+        _ => Err(anyhow!("Expected U128, got {:?}", std::mem::discriminant(val))),
     }
 }
 
@@ -357,9 +343,9 @@ pub fn scval_to_address(val: &xdr::ScVal) -> Result<String> {
         xdr::ScVal::Address(xdr::ScAddress::Contract(xdr::ContractId(xdr::Hash(hash)))) => {
             Ok(format!("{}", stellar_strkey::Contract(*hash)))
         }
-        xdr::ScVal::Address(xdr::ScAddress::Account(xdr::AccountId(
-            xdr::PublicKey::PublicKeyTypeEd25519(xdr::Uint256(key)),
-        ))) => Ok(format!("{}", stellar_strkey::ed25519::PublicKey(*key))),
+        xdr::ScVal::Address(xdr::ScAddress::Account(xdr::AccountId(xdr::PublicKey::PublicKeyTypeEd25519(
+            xdr::Uint256(key),
+        )))) => Ok(format!("{}", stellar_strkey::ed25519::PublicKey(*key))),
         _ => Err(anyhow!("Expected Address")),
     }
 }
@@ -373,11 +359,11 @@ pub fn scval_to_symbol_string(val: &xdr::ScVal) -> Result<String> {
 }
 
 pub fn account_address_scval(g_address: &str) -> Result<xdr::ScVal> {
-    let pk = stellar_strkey::ed25519::PublicKey::from_string(g_address)
-        .map_err(|e| anyhow!("Invalid G-address: {e:?}"))?;
-    Ok(xdr::ScVal::Address(xdr::ScAddress::Account(
-        xdr::AccountId(xdr::PublicKey::PublicKeyTypeEd25519(xdr::Uint256(pk.0))),
-    )))
+    let pk =
+        stellar_strkey::ed25519::PublicKey::from_string(g_address).map_err(|e| anyhow!("Invalid G-address: {e:?}"))?;
+    Ok(xdr::ScVal::Address(xdr::ScAddress::Account(xdr::AccountId(
+        xdr::PublicKey::PublicKeyTypeEd25519(xdr::Uint256(pk.0)),
+    ))))
 }
 
 pub fn parse_address_vec(val: &xdr::ScVal) -> Option<Vec<String>> {
@@ -462,13 +448,10 @@ fn source_account_from_envelope_xdr(xdr_b64: &str) -> Option<String> {
 
 fn muxed_account_to_g(account: &xdr::MuxedAccount) -> Option<String> {
     match account {
-        xdr::MuxedAccount::Ed25519(key) => {
-            Some(format!("{}", stellar_strkey::ed25519::PublicKey(key.0)))
+        xdr::MuxedAccount::Ed25519(key) => Some(format!("{}", stellar_strkey::ed25519::PublicKey(key.0))),
+        xdr::MuxedAccount::MuxedEd25519(muxed) => {
+            Some(format!("{}", stellar_strkey::ed25519::PublicKey(muxed.ed25519.0)))
         }
-        xdr::MuxedAccount::MuxedEd25519(muxed) => Some(format!(
-            "{}",
-            stellar_strkey::ed25519::PublicKey(muxed.ed25519.0)
-        )),
     }
 }
 
@@ -486,8 +469,7 @@ pub fn parse_u128_vec(val: &xdr::ScVal) -> Option<Vec<u128>> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use serde_json::json;
+    use {super::*, serde_json::json};
 
     /// Trimmed from mainnet `getTransaction` for tx
     /// `9993ec7870cec37db262eea109696cddb87526b6ebd3858f03a46ef5ab9b2972`
@@ -510,10 +492,7 @@ mod tests {
         let result: Value = serde_json::from_str(MAINNET_GET_TX_FIXTURE).unwrap();
         let account = source_account_from_get_transaction(&result).unwrap();
         assert!(account.starts_with('G'));
-        assert_eq!(
-            account,
-            "GBS3LFM2PIMRGZUC65G2GNMSWTQIX3FYSKB7ZF62ZLPVLG7MDXFUHQ64"
-        );
+        assert_eq!(account, "GBS3LFM2PIMRGZUC65G2GNMSWTQIX3FYSKB7ZF62ZLPVLG7MDXFUHQ64");
     }
 
     #[test]
@@ -564,9 +543,6 @@ mod tests {
         let result = json!({ "envelopeXdr": MAINNET_ENVELOPE_XDR });
         let account = source_account_from_get_transaction(&result).unwrap();
         assert!(account.starts_with('G'));
-        assert_eq!(
-            account,
-            "GBS3LFM2PIMRGZUC65G2GNMSWTQIX3FYSKB7ZF62ZLPVLG7MDXFUHQ64"
-        );
+        assert_eq!(account, "GBS3LFM2PIMRGZUC65G2GNMSWTQIX3FYSKB7ZF62ZLPVLG7MDXFUHQ64");
     }
 }

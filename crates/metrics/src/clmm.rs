@@ -11,12 +11,7 @@ pub fn tick_to_sqrt_price(tick: i32) -> f64 {
 /// - below range: all token0
 /// - above range: all token1
 /// - in range: mix of both
-pub fn cl_position_amounts(
-    liquidity: u128,
-    tick_lower: i32,
-    tick_upper: i32,
-    tick_current: i32,
-) -> (f64, f64) {
+pub fn cl_position_amounts(liquidity: u128, tick_lower: i32, tick_upper: i32, tick_current: i32) -> (f64, f64) {
     if liquidity == 0 || tick_lower >= tick_upper {
         return (0.0, 0.0);
     }

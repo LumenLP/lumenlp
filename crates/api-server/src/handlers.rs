@@ -1,14 +1,18 @@
 use {
-    crate::copy_lp::build_scaled_op_payload,
-    crate::copy_policy::{coefficient_ppm, validate_copy_op},
-    crate::index_db::{
-        CopyOpRow, CopySessionRow, IndexDb, IndexerStatus, PoolActivityRow, PoolActivitySummaryRow,
-        PoolEventRow, PoolRollupRow,
+    crate::{
+        copy_lp::build_scaled_op_payload,
+        copy_policy::{coefficient_ppm, validate_copy_op},
+        index_db::{
+            CopyOpRow, CopySessionRow, IndexDb, IndexerStatus, PoolActivityRow, PoolActivitySummaryRow, PoolEventRow,
+            PoolRollupRow,
+        },
+        pricing::{
+            service::{PriceService, QuoteMeta},
+            value::{coverage_for, xlm_quote_to_usd, QuoteCoverage, UsdPriceMap},
+        },
+        recorder::canonical_event,
+        token_registry,
     },
-    crate::pricing::service::{PriceService, QuoteMeta},
-    crate::pricing::value::{coverage_for, xlm_quote_to_usd, QuoteCoverage, UsdPriceMap},
-    crate::recorder::canonical_event,
-    crate::token_registry,
     axum::{
         extract::{Path, Query, State},
         http::{header::CACHE_CONTROL, HeaderValue, StatusCode},
@@ -18,8 +22,8 @@ use {
     },
     chrono::{DateTime, Duration, Utc},
     dex::{
-        aquarius::positions::positions_for_address,
         db::Db,
+        positions::positions_for_venue,
         rpc::scval_to_symbol_string,
         support_matrix,
         sushi::{positions_for_candidates, SushiPositionRangeCandidate},
@@ -70,18 +74,20 @@ pub fn router() -> Router<AppState> {
         .route("/v1/positions/summary", get(positions_summary))
         .route("/v1/lp/profile", get(lp_profile))
         .route("/v1/lp/leaders", get(lp_leaders))
-        .route(
-            "/v1/copy/sessions",
-            post(create_copy_session).get(list_copy_sessions),
-        )
+        .route("/v1/copy/sessions", post(create_copy_session).get(list_copy_sessions))
         .route("/v1/copy/sessions/{id}", patch(update_copy_session_handler))
         .route("/v1/copy/sessions/{id}/ops", get(list_copy_ops))
         .route("/v1/copy/ops/{id}", get(get_copy_op))
         .route("/v1/copy/ops/{id}/status", post(set_copy_op_status))
+        .route("/v1/copy/recorder/status", get(recorder_status))
 }
 
 const WINDOWS: [(&str, i64); 4] = [("5m", 5), ("1h", 60), ("6h", 360), ("24h", 1_440)];
 const SCORE_TVL_FLOOR: f64 = 10.0;
+// Rollups are generated from bucketed snapshots. A short grace period covers
+// bucket alignment and the indexer's polling interval, but prevents an old
+// rollup from being presented as a current activity window.
+const ROLLUP_FRESHNESS_GRACE_SECS: i64 = 5 * 60;
 
 fn cadence_sort_value(value: Option<f64>) -> f64 {
     match value {
@@ -122,28 +128,11 @@ fn pool_score_json(
     let fee_tvl = fee
         .filter(|_| has_liquidity)
         .map(|value| value / liquidity)
-        .unwrap_or_else(|| {
-            if tvl >= SCORE_TVL_FLOOR {
-                reported_fee_tvl
-            } else {
-                0.0
-            }
-        });
-    let volume_efficiency = if has_liquidity {
-        volume / liquidity
-    } else {
-        0.0
-    };
-    let net_liq = net_liq_override.unwrap_or_else(|| {
-        activity_summary
-            .map(|s| s.net_liquidity_delta_quote_24h)
-            .unwrap_or(0.0)
-    });
-    let net_liq_ratio = if has_liquidity {
-        net_liq / liquidity
-    } else {
-        0.0
-    };
+        .unwrap_or_else(|| if tvl >= SCORE_TVL_FLOOR { reported_fee_tvl } else { 0.0 });
+    let volume_efficiency = if has_liquidity { volume / liquidity } else { 0.0 };
+    let net_liq =
+        net_liq_override.unwrap_or_else(|| activity_summary.map(|s| s.net_liquidity_delta_quote_24h).unwrap_or(0.0));
+    let net_liq_ratio = if has_liquidity { net_liq / liquidity } else { 0.0 };
     let cadence = if has_liquidity {
         cadence_sort_value(activity_summary.and_then(|s| s.avg_update_interval_secs_24h))
     } else {
@@ -213,10 +202,11 @@ fn coverage_label(tokens: &[String], prices: &UsdPriceMap) -> String {
 
 /// Bridge XLM quote amounts → USD for window rollups.
 ///
-/// Snapshot `reserves` are raw u128 base units and `list_pools_with_latest` does not
-/// expose them; token decimals are also unavailable here. Multiplying raw reserves by
-/// Freighter human-unit prices would be wrong, so v1 always bridges TVL via `xlm_usd`.
-/// True reserve×price can wait until decimals are wired.
+/// Snapshot `reserves` are raw u128 base units and `list_pools_with_latest`
+/// does not expose them; token decimals are also unavailable here. Multiplying
+/// raw reserves by Freighter human-unit prices would be wrong, so v1 always
+/// bridges TVL via `xlm_usd`. True reserve×price can wait until decimals are
+/// wired.
 fn bridge_tvl_usd(latest_tvl: f64, xlm_usd: Option<f64>) -> Option<f64> {
     if !(latest_tvl.is_finite() && latest_tvl > 0.0) {
         return None;
@@ -253,7 +243,8 @@ fn reserves_quote_xlm_from_events(events: &[PoolEventRow]) -> Option<f64> {
     latest_reserves_quote_xlm_from_events(events).map(|(_, quote)| quote)
 }
 
-/// When rollups/snapshots are empty but indexer has activity, seed the 24h window.
+/// When rollups/snapshots are empty but indexer has activity, seed the 24h
+/// window.
 fn fill_window_from_activity(metrics: &mut Value, summary: Option<&PoolActivitySummaryRow>) {
     let Some(summary) = summary else {
         return;
@@ -279,11 +270,7 @@ fn fill_window_from_activity(metrics: &mut Value, summary: Option<&PoolActivityS
         w.insert("volume".into(), json!(summary.volume_quote_24h));
         w.insert(
             "samples".into(),
-            json!(w
-                .get("samples")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0)
-                .max(1)),
+            json!(w.get("samples").and_then(|v| v.as_u64()).unwrap_or(0).max(1)),
         );
     }
     if fee <= 0.0 && summary.fee_quote_24h > 0.0 {
@@ -302,6 +289,31 @@ fn fill_window_from_activity(metrics: &mut Value, summary: Option<&PoolActivityS
     }
 }
 
+/// Fee/TVL is presented against the pool's current TVL. Rollups retain
+/// average TVL for historical context, but using it for the headline ratio
+/// can make a recently refilled pool look artificially profitable.
+fn recompute_fee_tvl_with_current_tvl(metrics: &mut Value, current_tvl: f64) {
+    let ratio = if current_tvl.is_finite() && current_tvl > 0.0 {
+        Some(current_tvl)
+    } else {
+        None
+    };
+    let Some(windows) = metrics.as_object_mut() else {
+        return;
+    };
+    for window in windows.values_mut() {
+        let Some(window) = window.as_object_mut() else {
+            continue;
+        };
+        let fee = window.get("fee").and_then(Value::as_f64).unwrap_or(0.0);
+        let fee_tvl = ratio
+            .filter(|_| fee.is_finite() && fee >= 0.0)
+            .map(|tvl| fee / tvl)
+            .unwrap_or(0.0);
+        window.insert("fee_tvl".into(), json!(fee_tvl));
+    }
+}
+
 fn enrich_window_metrics_usd(metrics: &mut Value, xlm_usd: Option<f64>) {
     let Some(xlm_usd) = xlm_usd else {
         return;
@@ -314,10 +326,7 @@ fn enrich_window_metrics_usd(metrics: &mut Value, xlm_usd: Option<f64>) {
             continue;
         };
         if let Some(volume) = w.get("volume").and_then(|v| v.as_f64()) {
-            w.insert(
-                "volume_usd".into(),
-                json!(xlm_quote_to_usd(volume, xlm_usd)),
-            );
+            w.insert("volume_usd".into(), json!(xlm_quote_to_usd(volume, xlm_usd)));
         }
         if let Some(fee) = w.get("fee").and_then(|v| v.as_f64()) {
             w.insert("fee_usd".into(), json!(xlm_quote_to_usd(fee, xlm_usd)));
@@ -337,10 +346,7 @@ fn enrich_activity_summary_usd(summary: &mut Value, xlm_usd: Option<f64>) {
         ("fee_quote_24h", "fee_usd_24h"),
         ("deposit_quote_24h", "deposit_usd_24h"),
         ("withdraw_quote_24h", "withdraw_usd_24h"),
-        (
-            "net_liquidity_delta_quote_24h",
-            "net_liquidity_delta_usd_24h",
-        ),
+        ("net_liquidity_delta_quote_24h", "net_liquidity_delta_usd_24h"),
         ("claim_quote_24h", "claim_usd_24h"),
     ] {
         if let Some(xlm) = obj.get(src).and_then(|v| v.as_f64()) {
@@ -388,9 +394,8 @@ fn score_with_usd_preference(
     // scoring consistent instead of falling back based on global coverage.
     let use_usd = tvl_usd.is_some() && volume_usd.is_some();
     if use_usd {
-        let net_liq_usd = activity_summary.and_then(|s| {
-            xlm_usd.and_then(|px| xlm_quote_to_usd(s.net_liquidity_delta_quote_24h, px))
-        });
+        let net_liq_usd =
+            activity_summary.and_then(|s| xlm_usd.and_then(|px| xlm_quote_to_usd(s.net_liquidity_delta_quote_24h, px)));
         let fee_usd = metrics
             .get("24h")
             .and_then(|v| v.get("fee_usd"))
@@ -408,11 +413,7 @@ fn score_with_usd_preference(
     }
 }
 
-fn build_window_metrics(
-    latest_tvl: f64,
-    fee_bps: u32,
-    rows: &[dex::types::PoolSnapshotRow],
-) -> serde_json::Value {
+fn build_window_metrics(latest_tvl: f64, fee_bps: u32, rows: &[dex::types::PoolSnapshotRow]) -> serde_json::Value {
     let now = Utc::now();
     let fee_rate = f64::from(fee_bps) / 10_000.0;
     let mut out = serde_json::Map::new();
@@ -458,9 +459,16 @@ fn build_window_metrics(
     serde_json::Value::Object(out)
 }
 
-fn rollups_to_window_metrics(rollups: &HashMap<String, PoolRollupRow>) -> serde_json::Value {
+fn rollups_to_window_metrics(rollups: &HashMap<String, PoolRollupRow>, now_ts: i64) -> serde_json::Value {
     let mut out = serde_json::Map::new();
     for row in rollups.values() {
+        let Some((_, window_minutes)) = WINDOWS.iter().find(|(label, _)| *label == row.window) else {
+            continue;
+        };
+        let window_secs = window_minutes * 60;
+        if row.as_of_ts < now_ts - window_secs - ROLLUP_FRESHNESS_GRACE_SECS {
+            continue;
+        }
         out.insert(
             row.window.clone(),
             json!({
@@ -532,8 +540,27 @@ async fn health() -> impl IntoResponse {
     Json(json!({ "ok": true }))
 }
 
-/// Multi-DEX support matrix (`DexAdaptor` registry). Aquarius supports live Copy LP;
-/// other venues expose read/indexed analytics while execution remains fail-closed.
+async fn recorder_status(State(state): State<AppState>) -> impl IntoResponse {
+    let index_db = state.index_db.lock().unwrap();
+    match index_db.recorder_outbox_status() {
+        Ok(status) => Json(json!({
+            "pending": status.pending,
+            "submitted": status.submitted,
+            "failed": status.failed,
+            "oldest_pending_at": status.oldest_pending_at,
+        }))
+        .into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": error.to_string(), "code": "db_error" })),
+        )
+            .into_response(),
+    }
+}
+
+/// Multi-DEX support matrix (`DexAdaptor` registry). Aquarius supports live
+/// Copy LP; other venues expose read/indexed analytics while execution remains
+/// fail-closed.
 async fn list_venues() -> impl IntoResponse {
     let venues = support_matrix()
         .into_iter()
@@ -578,21 +605,47 @@ async fn indexer_status(State(state): State<AppState>) -> impl IntoResponse {
     }
 }
 
-async fn list_pools(State(state): State<AppState>) -> impl IntoResponse {
-    const POOL_LIST_CACHE_SECS: u64 = 30;
+#[derive(Debug, Default, Deserialize)]
+struct PoolListQuery {
+    page: Option<usize>,
+    limit: Option<usize>,
+}
+
+fn paginate_pool_body(mut body: Value, query: &PoolListQuery) -> Value {
+    let Some(pools) = body.get_mut("pools").and_then(Value::as_array_mut) else {
+        return body;
+    };
+    let total = pools.len();
+    let limit = query.limit.unwrap_or(total.max(1)).clamp(1, 100);
+    let page = query.page.unwrap_or(1).max(1);
+    let start = page.saturating_sub(1).saturating_mul(limit).min(total);
+    let end = start.saturating_add(limit).min(total);
+    let page_rows = pools[start..end].to_vec();
+    *pools = page_rows;
+    body["pagination"] = json!({
+        "page": page,
+        "limit": limit,
+        "total": total,
+        "pages": total.div_ceil(limit),
+    });
+    body
+}
+
+async fn list_pools(State(state): State<AppState>, Query(query): Query<PoolListQuery>) -> impl IntoResponse {
+    const POOL_LIST_CACHE_SECS: u64 = 60;
+    // Keep a shared Redis copy beyond the local refresh interval so a request
+    // does not synchronously rebuild the full multi-DEX ranking catalogue.
+    const REDIS_POOL_LIST_CACHE_SECS: u64 = 300;
     const REDIS_POOL_LIST_KEY: &str = "lumenlp:pools:v1";
     if let Some(client) = state.redis.clone() {
         if let Ok(mut connection) = client.get_multiplexed_async_connection().await {
-            let cached: redis::RedisResult<Option<String>> =
-                connection.get(REDIS_POOL_LIST_KEY).await;
+            let cached: redis::RedisResult<Option<String>> = connection.get(REDIS_POOL_LIST_KEY).await;
             if let Ok(Some(serialized)) = cached {
                 if let Ok(body) = serde_json::from_str::<Value>(&serialized) {
-                    let mut response = Json(body).into_response();
+                    let mut response = Json(paginate_pool_body(body, &query)).into_response();
                     response.headers_mut().insert(
                         CACHE_CONTROL,
-                        HeaderValue::from_static(
-                            "public, max-age=30, s-maxage=30, stale-while-revalidate=60",
-                        ),
+                        HeaderValue::from_static("public, max-age=60, s-maxage=60, stale-while-revalidate=120"),
                     );
                     return response;
                 }
@@ -605,10 +658,10 @@ async fn list_pools(State(state): State<AppState>) -> impl IntoResponse {
             .as_ref()
             .and_then(|(expires_at, body)| (*expires_at > StdInstant::now()).then(|| body.clone()))
     } {
-        let mut response = Json(body).into_response();
+        let mut response = Json(paginate_pool_body(body, &query)).into_response();
         response.headers_mut().insert(
             CACHE_CONTROL,
-            HeaderValue::from_static("public, max-age=30, s-maxage=30, stale-while-revalidate=60"),
+            HeaderValue::from_static("public, max-age=60, s-maxage=60, stale-while-revalidate=120"),
         );
         return response;
     }
@@ -641,10 +694,7 @@ async fn list_pools(State(state): State<AppState>) -> impl IntoResponse {
         (Ok(mut rows), Ok(stats), Ok(window_rows)) => {
             let mut grouped: HashMap<String, Vec<dex::types::PoolSnapshotRow>> = HashMap::new();
             for row in window_rows {
-                grouped
-                    .entry(row.pool_address.clone())
-                    .or_default()
-                    .push(row);
+                grouped.entry(row.pool_address.clone()).or_default().push(row);
             }
             let token_ids: HashSet<String> = rows
                 .iter()
@@ -693,25 +743,25 @@ async fn list_pools(State(state): State<AppState>) -> impl IntoResponse {
                     obj.insert("tvl_source".into(), json!("event_reserves"));
                 }
                 let fee_bps = obj.get("fee_bps").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                let now_ts = Utc::now().timestamp();
                 let mut metrics = rollups_map
                     .get(&address)
-                    .map(rollups_to_window_metrics)
+                    .map(|rows| rollups_to_window_metrics(rows, now_ts))
+                    .filter(|value| value.as_object().is_some_and(|object| !object.is_empty()))
                     .unwrap_or_else(|| {
                         grouped
                             .get(&address)
                             .map(|rows| build_window_metrics(latest_tvl, fee_bps, rows))
                             .unwrap_or_else(|| build_window_metrics(latest_tvl, fee_bps, &[]))
                     });
+                // Snapshot-derived fallback metrics do not contain swap counts;
+                // restore the 24h count from the indexed activity summary.
+                fill_window_from_activity(&mut metrics, activity_summary_map.get(&address));
+                recompute_fee_tvl_with_current_tvl(&mut metrics, latest_tvl);
                 enrich_window_metrics_usd(&mut metrics, xlm_usd);
                 let tvl_usd = bridge_tvl_usd(latest_tvl, xlm_usd);
                 let activity_summary = activity_summary_map.get(&address);
-                let score_json = score_with_usd_preference(
-                    latest_tvl,
-                    tvl_usd,
-                    &metrics,
-                    activity_summary,
-                    xlm_usd,
-                );
+                let score_json = score_with_usd_preference(latest_tvl, tvl_usd, &metrics, activity_summary, xlm_usd);
                 obj.insert("tvl_usd".into(), json!(tvl_usd));
                 obj.insert("window_metrics".into(), metrics);
                 if let Some(activity) = activity_map.get(&address) {
@@ -762,21 +812,18 @@ async fn list_pools(State(state): State<AppState>) -> impl IntoResponse {
             if let Some(client) = state.redis.clone() {
                 if let Ok(serialized) = serde_json::to_string(&body) {
                     tokio::spawn(async move {
-                        if let Ok(mut connection) = client.get_multiplexed_async_connection().await
-                        {
+                        if let Ok(mut connection) = client.get_multiplexed_async_connection().await {
                             let _: redis::RedisResult<()> = connection
-                                .set_ex(REDIS_POOL_LIST_KEY, serialized, POOL_LIST_CACHE_SECS)
+                                .set_ex(REDIS_POOL_LIST_KEY, serialized, REDIS_POOL_LIST_CACHE_SECS)
                                 .await;
                         }
                     });
                 }
             }
-            let mut response = Json(body).into_response();
+            let mut response = Json(paginate_pool_body(body, &query)).into_response();
             response.headers_mut().insert(
                 CACHE_CONTROL,
-                HeaderValue::from_static(
-                    "public, max-age=30, s-maxage=30, stale-while-revalidate=60",
-                ),
+                HeaderValue::from_static("public, max-age=60, s-maxage=60, stale-while-revalidate=120"),
             );
             response
         }
@@ -800,13 +847,10 @@ async fn list_pools(State(state): State<AppState>) -> impl IntoResponse {
 
 /// Build the expensive pool ranking cache outside the first user request.
 pub async fn warm_pool_list_cache(state: AppState) {
-    let _ = list_pools(State(state)).await;
+    let _ = list_pools(State(state), Query(PoolListQuery::default())).await;
 }
 
-async fn pool_detail(
-    State(state): State<AppState>,
-    Path(address): Path<String>,
-) -> impl IntoResponse {
+async fn pool_detail(State(state): State<AppState>, Path(address): Path<String>) -> impl IntoResponse {
     let (meta, history, stats) = {
         let db = state.db.lock().unwrap();
         (
@@ -863,12 +907,7 @@ async fn pool_detail(
     let fee_bps = meta.as_ref().map(|m| m.2 as u32).unwrap_or(0);
     let mut latest_tvl = latest.map(|row| row.tvl).unwrap_or(0.0);
     let mut tvl_source = if latest_tvl > 0.0 { "snapshot" } else { "none" };
-    if let Ok(events) = state
-        .index_db
-        .lock()
-        .unwrap()
-        .recent_pool_events(&address, 40)
-    {
+    if let Ok(events) = state.index_db.lock().unwrap().recent_pool_events(&address, 40) {
         if let Some((event_ts, reserves_xlm)) = latest_reserves_quote_xlm_from_events(&events) {
             // A pool can receive reserve updates between snapshotter runs. Do not
             // serve an older snapshot as the current TVL in that case.
@@ -878,17 +917,20 @@ async fn pool_detail(
             }
         }
     }
+    let now_ts = Utc::now().timestamp();
     let mut window_metrics = if rollups.is_empty() {
         build_window_metrics(latest_tvl, fee_bps, &history)
     } else {
-        rollups_to_window_metrics(&rollups)
+        let fresh = rollups_to_window_metrics(&rollups, now_ts);
+        if fresh.as_object().is_some_and(|object| !object.is_empty()) {
+            fresh
+        } else {
+            build_window_metrics(latest_tvl, fee_bps, &history)
+        }
     };
     fill_window_from_activity(&mut window_metrics, activity_summary.as_ref());
     // Keep avg_tvl / fee_tvl coherent when we only have event-derived TVL.
-    if let Some(w24) = window_metrics
-        .get_mut("24h")
-        .and_then(|v| v.as_object_mut())
-    {
+    if let Some(w24) = window_metrics.get_mut("24h").and_then(|v| v.as_object_mut()) {
         let avg = w24.get("avg_tvl").and_then(|v| v.as_f64()).unwrap_or(0.0);
         if avg <= 0.0 && latest_tvl > 0.0 {
             w24.insert("avg_tvl".into(), json!(latest_tvl));
@@ -896,15 +938,11 @@ async fn pool_detail(
             w24.insert("fee_tvl".into(), json!(fee / latest_tvl));
         }
     }
+    recompute_fee_tvl_with_current_tvl(&mut window_metrics, latest_tvl);
     enrich_window_metrics_usd(&mut window_metrics, xlm_usd);
     let tvl_usd = bridge_tvl_usd(latest_tvl, xlm_usd);
-    let score_json = score_with_usd_preference(
-        latest_tvl,
-        tvl_usd,
-        &window_metrics,
-        activity_summary.as_ref(),
-        xlm_usd,
-    );
+    let score_json =
+        score_with_usd_preference(latest_tvl, tvl_usd, &window_metrics, activity_summary.as_ref(), xlm_usd);
     let activity_summary_value = activity_summary.as_ref().map(|summary| {
         let mut summary_json = activity_summary_json(summary);
         enrich_activity_summary_usd(&mut summary_json, xlm_usd);
@@ -978,6 +1016,19 @@ async fn resolve_token_meta_map(
             };
             cache.lock().unwrap().insert(token.clone(), meta.clone());
             out.insert(token, meta);
+        } else if token_registry::find_token(&token).is_none() {
+            // Unknown assets do not need an RPC round trip just to render a
+            // compact label. They can be hydrated later by the metadata job.
+            let meta = TokenMeta {
+                address: token.clone(),
+                symbol: short_token_label(&token),
+                name: None,
+                issuer: None,
+                domain: None,
+                icon: None,
+            };
+            cache.lock().unwrap().insert(token.clone(), meta.clone());
+            out.insert(token, meta);
         } else {
             unresolved.push(token);
         }
@@ -1017,19 +1068,20 @@ async fn resolve_token_meta_map(
 }
 
 async fn resolve_one_token_meta(rpc: &SorobanRpc, token: &str) -> TokenMeta {
+    const TOKEN_METADATA_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(800);
     let curated = token_registry::find_token(token);
-    let symbol = rpc
-        .call_no_args(token, "symbol")
+    let symbol = tokio::time::timeout(TOKEN_METADATA_TIMEOUT, rpc.call_no_args(token, "symbol"))
         .await
         .ok()
+        .and_then(Result::ok)
         .and_then(|val| scval_to_symbol_string(&val).ok())
         .filter(|v| !v.trim().is_empty())
         .or_else(|| curated.map(|entry| entry.symbol.to_string()))
         .unwrap_or_else(|| short_token_label(token));
-    let name = rpc
-        .call_no_args(token, "name")
+    let name = tokio::time::timeout(TOKEN_METADATA_TIMEOUT, rpc.call_no_args(token, "name"))
         .await
         .ok()
+        .and_then(Result::ok)
         .and_then(|val| scval_to_symbol_string(&val).ok())
         .filter(|v| !v.trim().is_empty())
         .or_else(|| curated.map(|entry| entry.name.to_string()));
@@ -1158,10 +1210,7 @@ struct LeadersBoardQuery {
 }
 
 /// Ranked Aquarius LP actors by claimed fees / deposits (Copy scouting board).
-async fn lp_leaders(
-    State(state): State<AppState>,
-    Query(q): Query<LeadersBoardQuery>,
-) -> impl IntoResponse {
+async fn lp_leaders(State(state): State<AppState>, Query(q): Query<LeadersBoardQuery>) -> impl IntoResponse {
     let limit = q.limit.unwrap_or(25).clamp(1, 100);
     let window_days = q.window_days.unwrap_or(30).clamp(1, 90);
     let since_ts = Utc::now().timestamp() - window_days * 24 * 3600;
@@ -1253,10 +1302,38 @@ async fn load_sushi_positions(
     positions_for_candidates(state.rpc.as_ref(), address, &candidates, pricing).await
 }
 
-async fn list_positions(
-    State(state): State<AppState>,
-    Query(q): Query<AddressQuery>,
-) -> impl IntoResponse {
+/// Route actor-touched pools to their owning DEX reader. Pool ABIs are not
+/// interchangeable; in particular, an Aquarius probe must never be used as a
+/// generic fallback for another venue.
+async fn load_actor_positions(
+    state: &AppState,
+    address: &str,
+    pools: &[String],
+    pricing: &[dex::types::SharePoolState],
+) -> Vec<UserPosition> {
+    let grouped = {
+        let db = state.db.lock().unwrap();
+        let mut grouped: HashMap<String, Vec<String>> = HashMap::new();
+        for pool in pools {
+            let venue = db
+                .pool_meta(pool)
+                .ok()
+                .flatten()
+                .map(|(_, _, _, venue)| venue)
+                .unwrap_or_else(|| "aquarius".into());
+            grouped.entry(venue).or_default().push(pool.clone());
+        }
+        grouped
+    };
+    let mut positions = Vec::new();
+    for (venue, venue_pools) in grouped {
+        positions.extend(positions_for_venue(state.rpc.as_ref(), address, &venue, &venue_pools, pricing).await);
+    }
+    positions.extend(load_sushi_positions(state, address, pricing).await);
+    positions
+}
+
+async fn list_positions(State(state): State<AppState>, Query(q): Query<AddressQuery>) -> impl IntoResponse {
     if !q.address.starts_with('G') || q.address.len() < 56 {
         return (
             StatusCode::BAD_REQUEST,
@@ -1277,17 +1354,12 @@ async fn list_positions(
         let db = state.db.lock().unwrap();
         db.pool_states_for_pricing().unwrap_or_default()
     };
-    let mut positions =
-        positions_for_address(state.rpc.as_ref(), &q.address, &pools, &pricing).await;
-    positions.extend(load_sushi_positions(&state, &q.address, &pricing).await);
+    let positions = load_actor_positions(&state, &q.address, &pools, &pricing).await;
     let stats = {
         let db = state.db.lock().unwrap();
         db.stats().ok()
     };
-    let pool_count = stats
-        .as_ref()
-        .map(|s| s.pool_count)
-        .unwrap_or(indexed_pools.len());
+    let pool_count = stats.as_ref().map(|s| s.pool_count).unwrap_or(indexed_pools.len());
     let last_snapshot_at = stats.and_then(|s| s.latest_snapshot_at);
     let note = if positions.is_empty() {
         Some("No active LP position found in the recent indexed pool set")
@@ -1304,10 +1376,7 @@ async fn list_positions(
     .into_response()
 }
 
-async fn positions_summary(
-    State(state): State<AppState>,
-    Query(q): Query<AddressQuery>,
-) -> impl IntoResponse {
+async fn positions_summary(State(state): State<AppState>, Query(q): Query<AddressQuery>) -> impl IntoResponse {
     if !q.address.starts_with('G') || q.address.len() < 56 {
         return (
             StatusCode::BAD_REQUEST,
@@ -1332,9 +1401,7 @@ async fn positions_summary(
         let db = state.db.lock().unwrap();
         db.pool_states_for_pricing().unwrap_or_default()
     };
-    let mut positions =
-        positions_for_address(state.rpc.as_ref(), &q.address, &pools, &pricing).await;
-    positions.extend(load_sushi_positions(&state, &q.address, &pricing).await);
+    let positions = load_actor_positions(&state, &q.address, &pools, &pricing).await;
     let mut net_worth = 0.0;
     let mut fees = 0.0;
     let mut il_sum = 0.0;
@@ -1371,11 +1438,9 @@ async fn positions_summary(
     .into_response()
 }
 
-/// Portfolio + recent liquidity activity for scouting Copy leaders (Smart LP–style).
-async fn lp_profile(
-    State(state): State<AppState>,
-    Query(q): Query<AddressQuery>,
-) -> impl IntoResponse {
+/// Portfolio + recent liquidity activity for scouting Copy leaders (Smart
+/// LP–style).
+async fn lp_profile(State(state): State<AppState>, Query(q): Query<AddressQuery>) -> impl IntoResponse {
     if !valid_stellar_address(&q.address) {
         return (
             StatusCode::BAD_REQUEST,
@@ -1411,10 +1476,7 @@ async fn lp_profile(
             (Ok((activity_7d, _)), Ok((activity_30d, events)), Ok(pools), Ok(lifetime)) => {
                 (activity_7d, activity_30d, events, pools, lifetime)
             }
-            (Err(error), _, _, _)
-            | (_, Err(error), _, _)
-            | (_, _, Err(error), _)
-            | (_, _, _, Err(error)) => {
+            (Err(error), _, _, _) | (_, Err(error), _, _) | (_, _, Err(error), _) | (_, _, _, Err(error)) => {
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(json!({ "error": error.to_string(), "code": "db_error" })),
@@ -1434,11 +1496,7 @@ async fn lp_profile(
     if scan_pools.len() > 40 {
         scan_pools.truncate(40);
     }
-    let positions = if scan_pools.is_empty() {
-        Vec::new()
-    } else {
-        positions_for_address(state.rpc.as_ref(), &q.address, &scan_pools, &pricing).await
-    };
+    let positions = load_actor_positions(&state, &q.address, &scan_pools, &pricing).await;
 
     let mut net_worth = 0.0;
     let mut fees = 0.0;
@@ -1521,9 +1579,7 @@ async fn lp_profile(
         }
     };
     let months_active = match (first_activity_at, last_activity_at) {
-        (Some(first), Some(last)) if last >= first => {
-            ((last - first) as f64 / (30.0 * 86_400.0)).max(1.0 / 30.0)
-        }
+        (Some(first), Some(last)) if last >= first => ((last - first) as f64 / (30.0 * 86_400.0)).max(1.0 / 30.0),
         _ => 0.0,
     };
     // Floor divisor at 1 month so short indexed history doesn't explode the rate.
@@ -1629,14 +1685,7 @@ async fn lp_profile(
 
 const COPY_RECONCILE_BATCH: usize = 500;
 
-const COPY_OP_STATUSES: &[&str] = &[
-    "drafted",
-    "skipped",
-    "signed",
-    "failed",
-    "insufficient",
-    "rejected",
-];
+const COPY_OP_STATUSES: &[&str] = &["drafted", "skipped", "signed", "failed", "insufficient", "rejected"];
 
 const COPY_SESSION_STATUSES: &[&str] = &["active", "paused", "stopped"];
 
@@ -1695,10 +1744,7 @@ fn copy_op_json(op: &CopyOpRow) -> Value {
     })
 }
 
-fn reconcile_copy_ops(
-    index_db: &IndexDb,
-    session: &mut CopySessionRow,
-) -> Result<(), anyhow::Error> {
+fn reconcile_copy_ops(index_db: &IndexDb, session: &mut CopySessionRow) -> Result<(), anyhow::Error> {
     if session.status != "active" {
         return Ok(());
     }
@@ -1711,12 +1757,8 @@ fn reconcile_copy_ops(
             // Cursor jumped ahead of watermark (shouldn't happen); restart exclusive.
             ""
         };
-        let events = index_db.events_for_actor_since(
-            &session.leader_address,
-            since,
-            after_event_id,
-            COPY_RECONCILE_BATCH,
-        )?;
+        let events =
+            index_db.events_for_actor_since(&session.leader_address, since, after_event_id, COPY_RECONCILE_BATCH)?;
         if events.is_empty() {
             break;
         }
@@ -2093,8 +2135,7 @@ async fn set_copy_op_status(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use serde_json::json;
+    use {super::*, serde_json::json};
 
     #[test]
     fn bridge_tvl_usd_skips_zero_and_negative() {
@@ -2128,6 +2169,40 @@ mod tests {
     }
 
     #[test]
+    fn fee_tvl_uses_current_tvl_not_historical_average() {
+        let mut metrics = json!({
+            "24h": {"fee": 0.0009955694677558605, "avg_tvl": 0.00009491574383001295, "fee_tvl": 10.48},
+            "1h": {"fee": 0.0, "avg_tvl": 0.0, "fee_tvl": 0.0}
+        });
+        recompute_fee_tvl_with_current_tvl(&mut metrics, 0.3946358111943709);
+        let ratio = metrics["24h"]["fee_tvl"].as_f64().unwrap();
+        assert!((ratio - 0.002522).abs() < 0.000001, "ratio={ratio}");
+        assert_eq!(metrics["1h"]["fee_tvl"], 0.0);
+    }
+
+    #[test]
+    fn stale_rollups_are_not_presented_as_current_windows() {
+        let now = 1_800_000_000;
+        let mut rollups = HashMap::new();
+        rollups.insert(
+            "5m".to_string(),
+            PoolRollupRow {
+                pool_address: "pool".to_string(),
+                window: "5m".to_string(),
+                as_of_ts: now - 20 * 60,
+                sample_count: 2,
+                volume_quote: 1.0,
+                fee_quote: 0.01,
+                avg_tvl: 1.0,
+                fee_tvl: 0.01,
+                tx_count: 2,
+            },
+        );
+        let metrics = rollups_to_window_metrics(&rollups, now);
+        assert!(metrics.as_object().is_some_and(|object| object.is_empty()));
+    }
+
+    #[test]
     fn score_uses_usd_bridge_consistently_for_partial_global_coverage() {
         let metrics = json!({
             "24h": {
@@ -2138,10 +2213,7 @@ mod tests {
             }
         });
         let score = score_with_usd_preference(0.4, Some(0.06), &metrics, None, Some(0.15));
-        let inputs = score
-            .get("score_breakdown")
-            .and_then(|v| v.get("inputs"))
-            .unwrap();
+        let inputs = score.get("score_breakdown").and_then(|v| v.get("inputs")).unwrap();
         assert_eq!(inputs.get("tvl").and_then(Value::as_f64), Some(0.06));
         assert_eq!(inputs.get("volume_24h").and_then(Value::as_f64), Some(0.03));
         let fee_tvl = inputs.get("fee_tvl_24h").and_then(Value::as_f64).unwrap();

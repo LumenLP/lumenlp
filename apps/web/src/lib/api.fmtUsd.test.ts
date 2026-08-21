@@ -14,6 +14,10 @@ describe("fmtUsd", () => {
     expect(fmtUsd(377.88)).toBe("$377.88");
   });
 
+  it("keeps sub-cent amounts visible", () => {
+    expect(fmtUsd(0.00017195)).toBe("$0.0002");
+  });
+
   it("handles negatives and null", () => {
     expect(fmtUsd(-1_500)).toBe("-$1.50k");
     expect(fmtUsd(null)).toBe("—");

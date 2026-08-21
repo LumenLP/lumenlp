@@ -2,8 +2,8 @@
 
 use soroban_sdk::{
     auth::{ContractContext, InvokerContractAuthEntry, SubContractInvocation},
-    contract, contracterror, contractimpl, contracttype, symbol_short, Address, BytesN, Env,
-    IntoVal, Symbol, Vec, U256,
+    contract, contracterror, contractimpl, contracttype, symbol_short, Address, BytesN, Env, IntoVal, Symbol, Vec,
+    U256,
 };
 
 const MAX_POOLS: u32 = 32;
@@ -94,9 +94,7 @@ impl CopyPolicy {
     /// the source event that execution is allowed to consume.
     pub fn set_event_recorder(env: Env, recorder: Address) -> Result<(), Error> {
         Self::owner(&env)?.require_auth();
-        env.storage()
-            .instance()
-            .set(&DataKey::EventRecorder, &recorder);
+        env.storage().instance().set(&DataKey::EventRecorder, &recorder);
         Ok(())
     }
 
@@ -121,10 +119,7 @@ impl CopyPolicy {
         if amounts.is_empty() || quote <= 0 {
             return Err(Error::InvalidEvent);
         }
-        if kind != symbol_short!("deposit")
-            && kind != symbol_short!("withdraw")
-            && kind != symbol_short!("claim")
-        {
+        if kind != symbol_short!("deposit") && kind != symbol_short!("withdraw") && kind != symbol_short!("claim") {
             return Err(Error::InvalidEvent);
         }
         let key = DataKey::LeaderEvent(source_event_id);
@@ -237,9 +232,7 @@ impl CopyPolicy {
             daily_day: day(env.ledger().timestamp()),
             daily_used_quote: 0,
         };
-        env.storage()
-            .persistent()
-            .set(&DataKey::Session(session_id), &session);
+        env.storage().persistent().set(&DataKey::Session(session_id), &session);
         Ok(())
     }
 
@@ -247,9 +240,7 @@ impl CopyPolicy {
         Self::owner(&env)?.require_auth();
         let mut session = Self::load_session(&env, session_id)?;
         session.paused = true;
-        env.storage()
-            .persistent()
-            .set(&DataKey::Session(session_id), &session);
+        env.storage().persistent().set(&DataKey::Session(session_id), &session);
         Ok(())
     }
 
@@ -260,17 +251,13 @@ impl CopyPolicy {
             return Err(Error::SessionExpired);
         }
         session.paused = false;
-        env.storage()
-            .persistent()
-            .set(&DataKey::Session(session_id), &session);
+        env.storage().persistent().set(&DataKey::Session(session_id), &session);
         Ok(())
     }
 
     pub fn disarm_session(env: Env, session_id: u32) -> Result<(), Error> {
         Self::owner(&env)?.require_auth();
-        env.storage()
-            .persistent()
-            .remove(&DataKey::Session(session_id));
+        env.storage().persistent().remove(&DataKey::Session(session_id));
         Ok(())
     }
 
@@ -316,10 +303,7 @@ impl CopyPolicy {
         min_amounts: Vec<u128>,
         claim_token: Address,
     ) -> Result<(), Error> {
-        if kind != symbol_short!("deposit")
-            && kind != symbol_short!("withdraw")
-            && kind != symbol_short!("claim")
-        {
+        if kind != symbol_short!("deposit") && kind != symbol_short!("withdraw") && kind != symbol_short!("claim") {
             return Err(Error::OperationNotAllowed);
         }
         let event = Self::load_leader_event(&env, &source_event_id)?;
@@ -338,8 +322,7 @@ impl CopyPolicy {
         Self::authorize_copy_op(&env, session_id, &source_event_id, &pool, &kind, quote)?;
         let user = env.current_contract_address();
         if kind == symbol_short!("deposit") {
-            let tokens: Vec<Address> =
-                env.invoke_contract(&pool, &Symbol::new(&env, "get_tokens"), Vec::new(&env));
+            let tokens: Vec<Address> = env.invoke_contract(&pool, &Symbol::new(&env, "get_tokens"), Vec::new(&env));
             if tokens.len() == desired_amounts.len() {
                 let mut auth_entries = Vec::new(&env);
                 for i in 0..desired_amounts.len() {
@@ -348,23 +331,21 @@ impl CopyPolicy {
                         continue;
                     }
                     let token = tokens.get(i).unwrap();
-                    auth_entries.push_back(InvokerContractAuthEntry::Contract(
-                        SubContractInvocation {
-                            context: ContractContext {
-                                contract: token,
-                                fn_name: symbol_short!("transfer"),
-                                args: Vec::from_array(
-                                    &env,
-                                    [
-                                        user.clone().into_val(&env),
-                                        pool.clone().into_val(&env),
-                                        (amount as i128).into_val(&env),
-                                    ],
-                                ),
-                            },
-                            sub_invocations: Vec::new(&env),
+                    auth_entries.push_back(InvokerContractAuthEntry::Contract(SubContractInvocation {
+                        context: ContractContext {
+                            contract: token,
+                            fn_name: symbol_short!("transfer"),
+                            args: Vec::from_array(
+                                &env,
+                                [
+                                    user.clone().into_val(&env),
+                                    pool.clone().into_val(&env),
+                                    (amount as i128).into_val(&env),
+                                ],
+                            ),
                         },
-                    ));
+                        sub_invocations: Vec::new(&env),
+                    }));
                 }
                 env.authorize_as_current_contract(auth_entries);
             }
@@ -381,22 +362,13 @@ impl CopyPolicy {
                 ),
             );
         } else if kind == symbol_short!("withdraw") {
-            let tokens: Vec<Address> =
-                env.invoke_contract(&pool, &Symbol::new(&env, "get_tokens"), Vec::new(&env));
-            let reserves: Vec<u128> =
-                env.invoke_contract(&pool, &Symbol::new(&env, "get_reserves"), Vec::new(&env));
-            let total_shares: u128 = env.invoke_contract(
-                &pool,
-                &Symbol::new(&env, "get_total_shares"),
-                Vec::new(&env),
-            );
+            let tokens: Vec<Address> = env.invoke_contract(&pool, &Symbol::new(&env, "get_tokens"), Vec::new(&env));
+            let reserves: Vec<u128> = env.invoke_contract(&pool, &Symbol::new(&env, "get_reserves"), Vec::new(&env));
+            let total_shares: u128 = env.invoke_contract(&pool, &Symbol::new(&env, "get_total_shares"), Vec::new(&env));
             if tokens.len() == 2 && reserves.len() == 2 && total_shares > 0 {
-                let out_a =
-                    proportional_floor(&env, reserves.get(0).unwrap(), share_amount, total_shares);
-                let out_b =
-                    proportional_floor(&env, reserves.get(1).unwrap(), share_amount, total_shares);
-                let share_id: Address =
-                    env.invoke_contract(&pool, &symbol_short!("share_id"), Vec::new(&env));
+                let out_a = proportional_floor(&env, reserves.get(0).unwrap(), share_amount, total_shares);
+                let out_b = proportional_floor(&env, reserves.get(1).unwrap(), share_amount, total_shares);
+                let share_id: Address = env.invoke_contract(&pool, &symbol_short!("share_id"), Vec::new(&env));
                 let mut auth_entries = Vec::new(&env);
                 auth_entries.push_back(InvokerContractAuthEntry::Contract(SubContractInvocation {
                     context: ContractContext {
@@ -404,38 +376,30 @@ impl CopyPolicy {
                         fn_name: symbol_short!("burn"),
                         args: Vec::from_array(
                             &env,
-                            [
-                                user.clone().into_val(&env),
-                                (share_amount as i128).into_val(&env),
-                            ],
+                            [user.clone().into_val(&env), (share_amount as i128).into_val(&env)],
                         ),
                     },
                     sub_invocations: Vec::new(&env),
                 }));
-                for (token, amount) in [
-                    (tokens.get(0).unwrap(), out_a),
-                    (tokens.get(1).unwrap(), out_b),
-                ] {
+                for (token, amount) in [(tokens.get(0).unwrap(), out_a), (tokens.get(1).unwrap(), out_b)] {
                     if amount == 0 {
                         continue;
                     }
-                    auth_entries.push_back(InvokerContractAuthEntry::Contract(
-                        SubContractInvocation {
-                            context: ContractContext {
-                                contract: token,
-                                fn_name: symbol_short!("transfer"),
-                                args: Vec::from_array(
-                                    &env,
-                                    [
-                                        pool.clone().into_val(&env),
-                                        user.clone().into_val(&env),
-                                        (amount as i128).into_val(&env),
-                                    ],
-                                ),
-                            },
-                            sub_invocations: Vec::new(&env),
+                    auth_entries.push_back(InvokerContractAuthEntry::Contract(SubContractInvocation {
+                        context: ContractContext {
+                            contract: token,
+                            fn_name: symbol_short!("transfer"),
+                            args: Vec::from_array(
+                                &env,
+                                [
+                                    pool.clone().into_val(&env),
+                                    user.clone().into_val(&env),
+                                    (amount as i128).into_val(&env),
+                                ],
+                            ),
                         },
-                    ));
+                        sub_invocations: Vec::new(&env),
+                    }));
                 }
                 env.authorize_as_current_contract(auth_entries);
             }
@@ -551,10 +515,7 @@ impl CopyPolicy {
         if *kind == symbol_short!("claim") && !session.follow_claims {
             return Err(Error::OperationNotAllowed);
         }
-        if *kind != symbol_short!("deposit")
-            && *kind != symbol_short!("withdraw")
-            && *kind != symbol_short!("claim")
-        {
+        if *kind != symbol_short!("deposit") && *kind != symbol_short!("withdraw") && *kind != symbol_short!("claim") {
             return Err(Error::OperationNotAllowed);
         }
         if quote <= 0 || quote > session.max_per_op_quote {
@@ -568,9 +529,7 @@ impl CopyPolicy {
             return Err(Error::DailyLimit);
         }
         session.daily_used_quote += quote;
-        env.storage()
-            .persistent()
-            .set(&DataKey::Session(session_id), &session);
+        env.storage().persistent().set(&DataKey::Session(session_id), &session);
         env.storage()
             .persistent()
             .set(&DataKey::Replay(session_id, source_event_id.clone()), &true);
@@ -616,8 +575,10 @@ fn proportional_floor(env: &Env, reserve: u128, shares: u128, total_shares: u128
 
 #[cfg(test)]
 mod test {
-    use super::*;
-    use soroban_sdk::testutils::{Address as _, Ledger as _};
+    use {
+        super::*,
+        soroban_sdk::testutils::{Address as _, Ledger as _},
+    };
 
     #[contract]
     struct MockPool;
@@ -631,22 +592,14 @@ mod test {
             from.require_auth();
             env.storage().instance().set(&symbol_short!("from"), &from);
             env.storage().instance().set(&symbol_short!("to"), &to);
-            env.storage()
-                .instance()
-                .set(&symbol_short!("amount"), &amount);
+            env.storage().instance().set(&symbol_short!("amount"), &amount);
         }
 
         pub fn last_transfer(env: Env) -> (Address, Address, i128) {
             (
-                env.storage()
-                    .instance()
-                    .get(&symbol_short!("from"))
-                    .unwrap(),
+                env.storage().instance().get(&symbol_short!("from")).unwrap(),
                 env.storage().instance().get(&symbol_short!("to")).unwrap(),
-                env.storage()
-                    .instance()
-                    .get(&symbol_short!("amount"))
-                    .unwrap(),
+                env.storage().instance().get(&symbol_short!("amount")).unwrap(),
             )
         }
     }
@@ -669,50 +622,25 @@ mod test {
             Address::generate(&env)
         }
 
-        pub fn deposit(
-            env: Env,
-            user: Address,
-            desired_amounts: Vec<u128>,
-            _min_shares: u128,
-        ) -> (Vec<u128>, u128) {
-            if env
-                .storage()
-                .instance()
-                .get(&symbol_short!("fail"))
-                .unwrap_or(false)
-            {
+        pub fn deposit(env: Env, user: Address, desired_amounts: Vec<u128>, _min_shares: u128) -> (Vec<u128>, u128) {
+            if env.storage().instance().get(&symbol_short!("fail")).unwrap_or(false) {
                 panic!("configured mock pool failure");
             }
             env.storage().instance().set(&symbol_short!("user"), &user);
             (desired_amounts, 1)
         }
 
-        pub fn withdraw(
-            env: Env,
-            user: Address,
-            share_amount: u128,
-            _min_amounts: Vec<u128>,
-        ) -> Vec<u128> {
+        pub fn withdraw(env: Env, user: Address, share_amount: u128, _min_amounts: Vec<u128>) -> Vec<u128> {
             env.storage().instance().set(&symbol_short!("user"), &user);
             Vec::from_array(&env, [share_amount])
         }
 
         pub fn claim(env: Env, user: Address) -> u128 {
             env.storage().instance().set(&symbol_short!("user"), &user);
-            let amount: u128 = env
-                .storage()
-                .instance()
-                .get(&symbol_short!("reward"))
-                .unwrap_or(0);
-            env.storage()
-                .instance()
-                .set(&symbol_short!("claimed"), &amount);
+            let amount: u128 = env.storage().instance().get(&symbol_short!("reward")).unwrap_or(0);
+            env.storage().instance().set(&symbol_short!("claimed"), &amount);
             if amount > 0 {
-                let token: Address = env
-                    .storage()
-                    .instance()
-                    .get(&symbol_short!("token"))
-                    .unwrap();
+                let token: Address = env.storage().instance().get(&symbol_short!("token")).unwrap();
                 env.invoke_contract::<()>(
                     &token,
                     &symbol_short!("transfer"),
@@ -730,19 +658,12 @@ mod test {
         }
 
         pub fn get_user_reward(env: Env, _user: Address) -> u128 {
-            env.storage()
-                .instance()
-                .get(&symbol_short!("reward"))
-                .unwrap_or(0)
+            env.storage().instance().get(&symbol_short!("reward")).unwrap_or(0)
         }
 
         pub fn configure_reward(env: Env, token: Address, amount: u128) {
-            env.storage()
-                .instance()
-                .set(&symbol_short!("token"), &token);
-            env.storage()
-                .instance()
-                .set(&symbol_short!("reward"), &amount);
+            env.storage().instance().set(&symbol_short!("token"), &token);
+            env.storage().instance().set(&symbol_short!("reward"), &amount);
         }
 
         pub fn configure_failure(env: Env, fail: bool) {
@@ -750,17 +671,11 @@ mod test {
         }
 
         pub fn last_user(env: Env) -> Address {
-            env.storage()
-                .instance()
-                .get(&symbol_short!("user"))
-                .unwrap()
+            env.storage().instance().get(&symbol_short!("user")).unwrap()
         }
 
         pub fn last_claim_amount(env: Env) -> u128 {
-            env.storage()
-                .instance()
-                .get(&symbol_short!("claimed"))
-                .unwrap_or(0)
+            env.storage().instance().get(&symbol_short!("claimed")).unwrap_or(0)
         }
     }
 
@@ -778,8 +693,7 @@ mod test {
         CopyPolicyClient::new(&env, &contract).set_event_recorder(&recorder);
         let mut pools = Vec::new(&env);
         pools.push_back(pool.clone());
-        CopyPolicyClient::new(&env, &contract)
-            .register_session(&1, &owner, &pools, &true, &10, &15, &100_000);
+        CopyPolicyClient::new(&env, &contract).register_session(&1, &owner, &pools, &true, &10, &15, &100_000);
         CopyPolicyClient::new(&env, &contract).record_leader_event(
             &id,
             &owner,
@@ -789,13 +703,7 @@ mod test {
             &10,
             &1,
         );
-        CopyPolicyClient::new(&env, &contract).execute_copy_op(
-            &1,
-            &id,
-            &pool,
-            &symbol_short!("deposit"),
-            &10,
-        );
+        CopyPolicyClient::new(&env, &contract).execute_copy_op(&1, &id, &pool, &symbol_short!("deposit"), &10);
         assert!(CopyPolicyClient::new(&env, &contract)
             .try_execute_copy_op(&1, &id, &pool, &symbol_short!("deposit"), &10)
             .is_err());
@@ -1172,9 +1080,6 @@ mod test {
         let env = Env::default();
         let reserve = u128::MAX - 1;
         let shares = u128::MAX - 2;
-        assert_eq!(
-            proportional_floor(&env, reserve, shares, u128::MAX),
-            u128::MAX - 3
-        );
+        assert_eq!(proportional_floor(&env, reserve, shares, u128::MAX), u128::MAX - 3);
     }
 }

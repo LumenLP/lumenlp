@@ -3,8 +3,8 @@
 use {
     crate::{
         rpc::{
-            account_address_scval, parse_address_vec, parse_fee_bps_u32, parse_u128_vec,
-            scval_to_address, scval_to_symbol_string, scval_to_u128, SorobanRpc,
+            account_address_scval, parse_address_vec, parse_fee_bps_u32, parse_u128_vec, scval_to_address,
+            scval_to_symbol_string, scval_to_u128, SorobanRpc,
         },
         types::{PoolType, SharePoolState},
     },
@@ -83,9 +83,7 @@ pub async fn hydrate_pool(rpc: &SorobanRpc, pool: &str) -> Result<SharePoolState
 /// Read LP share balance via share token `balance(Address)`.
 pub async fn share_balance(rpc: &SorobanRpc, share_token: &str, user: &str) -> Result<u128> {
     let user_val = account_address_scval(user)?;
-    let val = rpc
-        .simulate_call(share_token, "balance", vec![user_val])
-        .await?;
+    let val = rpc.simulate_call(share_token, "balance", vec![user_val]).await?;
     // SAC balance is i128
     match val {
         stellar_xdr::curr::ScVal::I128(parts) => {

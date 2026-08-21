@@ -14,9 +14,6 @@ pub fn sync_derived_tables(db: &IndexDb) -> Result<()> {
         Err(error) => return Err(error),
     };
     let rollup_rows = db.rebuild_rollups()?;
-    info!(
-        snapshot_rows,
-        rollup_rows, "synced derived pool index tables"
-    );
+    info!(snapshot_rows, rollup_rows, "synced derived pool index tables");
     Ok(())
 }

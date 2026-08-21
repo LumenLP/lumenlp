@@ -103,6 +103,14 @@ pub struct RecorderOutboxRow {
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
+pub struct RecorderOutboxStatus {
+    pub pending: usize,
+    pub submitted: usize,
+    pub failed: usize,
+    pub oldest_pending_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct ActorLiquidityActivity {
     pub since_ts: i64,
     pub event_count: usize,
@@ -131,7 +139,8 @@ pub struct TopLiquidityActor {
     pub last_activity_at: Option<i64>,
 }
 
-/// Lifetime (indexed) liquidity aggregates for an actor — used for avg monthly claimed fees proxy.
+/// Lifetime (indexed) liquidity aggregates for an actor — used for avg monthly
+/// claimed fees proxy.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ActorLifetimeTotals {
     pub deposit_count: usize,
@@ -267,26 +276,10 @@ impl IndexDb {
             );
             "#,
         )?;
-        self.ensure_column(
-            "copy_sessions",
-            "watermark_event_id",
-            "TEXT NOT NULL DEFAULT ''",
-        )?;
-        self.ensure_column(
-            "copy_sessions",
-            "allowed_pools_json",
-            "TEXT NOT NULL DEFAULT '[]'",
-        )?;
-        self.ensure_column(
-            "copy_sessions",
-            "max_per_op_quote_xlm",
-            "REAL NOT NULL DEFAULT 0",
-        )?;
-        self.ensure_column(
-            "copy_sessions",
-            "max_daily_quote_xlm",
-            "REAL NOT NULL DEFAULT 0",
-        )?;
+        self.ensure_column("copy_sessions", "watermark_event_id", "TEXT NOT NULL DEFAULT ''")?;
+        self.ensure_column("copy_sessions", "allowed_pools_json", "TEXT NOT NULL DEFAULT '[]'")?;
+        self.ensure_column("copy_sessions", "max_per_op_quote_xlm", "REAL NOT NULL DEFAULT 0")?;
+        self.ensure_column("copy_sessions", "max_daily_quote_xlm", "REAL NOT NULL DEFAULT 0")?;
         self.ensure_column("copy_sessions", "expires_at", "INTEGER")?;
         Ok(())
     }
@@ -300,10 +293,8 @@ impl IndexDb {
                 return Ok(());
             }
         }
-        self.conn.execute(
-            &format!("ALTER TABLE {table} ADD COLUMN {column} {decl}"),
-            [],
-        )?;
+        self.conn
+            .execute(&format!("ALTER TABLE {table} ADD COLUMN {column} {decl}"), [])?;
         Ok(())
     }
 
@@ -458,11 +449,7 @@ impl IndexDb {
         )?)
     }
 
-    pub fn pause_active_sessions_for_pair(
-        &self,
-        follower_address: &str,
-        leader_address: &str,
-    ) -> Result<()> {
+    pub fn pause_active_sessions_for_pair(&self, follower_address: &str, leader_address: &str) -> Result<()> {
         let now = chrono::Utc::now().timestamp();
         self.conn.execute(
             r#"
@@ -553,18 +540,10 @@ impl IndexDb {
                 pool_address: row.get(2)?,
                 kind: row.get(3)?,
                 amounts: serde_json::from_str(&amounts_json).map_err(|error| {
-                    rusqlite::Error::FromSqlConversionFailure(
-                        4,
-                        rusqlite::types::Type::Text,
-                        Box::new(error),
-                    )
+                    rusqlite::Error::FromSqlConversionFailure(4, rusqlite::types::Type::Text, Box::new(error))
                 })?,
                 quote_stroops: quote_stroops.parse().map_err(|error| {
-                    rusqlite::Error::FromSqlConversionFailure(
-                        5,
-                        rusqlite::types::Type::Text,
-                        Box::new(error),
-                    )
+                    rusqlite::Error::FromSqlConversionFailure(5, rusqlite::types::Type::Text, Box::new(error))
                 })?,
                 ledger: row.get(6)?,
                 status: row.get(7)?,
@@ -574,16 +553,10 @@ impl IndexDb {
                 updated_at: row.get(11)?,
             })
         })?;
-        rows.collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(Into::into)
+        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
     }
 
-    pub fn update_recorder_event(
-        &self,
-        source_event_id: &str,
-        status: &str,
-        error: Option<&str>,
-    ) -> Result<()> {
+    pub fn update_recorder_event(&self, source_event_id: &str, status: &str, error: Option<&str>) -> Result<()> {
         let now = chrono::Utc::now().timestamp();
         self.conn.execute(
             r#"
@@ -594,6 +567,33 @@ impl IndexDb {
             params![source_event_id, status, error, now],
         )?;
         Ok(())
+    }
+
+    pub fn recorder_outbox_status(&self) -> Result<RecorderOutboxStatus> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT status, COUNT(*), MIN(created_at) FROM recorder_outbox GROUP BY status")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, Option<i64>>(2)?,
+            ))
+        })?;
+        let mut status = RecorderOutboxStatus::default();
+        for row in rows {
+            let (kind, count, oldest) = row?;
+            match kind.as_str() {
+                "pending" => {
+                    status.pending = count.max(0) as usize;
+                    status.oldest_pending_at = oldest;
+                }
+                "submitted" => status.submitted = count.max(0) as usize,
+                "failed" => status.failed = count.max(0) as usize,
+                _ => {}
+            }
+        }
+        Ok(status)
     }
 
     pub fn list_copy_ops(&self, session_id: &str, status: Option<&str>) -> Result<Vec<CopyOpRow>> {
@@ -684,10 +684,7 @@ impl IndexDb {
             LIMIT ?4
             "#,
         )?;
-        let rows = stmt.query_map(
-            params![actor, since_ts, after_event_id, limit],
-            map_event_row,
-        )?;
+        let rows = stmt.query_map(params![actor, since_ts, after_event_id, limit], map_event_row)?;
         collect_event_rows(rows)
     }
 
@@ -730,18 +727,8 @@ impl IndexDb {
                 .body
                 .pointer("/derived/total_quote_xlm")
                 .and_then(|v| v.as_f64())
-                .or_else(|| {
-                    event
-                        .body
-                        .pointer("/derived/fee_quote_xlm")
-                        .and_then(|v| v.as_f64())
-                })
-                .or_else(|| {
-                    event
-                        .body
-                        .pointer("/derived/quote_xlm")
-                        .and_then(|v| v.as_f64())
-                })
+                .or_else(|| event.body.pointer("/derived/fee_quote_xlm").and_then(|v| v.as_f64()))
+                .or_else(|| event.body.pointer("/derived/quote_xlm").and_then(|v| v.as_f64()))
                 .filter(|v| v.is_finite() && *v > 0.0);
             match event.kind.as_str() {
                 "deposit_liquidity" => {
@@ -770,7 +757,8 @@ impl IndexDb {
         Ok((activity, events))
     }
 
-    /// Full indexed history aggregates (SQL SUM — not limited to recent N events).
+    /// Full indexed history aggregates (SQL SUM — not limited to recent N
+    /// events).
     pub fn actor_lifetime_totals(&self, actor: &str) -> Result<ActorLifetimeTotals> {
         let mut stmt = self.conn.prepare(
             r#"
@@ -815,11 +803,7 @@ impl IndexDb {
                 (None, b) => b,
                 (a, None) => a,
             };
-            let q = if quote.is_finite() && quote > 0.0 {
-                quote
-            } else {
-                0.0
-            };
+            let q = if quote.is_finite() && quote > 0.0 { quote } else { 0.0 };
             match kind.as_str() {
                 "deposit_liquidity" => {
                     totals.deposit_count += count;
@@ -852,7 +836,8 @@ impl IndexDb {
         Ok(totals)
     }
 
-    /// Distinct Aquarius pools an actor has deposit/withdraw/claim activity on (for narrow position scans).
+    /// Distinct Aquarius pools an actor has deposit/withdraw/claim activity on
+    /// (for narrow position scans).
     pub fn actor_pool_addresses(&self, actor: &str, since_ts: i64) -> Result<Vec<String>> {
         let mut stmt = self.conn.prepare(
             r#"
@@ -889,7 +874,11 @@ impl IndexDb {
             SELECT event_id, tx_hash, ledger, created_at, pool_address, kind, body_json
             FROM pool_events
             WHERE kind IN ('deposit_liquidity', 'withdraw_liquidity')
-              AND json_extract(body_json, '$.derived.actor') = ?1
+              AND (
+                json_extract(body_json, '$.derived.actor') = ?1
+                OR json_extract(body_json, '$.data[0].sender.value') = ?1
+                OR json_extract(body_json, '$.data[0].recipient.value') = ?1
+              )
               AND created_at >= ?2
             ORDER BY created_at DESC, event_id DESC
             LIMIT ?3
@@ -902,6 +891,22 @@ impl IndexDb {
         for event in events {
             let derived = event.body.get("derived").unwrap_or(&Value::Null);
             if derived.get("venue").and_then(Value::as_str) != Some("sushi_v3") {
+                continue;
+            }
+            // Older rows may have recorded the Sushi position manager contract
+            // as actor. Accept the wallet in the event sender/recipient so
+            // those rows remain discoverable without a full historical replay.
+            let actor_matches = derived.get("actor").and_then(Value::as_str) == Some(actor)
+                || event
+                    .body
+                    .get("data")
+                    .and_then(Value::as_array)
+                    .and_then(|data| data.first())
+                    .and_then(|item| item.get("sender").or_else(|| item.get("recipient")))
+                    .and_then(|value| value.get("value").and_then(Value::as_str))
+                    .as_deref()
+                    == Some(actor);
+            if !actor_matches {
                 continue;
             }
             let Some(lower) = derived.get("tick_lower").and_then(Value::as_i64) else {
@@ -929,21 +934,14 @@ impl IndexDb {
             }
         }
         out.sort_by(|a, b| {
-            (&a.pool_address, a.tick_lower, a.tick_upper).cmp(&(
-                &b.pool_address,
-                b.tick_lower,
-                b.tick_upper,
-            ))
+            (&a.pool_address, a.tick_lower, a.tick_upper).cmp(&(&b.pool_address, b.tick_lower, b.tick_upper))
         });
         Ok(out)
     }
 
-    /// Ranked actors by claimed fee quote (then deposits) over a window — Smart LP–style board.
-    pub fn top_liquidity_actors(
-        &self,
-        since_ts: i64,
-        limit: usize,
-    ) -> Result<Vec<TopLiquidityActor>> {
+    /// Ranked actors by claimed fee quote (then deposits) over a window — Smart
+    /// LP–style board.
+    pub fn top_liquidity_actors(&self, since_ts: i64, limit: usize) -> Result<Vec<TopLiquidityActor>> {
         let limit = limit.max(1).min(100) as i64;
         let mut stmt = self.conn.prepare(
             r#"
@@ -983,26 +981,14 @@ impl IndexDb {
             if !actor.starts_with('G') {
                 continue;
             }
-            let entry = by_actor
-                .entry(actor.clone())
-                .or_insert_with(|| TopLiquidityActor {
-                    address: actor.clone(),
-                    ..Default::default()
-                });
+            let entry = by_actor.entry(actor.clone()).or_insert_with(|| TopLiquidityActor {
+                address: actor.clone(),
+                ..Default::default()
+            });
             entry.event_count += 1;
-            entry.last_activity_at = entry
-                .last_activity_at
-                .map(|t| t.max(created_at))
-                .or(Some(created_at));
-            pools_by_actor
-                .entry(actor.clone())
-                .or_default()
-                .insert(pool);
-            let q = if quote.is_finite() && quote > 0.0 {
-                quote
-            } else {
-                0.0
-            };
+            entry.last_activity_at = entry.last_activity_at.map(|t| t.max(created_at)).or(Some(created_at));
+            pools_by_actor.entry(actor.clone()).or_default().insert(pool);
+            let q = if quote.is_finite() && quote > 0.0 { quote } else { 0.0 };
             match kind.as_str() {
                 "deposit_liquidity" => {
                     entry.deposit_count += 1;
@@ -1108,44 +1094,38 @@ impl IndexDb {
     pub fn status(&self) -> Result<IndexerStatus> {
         let cursor_ledger = self
             .conn
-            .query_row(
-                "SELECT last_ledger FROM indexer_cursor WHERE id = 1",
-                [],
-                |row| row.get::<_, i64>(0),
-            )
+            .query_row("SELECT last_ledger FROM indexer_cursor WHERE id = 1", [], |row| {
+                row.get::<_, i64>(0)
+            })
             .ok()
             .map(|value| value as u32);
-        let event_count: i64 =
+        let event_count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM pool_events", [], |row| row.get(0))?;
+        let swap_count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM pool_swaps", [], |row| row.get(0))?;
+        let rollup_count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM pool_rollups", [], |row| row.get(0))?;
+        let distinct_event_pools: i64 =
             self.conn
-                .query_row("SELECT COUNT(*) FROM pool_events", [], |row| row.get(0))?;
-        let swap_count: i64 =
+                .query_row("SELECT COUNT(DISTINCT pool_address) FROM pool_events", [], |row| {
+                    row.get(0)
+                })?;
+        let distinct_rollup_pools: i64 =
             self.conn
-                .query_row("SELECT COUNT(*) FROM pool_swaps", [], |row| row.get(0))?;
-        let rollup_count: i64 =
-            self.conn
-                .query_row("SELECT COUNT(*) FROM pool_rollups", [], |row| row.get(0))?;
-        let distinct_event_pools: i64 = self.conn.query_row(
-            "SELECT COUNT(DISTINCT pool_address) FROM pool_events",
-            [],
-            |row| row.get(0),
-        )?;
-        let distinct_rollup_pools: i64 = self.conn.query_row(
-            "SELECT COUNT(DISTINCT pool_address) FROM pool_rollups",
-            [],
-            |row| row.get(0),
-        )?;
+                .query_row("SELECT COUNT(DISTINCT pool_address) FROM pool_rollups", [], |row| {
+                    row.get(0)
+                })?;
         let last_event_at = self
             .conn
-            .query_row("SELECT MAX(created_at) FROM pool_events", [], |row| {
-                row.get(0)
-            })
+            .query_row("SELECT MAX(created_at) FROM pool_events", [], |row| row.get(0))
             .ok()
             .flatten();
         let last_rollup_at = self
             .conn
-            .query_row("SELECT MAX(as_of_ts) FROM pool_rollups", [], |row| {
-                row.get(0)
-            })
+            .query_row("SELECT MAX(as_of_ts) FROM pool_rollups", [], |row| row.get(0))
             .ok()
             .flatten();
 
@@ -1232,9 +1212,9 @@ impl IndexDb {
     }
 
     pub fn token_metadata(&self, address: &str) -> Result<Option<TokenMetadataRow>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT address, symbol, name, issuer, domain, icon FROM token_metadata WHERE address = ?1",
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT address, symbol, name, issuer, domain, icon FROM token_metadata WHERE address = ?1")?;
         let mut rows = stmt.query(params![address])?;
         let Some(row) = rows.next()? else {
             return Ok(None);
@@ -1275,11 +1255,7 @@ impl IndexDb {
         Ok(())
     }
 
-    pub fn recent_pool_events(
-        &self,
-        pool_address: &str,
-        limit: usize,
-    ) -> Result<Vec<PoolEventRow>> {
+    pub fn recent_pool_events(&self, pool_address: &str, limit: usize) -> Result<Vec<PoolEventRow>> {
         let limit = limit.max(1).min(100) as i64;
         let mut stmt = self.conn.prepare(
             r#"
@@ -1349,11 +1325,7 @@ impl IndexDb {
         Ok(latest)
     }
 
-    pub fn pool_activity_summary(
-        &self,
-        pool_address: &str,
-        since_ts: i64,
-    ) -> Result<PoolActivitySummaryRow> {
+    pub fn pool_activity_summary(&self, pool_address: &str, since_ts: i64) -> Result<PoolActivitySummaryRow> {
         let (event_count_24h, deposit_count_24h, withdraw_count_24h, claim_count_24h, update_count_24h): (
             i64,
             i64,
@@ -1383,9 +1355,8 @@ impl IndexDb {
             },
         )?;
 
-        let (swap_count_24h, volume_quote_24h, fee_quote_24h): (i64, f64, f64) =
-            self.conn.query_row(
-                r#"
+        let (swap_count_24h, volume_quote_24h, fee_quote_24h): (i64, f64, f64) = self.conn.query_row(
+            r#"
             SELECT
               COUNT(*) AS swap_count,
               COALESCE(SUM(volume_quote), 0),
@@ -1393,15 +1364,15 @@ impl IndexDb {
             FROM pool_swaps
             WHERE pool_address = ?1 AND created_at >= ?2
             "#,
-                params![pool_address, since_ts],
-                |row| {
-                    Ok((
-                        row.get::<_, Option<i64>>(0)?.unwrap_or(0),
-                        row.get::<_, Option<f64>>(1)?.unwrap_or(0.0),
-                        row.get::<_, Option<f64>>(2)?.unwrap_or(0.0),
-                    ))
-                },
-            )?;
+            params![pool_address, since_ts],
+            |row| {
+                Ok((
+                    row.get::<_, Option<i64>>(0)?.unwrap_or(0),
+                    row.get::<_, Option<f64>>(1)?.unwrap_or(0.0),
+                    row.get::<_, Option<f64>>(2)?.unwrap_or(0.0),
+                ))
+            },
+        )?;
 
         let recent_events = self.recent_pool_events_since(pool_address, since_ts)?;
         let mut deposit_quote_24h = 0.0;
@@ -1425,8 +1396,7 @@ impl IndexDb {
                 _ => {}
             }
         }
-        let (avg_update_interval_secs_24h, latest_update_at_24h) =
-            cadence_from_times(&mut update_times);
+        let (avg_update_interval_secs_24h, latest_update_at_24h) = cadence_from_times(&mut update_times);
 
         Ok(PoolActivitySummaryRow {
             event_count_24h: event_count_24h.max(0) as usize,
@@ -1446,10 +1416,7 @@ impl IndexDb {
         })
     }
 
-    pub fn pool_activity_summary_map(
-        &self,
-        since_ts: i64,
-    ) -> Result<HashMap<String, PoolActivitySummaryRow>> {
+    pub fn pool_activity_summary_map(&self, since_ts: i64) -> Result<HashMap<String, PoolActivitySummaryRow>> {
         let mut event_stmt = self.conn.prepare(
             r#"
             SELECT
@@ -1477,14 +1444,7 @@ impl IndexDb {
 
         let mut out = HashMap::new();
         for row in event_rows {
-            let (
-                pool_address,
-                event_count,
-                deposit_count,
-                withdraw_count,
-                claim_count,
-                update_count,
-            ) = row?;
+            let (pool_address, event_count, deposit_count, withdraw_count, claim_count, update_count) = row?;
             out.insert(
                 pool_address,
                 PoolActivitySummaryRow {
@@ -1552,24 +1512,22 @@ impl IndexDb {
 
         let recent_events = self.recent_all_pool_events_since(since_ts)?;
         for event in recent_events {
-            let summary = out
-                .entry(event.pool_address.clone())
-                .or_insert(PoolActivitySummaryRow {
-                    event_count_24h: 0,
-                    swap_count_24h: 0,
-                    volume_quote_24h: 0.0,
-                    fee_quote_24h: 0.0,
-                    deposit_quote_24h: 0.0,
-                    withdraw_quote_24h: 0.0,
-                    net_liquidity_delta_quote_24h: 0.0,
-                    claim_quote_24h: 0.0,
-                    avg_update_interval_secs_24h: None,
-                    latest_update_at_24h: None,
-                    deposit_count_24h: 0,
-                    withdraw_count_24h: 0,
-                    claim_count_24h: 0,
-                    update_count_24h: 0,
-                });
+            let summary = out.entry(event.pool_address.clone()).or_insert(PoolActivitySummaryRow {
+                event_count_24h: 0,
+                swap_count_24h: 0,
+                volume_quote_24h: 0.0,
+                fee_quote_24h: 0.0,
+                deposit_quote_24h: 0.0,
+                withdraw_quote_24h: 0.0,
+                net_liquidity_delta_quote_24h: 0.0,
+                claim_quote_24h: 0.0,
+                avg_update_interval_secs_24h: None,
+                latest_update_at_24h: None,
+                deposit_count_24h: 0,
+                withdraw_count_24h: 0,
+                claim_count_24h: 0,
+                update_count_24h: 0,
+            });
             match event.kind.as_str() {
                 "deposit_liquidity" => {
                     summary.deposit_quote_24h += derived_number(&event.body, "total_quote_xlm");
@@ -1582,13 +1540,11 @@ impl IndexDb {
                 }
                 "update_reserves" | "reserves_sync" => {
                     let latest = summary.latest_update_at_24h;
-                    summary.latest_update_at_24h =
-                        Some(latest.map_or(event.created_at, |v| v.max(event.created_at)));
+                    summary.latest_update_at_24h = Some(latest.map_or(event.created_at, |v| v.max(event.created_at)));
                 }
                 _ => {}
             }
-            summary.net_liquidity_delta_quote_24h =
-                summary.deposit_quote_24h - summary.withdraw_quote_24h;
+            summary.net_liquidity_delta_quote_24h = summary.deposit_quote_24h - summary.withdraw_quote_24h;
         }
 
         let mut cadence_stmt = self.conn.prepare(
@@ -1632,11 +1588,7 @@ impl IndexDb {
         Ok(out)
     }
 
-    fn recent_pool_events_since(
-        &self,
-        pool_address: &str,
-        since_ts: i64,
-    ) -> Result<Vec<PoolEventRow>> {
+    fn recent_pool_events_since(&self, pool_address: &str, since_ts: i64) -> Result<Vec<PoolEventRow>> {
         let mut stmt = self.conn.prepare(
             r#"
             SELECT event_id, tx_hash, ledger, created_at, pool_address, kind, body_json
@@ -1678,10 +1630,7 @@ fn map_event_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<PoolEventRow> {
 }
 
 fn collect_event_rows(
-    rows: rusqlite::MappedRows<
-        '_,
-        impl FnMut(&rusqlite::Row<'_>) -> rusqlite::Result<PoolEventRow>,
-    >,
+    rows: rusqlite::MappedRows<'_, impl FnMut(&rusqlite::Row<'_>) -> rusqlite::Result<PoolEventRow>>,
 ) -> Result<Vec<PoolEventRow>> {
     let mut out = Vec::new();
     for row in rows {
@@ -1712,10 +1661,7 @@ fn map_copy_session_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<CopySession
 }
 
 fn collect_copy_session_rows(
-    rows: rusqlite::MappedRows<
-        '_,
-        impl FnMut(&rusqlite::Row<'_>) -> rusqlite::Result<CopySessionRow>,
-    >,
+    rows: rusqlite::MappedRows<'_, impl FnMut(&rusqlite::Row<'_>) -> rusqlite::Result<CopySessionRow>>,
 ) -> Result<Vec<CopySessionRow>> {
     let mut out = Vec::new();
     for row in rows {
@@ -1798,19 +1744,14 @@ fn open_sqlite_with_retry(path: &str) -> Result<Connection> {
                     "#,
                 ) {
                     Ok(_) => return Ok(conn),
-                    Err(error)
-                        if error.to_string().contains("database is locked")
-                            && attempt < ATTEMPTS =>
-                    {
+                    Err(error) if error.to_string().contains("database is locked") && attempt < ATTEMPTS => {
                         std::thread::sleep(std::time::Duration::from_millis(500));
                         continue;
                     }
                     Err(error) => return Err(error.into()),
                 }
             }
-            Err(error)
-                if error.to_string().contains("database is locked") && attempt < ATTEMPTS =>
-            {
+            Err(error) if error.to_string().contains("database is locked") && attempt < ATTEMPTS => {
                 std::thread::sleep(std::time::Duration::from_millis(500));
                 continue;
             }
@@ -1857,8 +1798,7 @@ mod tests {
         assert_eq!(pending[0].quote_stroops, 129_000_000);
         assert_eq!(pending[0].amounts, vec![100, 200]);
 
-        db.update_recorder_event("evt-1", "submitted", None)
-            .unwrap();
+        db.update_recorder_event("evt-1", "submitted", None).unwrap();
         assert!(db.pending_recorder_events(10).unwrap().is_empty());
     }
 
@@ -1874,13 +1814,7 @@ mod tests {
             icon: Some("https://example.com/aqua.svg".into()),
         };
         db.upsert_token_metadata(&metadata).unwrap();
-        assert_eq!(
-            db.token_metadata(&metadata.address)
-                .unwrap()
-                .unwrap()
-                .symbol,
-            "AQUA"
-        );
+        assert_eq!(db.token_metadata(&metadata.address).unwrap().unwrap().symbol, "AQUA");
     }
 
     #[test]
@@ -1922,10 +1856,7 @@ mod tests {
             .create_copy_session("GFOLLOWER", "GLEADER", 0.5, true, &[], 0.0, 0.0, None)
             .unwrap();
         assert_eq!(second.status, "active");
-        assert_eq!(
-            db.get_copy_session(&first.id).unwrap().unwrap().status,
-            "paused"
-        );
+        assert_eq!(db.get_copy_session(&first.id).unwrap().unwrap().status, "paused");
     }
 
     #[test]
@@ -1977,9 +1908,7 @@ mod tests {
             r#"{"derived":{"actor":"GLEADER"}}"#,
         )
         .unwrap();
-        let page2 = db
-            .events_for_actor_since("GLEADER", 200, "evt-same-a", 10)
-            .unwrap();
+        let page2 = db.events_for_actor_since("GLEADER", 200, "evt-same-a", 10).unwrap();
         assert_eq!(page2.len(), 1);
         assert_eq!(page2[0].event_id, "evt-same-b");
     }
@@ -2015,13 +1944,7 @@ impl IndexDb {
         Ok(())
     }
 
-    fn insert_pool_event_for_test(
-        &self,
-        event_id: &str,
-        created_at: i64,
-        kind: &str,
-        body_json: &str,
-    ) -> Result<()> {
+    fn insert_pool_event_for_test(&self, event_id: &str, created_at: i64, kind: &str, body_json: &str) -> Result<()> {
         self.conn.execute(
             r#"
             INSERT INTO pool_events (

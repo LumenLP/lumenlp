@@ -3,9 +3,7 @@
 //! This module deliberately stops at a durable, idempotent payload boundary.
 //! It never holds a signing key or submits a transaction.
 
-use serde_json::Value;
-
-use crate::index_db::PoolEventRow;
+use {crate::index_db::PoolEventRow, serde_json::Value};
 
 const STROOPS_PER_XLM: f64 = 10_000_000.0;
 
@@ -84,8 +82,7 @@ fn claim_amounts(kind: &str, derived: &Value) -> Option<Vec<u128>> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use serde_json::json;
+    use {super::*, serde_json::json};
 
     fn event(kind: &str, derived: Value) -> PoolEventRow {
         PoolEventRow {
@@ -123,11 +120,7 @@ mod tests {
 
     #[test]
     fn rejects_missing_or_non_integer_amounts() {
-        assert!(canonical_event(
-            &event("deposit_liquidity", json!({"total_quote_xlm": 1.0})),
-            "GLEADER"
-        )
-        .is_none());
+        assert!(canonical_event(&event("deposit_liquidity", json!({"total_quote_xlm": 1.0})), "GLEADER").is_none());
         assert!(canonical_event(
             &event(
                 "deposit_liquidity",

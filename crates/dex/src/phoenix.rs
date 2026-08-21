@@ -1,8 +1,9 @@
 //! Phoenix Protocol adaptor.
 //!
 //! The reader is intentionally read-only for now. Phoenix pool contracts expose
-//! a stable query surface, but factory discovery and event-version coverage still
-//! need mainnet validation before this venue can be promoted to production.
+//! a stable query surface, but factory discovery and event-version coverage
+//! still need mainnet validation before this venue can be promoted to
+//! production.
 
 use {
     crate::{
@@ -31,8 +32,7 @@ pub const POOL_QUERY_CONFIG_METHOD: &str = "query_config";
 pub const POOL_QUERY_INFO_METHOD: &str = "query_pool_info";
 
 /// Phoenix Protocol mainnet factory, also used by the local DEX aggregator.
-pub const PHOENIX_MAINNET_FACTORY: &str =
-    "CB4SVAWJA6TSRNOJZ7W2AWFW46D5VR4ZMFZKDIKXEINZCZEGZCJZCKMI";
+pub const PHOENIX_MAINNET_FACTORY: &str = "CB4SVAWJA6TSRNOJZ7W2AWFW46D5VR4ZMFZKDIKXEINZCZEGZCJZCKMI";
 
 /// Phoenix event topics that represent user liquidity actions. `swap` is
 /// deliberately excluded: it is useful market activity, but not evidence that
@@ -54,10 +54,7 @@ pub fn classify_liquidity_event(topic: &str) -> Option<LiquidityEventKind> {
 /// addresses are removed and ordering is deterministic. The factory address is
 /// intentionally supplied by the deployment configuration rather than baked
 /// into this module because Phoenix deployments can use different factories.
-pub async fn discover_pool_addresses(
-    rpc: &SorobanRpc,
-    factory_address: &str,
-) -> Result<Vec<String>> {
+pub async fn discover_pool_addresses(rpc: &SorobanRpc, factory_address: &str) -> Result<Vec<String>> {
     let value = rpc
         .call_no_args(factory_address, FACTORY_QUERY_ALL_POOLS_DETAILS_METHOD)
         .await?;
@@ -73,9 +70,7 @@ pub async fn discover_mainnet_pool_addresses(rpc: &SorobanRpc) -> Result<Vec<Str
 
 fn parse_factory_pool_details(value: &xdr::ScVal) -> Result<Vec<String>> {
     let xdr::ScVal::Vec(Some(entries)) = value else {
-        return Err(anyhow!(
-            "Phoenix query_all_pools_details returned no vector"
-        ));
+        return Err(anyhow!("Phoenix query_all_pools_details returned no vector"));
     };
     let mut pools = Vec::with_capacity(entries.0.len());
     for entry in entries.0.iter() {
@@ -93,12 +88,8 @@ fn parse_factory_pool_details(value: &xdr::ScVal) -> Result<Vec<String>> {
 /// This does not discover pool addresses and does not build write operations.
 /// Callers must obtain a pool address from a validated Phoenix factory source.
 pub async fn hydrate_pool(rpc: &SorobanRpc, pool_address: &str) -> Result<SharePoolState> {
-    let config = rpc
-        .call_no_args(pool_address, POOL_QUERY_CONFIG_METHOD)
-        .await?;
-    let pool_info = rpc
-        .call_no_args(pool_address, POOL_QUERY_INFO_METHOD)
-        .await?;
+    let config = rpc.call_no_args(pool_address, POOL_QUERY_CONFIG_METHOD).await?;
+    let pool_info = rpc.call_no_args(pool_address, POOL_QUERY_INFO_METHOD).await?;
 
     let config_map = scval_map(&config)?;
     let tokens = vec![
@@ -119,9 +110,7 @@ pub async fn hydrate_pool(rpc: &SorobanRpc, pool_address: &str) -> Result<ShareP
         scval_to_address(map_value(asset_b, "address")?)?,
     ];
     if reserve_tokens != tokens.as_slice() {
-        return Err(anyhow!(
-            "Phoenix query_pool_info token order differs from query_config"
-        ));
+        return Err(anyhow!("Phoenix query_pool_info token order differs from query_config"));
     }
 
     Ok(SharePoolState {
@@ -197,10 +186,7 @@ mod tests {
             pool_type_from_scval(&xdr::ScVal::U32(0)).unwrap(),
             PoolType::ConstantProduct
         );
-        assert_eq!(
-            pool_type_from_scval(&xdr::ScVal::U32(1)).unwrap(),
-            PoolType::Stable
-        );
+        assert_eq!(pool_type_from_scval(&xdr::ScVal::U32(1)).unwrap(), PoolType::Stable);
         assert!(pool_type_from_scval(&xdr::ScVal::U32(2)).is_err());
     }
 

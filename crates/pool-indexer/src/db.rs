@@ -1,7 +1,5 @@
 use {
-    crate::types::{
-        PoolEvent, PoolEventKind, PoolRollup, PoolSnapshot5m, PoolSwap, WindowSpec, WINDOWS,
-    },
+    crate::types::{PoolEvent, PoolEventKind, PoolRollup, PoolSnapshot5m, PoolSwap, WindowSpec, WINDOWS},
     anyhow::{Context, Result},
     chrono::{TimeZone, Utc},
     rusqlite::{params, Connection},
@@ -181,7 +179,8 @@ impl IndexDb {
         if inserted > 0 {
             return Ok(true);
         }
-        // If a prior insert omitted derived.actor (RPC blip), patch when we now have one.
+        // If a prior insert omitted derived.actor (RPC blip), patch when we now have
+        // one.
         let Ok(body) = serde_json::from_str::<serde_json::Value>(&event.body_json) else {
             return Ok(false);
         };
@@ -208,10 +207,7 @@ impl IndexDb {
         Ok(updated > 0)
     }
 
-    pub fn list_liquidity_events_missing_actor(
-        &self,
-        limit: usize,
-    ) -> Result<Vec<(String, String, String)>> {
+    pub fn list_liquidity_events_missing_actor(&self, limit: usize) -> Result<Vec<(String, String, String)>> {
         let limit = limit.max(1).min(200) as i64;
         let mut stmt = self.conn.prepare(
             r#"
@@ -369,17 +365,15 @@ impl IndexDb {
             pools.insert(row?);
         }
 
-        let mut stmt = self
-            .conn
-            .prepare("SELECT DISTINCT pool_address FROM pool_swaps")?;
+        let mut stmt = self.conn.prepare("SELECT DISTINCT pool_address FROM pool_swaps")?;
         let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
         for row in rows {
             pools.insert(row?);
         }
 
-        let mut stmt = self.conn.prepare(
-            "SELECT DISTINCT pool_address FROM pool_events WHERE kind IN (?1, ?2, ?3, ?4)",
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT DISTINCT pool_address FROM pool_events WHERE kind IN (?1, ?2, ?3, ?4)")?;
         let rows = stmt.query_map(
             params![
                 PoolEventKind::UpdateReserves.as_str(),
@@ -408,11 +402,7 @@ impl IndexDb {
             .map_err(Into::into)
     }
 
-    pub fn load_snapshots_for_window(
-        &self,
-        pool_address: &str,
-        since_ts: i64,
-    ) -> Result<Vec<PoolSnapshot5m>> {
+    pub fn load_snapshots_for_window(&self, pool_address: &str, since_ts: i64) -> Result<Vec<PoolSnapshot5m>> {
         let mut stmt = self.conn.prepare(
             r#"
             SELECT pool_address, bucket_ts, tvl, reserves_json, fee_bps
@@ -437,11 +427,7 @@ impl IndexDb {
         Ok(out)
     }
 
-    pub fn load_swaps_for_window(
-        &self,
-        pool_address: &str,
-        since_ts: i64,
-    ) -> Result<Vec<PoolSwap>> {
+    pub fn load_swaps_for_window(&self, pool_address: &str, since_ts: i64) -> Result<Vec<PoolSwap>> {
         let mut stmt = self.conn.prepare(
             r#"
             SELECT tx_hash, event_id, ledger, created_at, pool_address, dex,
@@ -522,12 +508,7 @@ impl IndexDb {
         Ok(count)
     }
 
-    fn compute_rollup(
-        &self,
-        pool_address: &str,
-        as_of_ts: i64,
-        window: WindowSpec,
-    ) -> Result<PoolRollup> {
+    fn compute_rollup(&self, pool_address: &str, as_of_ts: i64, window: WindowSpec) -> Result<PoolRollup> {
         let since_ts = as_of_ts - window.seconds;
         let snapshots = self.load_snapshots_for_window(pool_address, since_ts)?;
         let swaps = self.load_swaps_for_window(pool_address, since_ts)?;
@@ -538,19 +519,9 @@ impl IndexDb {
         } else {
             0.0
         };
-        let volume_quote = swaps
-            .iter()
-            .map(|s| s.volume_quote.unwrap_or(0.0))
-            .sum::<f64>();
-        let fee_quote = swaps
-            .iter()
-            .map(|s| s.fee_quote.unwrap_or(0.0))
-            .sum::<f64>();
-        let fee_tvl = if avg_tvl > 0.0 {
-            fee_quote / avg_tvl
-        } else {
-            0.0
-        };
+        let volume_quote = swaps.iter().map(|s| s.volume_quote.unwrap_or(0.0)).sum::<f64>();
+        let fee_quote = swaps.iter().map(|s| s.fee_quote.unwrap_or(0.0)).sum::<f64>();
+        let fee_tvl = if avg_tvl > 0.0 { fee_quote / avg_tvl } else { 0.0 };
 
         Ok(PoolRollup {
             pool_address: pool_address.to_string(),
@@ -567,28 +538,26 @@ impl IndexDb {
 
     pub fn stats(&self) -> Result<IndexStats> {
         let cursor_ledger = self.cursor_ledger()?;
-        let event_count: i64 =
+        let event_count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM pool_events", [], |r| r.get(0))?;
+        let distinct_event_pools: i64 =
             self.conn
-                .query_row("SELECT COUNT(*) FROM pool_events", [], |r| r.get(0))?;
-        let distinct_event_pools: i64 = self.conn.query_row(
-            "SELECT COUNT(DISTINCT pool_address) FROM pool_events",
-            [],
-            |r| r.get(0),
-        )?;
+                .query_row("SELECT COUNT(DISTINCT pool_address) FROM pool_events", [], |r| r.get(0))?;
         let swap_count: i64 = self
             .conn
             .query_row("SELECT COUNT(*) FROM pool_swaps", [], |r| r.get(0))?;
-        let snapshot_5m_count: i64 =
+        let snapshot_5m_count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM pool_snapshots_5m", [], |r| r.get(0))?;
+        let rollup_count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM pool_rollups", [], |r| r.get(0))?;
+        let distinct_rollup_pools: i64 =
             self.conn
-                .query_row("SELECT COUNT(*) FROM pool_snapshots_5m", [], |r| r.get(0))?;
-        let rollup_count: i64 =
-            self.conn
-                .query_row("SELECT COUNT(*) FROM pool_rollups", [], |r| r.get(0))?;
-        let distinct_rollup_pools: i64 = self.conn.query_row(
-            "SELECT COUNT(DISTINCT pool_address) FROM pool_rollups",
-            [],
-            |r| r.get(0),
-        )?;
+                .query_row("SELECT COUNT(DISTINCT pool_address) FROM pool_rollups", [], |r| {
+                    r.get(0)
+                })?;
         Ok(IndexStats {
             cursor_ledger,
             event_count: event_count.max(0) as usize,
@@ -615,19 +584,14 @@ fn open_sqlite_with_retry(path: &str) -> Result<Connection> {
                     "#,
                 ) {
                     Ok(_) => return Ok(conn),
-                    Err(error)
-                        if error.to_string().contains("database is locked")
-                            && attempt < ATTEMPTS =>
-                    {
+                    Err(error) if error.to_string().contains("database is locked") && attempt < ATTEMPTS => {
                         std::thread::sleep(std::time::Duration::from_millis(500));
                         continue;
                     }
                     Err(error) => return Err(error.into()),
                 }
             }
-            Err(error)
-                if error.to_string().contains("database is locked") && attempt < ATTEMPTS =>
-            {
+            Err(error) if error.to_string().contains("database is locked") && attempt < ATTEMPTS => {
                 std::thread::sleep(std::time::Duration::from_millis(500));
                 continue;
             }

@@ -50,6 +50,12 @@ install -m 644 deploy/lumenlp-indexer.service /etc/systemd/system/lumenlp-indexe
 install -m 644 deploy/lumenlp-snapshotter.service /etc/systemd/system/lumenlp-snapshotter.service
 install -m 644 deploy/lumenlp-snapshotter.timer /etc/systemd/system/lumenlp-snapshotter.timer
 install -m 644 deploy/nginx-lumenlp.conf /etc/nginx/sites-available/lumenlp
+install -d -m 700 /etc/lumenlp
+REDIS_PASSWORD=\$(awk '\$1 == "requirepass" {print \$2; exit}' /etc/redis/redis.conf 2>/dev/null || true)
+if [ -n "\${REDIS_PASSWORD}" ]; then
+  printf 'REDIS_URL=redis://:%s@127.0.0.1:6379/\n' "\${REDIS_PASSWORD}" > /etc/lumenlp/api.env
+  chmod 600 /etc/lumenlp/api.env
+fi
 ln -sfn /etc/nginx/sites-available/lumenlp /etc/nginx/sites-enabled/lumenlp
 # The old lpagent site can still match api.lumenlp.xyz and override this vhost.
 # Keep its available config for rollback, but remove only the enabled symlink.

@@ -458,6 +458,12 @@ export function fmtUsd(n: number | null | undefined, digits = 2) {
   if (abs >= 1_000) {
     return `${sign}$${(abs / 1_000).toFixed(digits)}k`;
   }
+  if (abs > 0 && abs < 0.01) {
+    return `${sign}$${abs.toLocaleString("en-US", {
+      maximumFractionDigits: Math.max(digits, 4),
+      minimumFractionDigits: Math.max(digits, 4),
+    })}`;
+  }
   return `${sign}$${abs.toLocaleString("en-US", {
     maximumFractionDigits: digits,
     minimumFractionDigits: Math.min(digits, 2),

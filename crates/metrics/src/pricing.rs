@@ -38,15 +38,15 @@ impl PriceBook {
     }
 }
 
-/// Seed native SAC at 1 stroop = 1e-7 XLM, then derive others from 2-token pools
-/// that include `native_sac`.
+/// Seed native SAC at 1 stroop = 1e-7 XLM, then derive others from 2-token
+/// pools that include `native_sac`.
 ///
 /// Spot: for reserves (r_native, r_token), 1 token base buys
 /// `r_native / r_token` native base → XLM = that × 1e-7.
 ///
-/// When multiple pools quote the same token (e.g. CLMM vs constant-product XLM/USDC),
-/// keep the **median** candidate so skewed concentrated-liquidity reserve ratios
-/// do not dominate volume valuation.
+/// When multiple pools quote the same token (e.g. CLMM vs constant-product
+/// XLM/USDC), keep the **median** candidate so skewed concentrated-liquidity
+/// reserve ratios do not dominate volume valuation.
 pub fn build_xlm_price_book(native_sac: &str, pools: &[(Vec<String>, Vec<u128>)]) -> PriceBook {
     let mut book = PriceBook::new();
     book.insert(native_sac, 1e-7);
@@ -106,11 +106,7 @@ pub fn build_xlm_price_book(native_sac: &str, pools: &[(Vec<String>, Vec<u128>)]
 }
 
 fn median_f64(values: &mut [f64]) -> Option<f64> {
-    let finite: Vec<f64> = values
-        .iter()
-        .copied()
-        .filter(|v| v.is_finite() && *v > 0.0)
-        .collect();
+    let finite: Vec<f64> = values.iter().copied().filter(|v| v.is_finite() && *v > 0.0).collect();
     if finite.is_empty() {
         return None;
     }

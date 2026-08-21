@@ -122,6 +122,7 @@ paths:
             application/json:
               schema:
                 type: object
+
                 properties:
                   window_days: { type: integer }
                   leaders:
@@ -129,6 +130,22 @@ paths:
                     items:
                       $ref: "#/components/schemas/LeaderBoardRow"
                   honesty: { type: string }
+  /v1/copy/recorder/status:
+    get:
+      summary: Recorder outbox status
+      description: Read-only operational counters for canonical Copy LP events awaiting a separately controlled recorder worker.
+      responses:
+        "200":
+          description: Recorder outbox counters
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  pending: { type: integer }
+                  submitted: { type: integer }
+                  failed: { type: integer }
+                  oldest_pending_at: { type: integer, nullable: true }
   /v1/copy/sessions:
     get:
       summary: List copy sessions for follower

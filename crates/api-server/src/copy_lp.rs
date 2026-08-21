@@ -1,4 +1,5 @@
-//! Pure helpers for Copy LP: amount scaling, position keys, and op draft building.
+//! Pure helpers for Copy LP: amount scaling, position keys, and op draft
+//! building.
 
 use serde_json::{json, Value};
 
@@ -59,11 +60,7 @@ pub fn copy_kind_from_event(event_kind: &str, include_claims: bool) -> Option<&'
 }
 
 fn event_kind_from_body(body: &Value) -> Option<&str> {
-    body.get("topic")?
-        .as_array()?
-        .first()?
-        .get("value")?
-        .as_str()
+    body.get("topic")?.as_array()?.first()?.get("value")?.as_str()
 }
 
 fn scale_quote_xlm(quote: f64, coefficient: f64) -> f64 {
@@ -112,9 +109,7 @@ fn leader_amounts_for_kind(event_kind: &str, derived: &Value) -> Option<Value> {
 
 fn leader_quote_for_kind(event_kind: &str, derived: &Value) -> Option<f64> {
     match event_kind {
-        "deposit_liquidity" | "withdraw_liquidity" => {
-            derived.get("total_quote_xlm").and_then(Value::as_f64)
-        }
+        "deposit_liquidity" | "withdraw_liquidity" => derived.get("total_quote_xlm").and_then(Value::as_f64),
         "claim_fees" | "claim_protocol_fee" => derived.get("fee_quote_xlm").and_then(Value::as_f64),
         _ => None,
     }
@@ -168,10 +163,7 @@ mod tests {
 
     #[test]
     fn kind_from_event() {
-        assert_eq!(
-            copy_kind_from_event("deposit_liquidity", false),
-            Some("deposit")
-        );
+        assert_eq!(copy_kind_from_event("deposit_liquidity", false), Some("deposit"));
         assert_eq!(copy_kind_from_event("claim_fees", false), None);
         assert_eq!(copy_kind_from_event("claim_fees", true), Some("claim"));
     }

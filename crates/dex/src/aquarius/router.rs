@@ -1,8 +1,10 @@
 //! Discover Aquarius pools from the on-chain router.
 
 use {
-    crate::aquarius::AQUARIUS_ROUTER,
-    crate::rpc::{scval_to_address, SorobanRpc},
+    crate::{
+        aquarius::AQUARIUS_ROUTER,
+        rpc::{scval_to_address, SorobanRpc},
+    },
     anyhow::Result,
     std::collections::HashSet,
     stellar_xdr::curr as xdr,
@@ -10,9 +12,7 @@ use {
 };
 
 pub async fn discover_pool_addresses(rpc: &SorobanRpc) -> Result<Vec<String>> {
-    let count_val = rpc
-        .call_no_args(AQUARIUS_ROUTER, "get_tokens_sets_count")
-        .await?;
+    let count_val = rpc.call_no_args(AQUARIUS_ROUTER, "get_tokens_sets_count").await?;
     let total_count = crate::rpc::scval_to_u128(&count_val)?;
     info!(total_count, "Aquarius router token sets");
     if total_count == 0 {
@@ -35,11 +35,7 @@ pub async fn discover_pool_addresses(rpc: &SorobanRpc) -> Result<Vec<String>> {
         });
 
         match rpc
-            .simulate_call(
-                AQUARIUS_ROUTER,
-                "get_pools_for_tokens_range",
-                vec![start_val, end_val],
-            )
+            .simulate_call(AQUARIUS_ROUTER, "get_pools_for_tokens_range", vec![start_val, end_val])
             .await
         {
             Ok(result) => collect_pool_addresses(&result, &mut pool_addresses),

@@ -9,7 +9,8 @@ use {
     crate::{
         adaptor::{DexAdaptor, ScaffoldAdaptor, VenueId},
         rpc::{
-            account_address_scval, parse_fee_bps_u32, scval_to_address, scval_to_u128, SorobanRpc,
+            account_address_scval, parse_fee_bps_u32, scval_to_address, scval_to_i32, scval_to_symbol_string,
+            scval_to_u128, SorobanRpc,
         },
         types::{ClPositionRange, PoolType, SharePoolState, UserPosition},
     },
@@ -19,6 +20,7 @@ use {
 };
 
 pub const SUSHI_MAINNET_FACTORY: &str = "CD3KRKGDRVWPXVB3VXLUMQKMX6XZ6Q2H334IVZD4XXNAMKSRVQL5GLYF";
+pub const SUSHI_MAINNET_POSITION_MANAGER: &str = "CC5CQHSGZEVKPDLMYTJYGUBDL5UW4NBMTRQ5Y43YDBJTJZKMZMKCEEDU";
 
 /// Current state for one Sushi V3 CL position range.
 ///
@@ -37,6 +39,17 @@ pub struct SushiPositionRangeCandidate {
     pub pool_address: String,
     pub tick_lower: i32,
     pub tick_upper: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SushiManagedPosition {
+    liquidity: u128,
+    tokens_owed_0: u128,
+    tokens_owed_1: u128,
+    tick_lower: i32,
+    tick_upper: i32,
+    token0: String,
+    token1: String,
 }
 
 const KNOWN_MAINNET_POOLS: &[&str] = &[
@@ -72,10 +85,7 @@ pub fn adaptor() -> impl DexAdaptor {
 /// catalogue is deliberately explicit and can be refreshed from the aggregator
 /// discovery tool without changing the reader contract.
 pub async fn discover_mainnet_pool_addresses(_rpc: &SorobanRpc) -> Result<Vec<String>> {
-    Ok(KNOWN_MAINNET_POOLS
-        .iter()
-        .map(|pool| (*pool).to_owned())
-        .collect())
+    Ok(KNOWN_MAINNET_POOLS.iter().map(|pool| (*pool).to_owned()).collect())
 }
 
 /// Read the Sushi V3 pool state. Virtual reserves are derived from current
@@ -129,11 +139,7 @@ pub async fn read_position(
         .simulate_call(
             pool_address,
             "get_position",
-            vec![
-                owner,
-                xdr::ScVal::I32(tick_lower),
-                xdr::ScVal::I32(tick_upper),
-            ],
+            vec![owner, xdr::ScVal::I32(tick_lower), xdr::ScVal::I32(tick_upper)],
         )
         .await?;
     let position = parse_position(&value)?;
@@ -142,6 +148,20 @@ pub async fn read_position(
     } else {
         Ok(Some(position))
     }
+}
+
+/// Read the canonical Sushi V3 position list. Sushi positions are NFTs held
+/// by the position manager, so querying the pool with the wallet as owner can
+/// return an empty or unrelated range.
+async fn read_managed_positions(rpc: &SorobanRpc, owner: &str) -> Result<Vec<SushiManagedPosition>> {
+    let value = rpc
+        .simulate_call(
+            SUSHI_MAINNET_POSITION_MANAGER,
+            "get_user_positions_with_fees",
+            vec![account_address_scval(owner)?, xdr::ScVal::U32(0), xdr::ScVal::U32(100)],
+        )
+        .await?;
+    parse_managed_positions(&value)
 }
 
 /// Resolve event-derived range candidates against current Sushi pool state.
@@ -155,22 +175,38 @@ pub async fn positions_for_candidates(
     pricing_pools: &[SharePoolState],
 ) -> Vec<UserPosition> {
     let book = crate::aquarius::pricing::price_book_from_pools(pricing_pools);
+    let managed = read_managed_positions(rpc, user).await.unwrap_or_default();
     let mut out = Vec::new();
     for candidate in candidates {
         let Ok(state) = hydrate_pool(rpc, &candidate.pool_address).await else {
             continue;
         };
-        let Ok(Some(position)) = read_position(
-            rpc,
-            &candidate.pool_address,
-            user,
-            candidate.tick_lower,
-            candidate.tick_upper,
-        )
-        .await
-        else {
-            continue;
-        };
+        let mut position = managed
+            .iter()
+            .find(|position| {
+                position.tick_lower == candidate.tick_lower
+                    && position.tick_upper == candidate.tick_upper
+                    && position.token0 == state.tokens[0]
+                    && position.token1 == state.tokens[1]
+            })
+            .map(|position| SushiPositionState {
+                liquidity: position.liquidity,
+                tokens_owed_0: position.tokens_owed_0,
+                tokens_owed_1: position.tokens_owed_1,
+            });
+        if position.is_none() {
+            position = read_position(
+                rpc,
+                &candidate.pool_address,
+                user,
+                candidate.tick_lower,
+                candidate.tick_upper,
+            )
+            .await
+            .ok()
+            .flatten();
+        }
+        let Some(position) = position else { continue };
         let current_tick = rpc
             .call_no_args(&candidate.pool_address, "slot0")
             .await
@@ -212,10 +248,7 @@ pub async fn positions_for_candidates(
                 tokens_owed_1: position.tokens_owed_1,
                 in_range: current_tick >= candidate.tick_lower && current_tick < candidate.tick_upper,
             }]),
-            note: Some(
-                "Sushi V3 range verified by get_position; candidates sourced from indexed LP events; il/pnl=n/a"
-                    .into(),
-            ),
+            note: Some("Sushi V3 range verified by Position Manager or pool fallback; il/pnl=n/a".into()),
         });
     }
     out
@@ -242,6 +275,62 @@ fn parse_position(value: &xdr::ScVal) -> Result<SushiPositionState> {
         }
     }
     Ok(position)
+}
+
+fn parse_managed_positions(value: &xdr::ScVal) -> Result<Vec<SushiManagedPosition>> {
+    let value = unwrap_contract_result(value)?;
+    let xdr::ScVal::Vec(Some(values)) = value else {
+        return Err(anyhow!("Sushi position manager returned a non-vector value"));
+    };
+    values.0.iter().map(parse_managed_position).collect()
+}
+
+fn parse_managed_position(value: &xdr::ScVal) -> Result<SushiManagedPosition> {
+    let xdr::ScVal::Map(Some(map)) = value else {
+        return Err(anyhow!("Sushi managed position is not a map"));
+    };
+    let mut position = SushiManagedPosition {
+        liquidity: 0,
+        tokens_owed_0: 0,
+        tokens_owed_1: 0,
+        tick_lower: 0,
+        tick_upper: 0,
+        token0: String::new(),
+        token1: String::new(),
+    };
+    for entry in map.0.iter() {
+        let key = scval_to_symbol_string(&entry.key).unwrap_or_default();
+        match key.as_str() {
+            "liquidity" => position.liquidity = scval_to_u128(&entry.val)?,
+            "tokens_owed0" | "tokens_owed_0" => position.tokens_owed_0 = scval_to_u128(&entry.val)?,
+            "tokens_owed1" | "tokens_owed_1" => position.tokens_owed_1 = scval_to_u128(&entry.val)?,
+            "tick_lower" => position.tick_lower = scval_to_i32(&entry.val)?,
+            "tick_upper" => position.tick_upper = scval_to_i32(&entry.val)?,
+            "token0" => position.token0 = scval_to_address(&entry.val)?,
+            "token1" => position.token1 = scval_to_address(&entry.val)?,
+            _ => {}
+        }
+    }
+    if position.token0.is_empty() || position.token1.is_empty() {
+        return Err(anyhow!("Sushi managed position is missing token addresses"));
+    }
+    Ok(position)
+}
+
+fn unwrap_contract_result(value: &xdr::ScVal) -> Result<&xdr::ScVal> {
+    let xdr::ScVal::Map(Some(map)) = value else {
+        return Ok(value);
+    };
+    for entry in map.0.iter() {
+        let key = scval_to_symbol_string(&entry.key).unwrap_or_default();
+        if key == "Ok" {
+            return Ok(&entry.val);
+        }
+        if key == "Err" {
+            return Err(anyhow!("Sushi position manager returned Err"));
+        }
+    }
+    Ok(value)
 }
 
 fn parse_slot0(value: &xdr::ScVal) -> Result<(xdr::UInt256Parts, i32)> {
@@ -281,9 +370,7 @@ fn parse_u256(value: &xdr::ScVal) -> Option<xdr::UInt256Parts> {
 }
 
 fn u256_to_f64(value: &xdr::UInt256Parts) -> f64 {
-    (((value.hi_hi as f64 * 2f64.powi(64) + value.hi_lo as f64) * 2f64.powi(64)
-        + value.lo_hi as f64)
-        * 2f64.powi(64))
+    (((value.hi_hi as f64 * 2f64.powi(64) + value.hi_lo as f64) * 2f64.powi(64) + value.lo_hi as f64) * 2f64.powi(64))
         + value.lo_lo as f64
 }
 

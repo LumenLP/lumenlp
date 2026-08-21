@@ -2,7 +2,8 @@
 //!
 //! Strategies and copy-runtime should depend on [`DexAdaptor`] + shared types,
 //! not on Aquarius-specific modules. Aquarius is the reference implementation;
-//! other venues may expose read/indexed analytics before Copy LP execution is enabled.
+//! other venues may expose read/indexed analytics before Copy LP execution is
+//! enabled.
 
 use {
     crate::types::{PoolType, SharePoolState, UserPosition},
@@ -110,9 +111,7 @@ impl VenueCapabilities {
             DraftOpKind::Deposit => self.deposit,
             DraftOpKind::Withdraw => self.withdraw,
             DraftOpKind::Claim => self.claim,
-            DraftOpKind::OpenRange | DraftOpKind::CloseRange | DraftOpKind::AdjustRange => {
-                self.draft_ops
-            }
+            DraftOpKind::OpenRange | DraftOpKind::CloseRange | DraftOpKind::AdjustRange => self.draft_ops,
         }
     }
 }
@@ -129,7 +128,8 @@ pub enum DraftOpKind {
     AdjustRange,
 }
 
-/// Venue-agnostic draft for a single LP action (amounts still venue-encoded JSON).
+/// Venue-agnostic draft for a single LP action (amounts still venue-encoded
+/// JSON).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DraftOp {
     pub venue_id: VenueId,
@@ -188,7 +188,8 @@ pub struct LiquidityEvent {
     pub quote_xlm: Option<f64>,
 }
 
-/// Input to the common draft builder. Adapters encode `payload` for their venue.
+/// Input to the common draft builder. Adapters encode `payload` for their
+/// venue.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DraftRequest {
     pub pool_address: String,
@@ -218,11 +219,12 @@ pub enum VenueStatus {
 
 /// Multi-DEX LP adaptor contract.
 ///
-/// Heavy RPC work stays in venue modules (`dex::aquarius`, `pool-indexer`, …). The trait is the **stable
-/// identity + capability surface** strategies bind to. Production hydrate /
-/// index paths for Aquarius live under `dex::aquarius::{pool,router}` and
-/// `pool-indexer`; they must be reachable via [`VenueId::Aquarius`] without
-/// leaking Aquarius types into strategy configs.
+/// Heavy RPC work stays in venue modules (`dex::aquarius`, `pool-indexer`, …).
+/// The trait is the **stable identity + capability surface** strategies bind
+/// to. Production hydrate / index paths for Aquarius live under
+/// `dex::aquarius::{pool,router}` and `pool-indexer`; they must be reachable
+/// via [`VenueId::Aquarius`] without leaking Aquarius types into strategy
+/// configs.
 pub trait DexAdaptor: Send + Sync {
     fn venue_id(&self) -> VenueId;
     fn name(&self) -> &'static str;
@@ -269,9 +271,7 @@ pub trait DexAdaptor: Send + Sync {
             ));
         }
         if event.event_id.is_empty() || event.pool_address.is_empty() {
-            return Err(anyhow!(
-                "liquidity event requires event_id and pool_address"
-            ));
+            return Err(anyhow!("liquidity event requires event_id and pool_address"));
         }
         Ok(event)
     }
@@ -279,9 +279,7 @@ pub trait DexAdaptor: Send + Sync {
     /// Build a normalized unsigned operation or fail closed when unsupported.
     fn build_draft_op(&self, request: DraftRequest) -> Result<DraftOp> {
         if request.pool_address.is_empty() || request.position_key.is_empty() {
-            return Err(anyhow!(
-                "draft operation requires pool_address and position_key"
-            ));
+            return Err(anyhow!("draft operation requires pool_address and position_key"));
         }
         if !self.capabilities().supports(request.kind) {
             return Err(anyhow!(
@@ -430,10 +428,7 @@ pub fn default_venue_registry() -> Vec<Box<dyn DexAdaptor>> {
 }
 
 pub fn support_matrix() -> Vec<VenueSupportRow> {
-    default_venue_registry()
-        .iter()
-        .map(|a| a.support_row())
-        .collect()
+    default_venue_registry().iter().map(|a| a.support_row()).collect()
 }
 
 #[cfg(test)]
@@ -471,10 +466,7 @@ mod tests {
     #[test]
     fn aquarius_is_only_production_in_default_registry() {
         let matrix = support_matrix();
-        let prod: Vec<_> = matrix
-            .iter()
-            .filter(|r| r.status == VenueStatus::Production)
-            .collect();
+        let prod: Vec<_> = matrix.iter().filter(|r| r.status == VenueStatus::Production).collect();
         assert_eq!(prod.len(), 1);
         assert_eq!(prod[0].venue_id, VenueId::Aquarius);
         assert!(prod[0].capabilities.copy_scale);
@@ -483,9 +475,7 @@ mod tests {
     #[test]
     fn five_target_lp_venues_listed() {
         assert_eq!(support_matrix().len(), 5);
-        assert!(support_matrix()
-            .iter()
-            .all(|row| row.venue_id != VenueId::Classic));
+        assert!(support_matrix().iter().all(|row| row.venue_id != VenueId::Classic));
     }
 
     #[test]
@@ -553,10 +543,10 @@ mod tests {
             assert!(fixture.fee_bps <= 10_000);
             assert!(fixture.total_shares > 0);
             assert!(fixture.pool_type != PoolType::Unknown);
-            assert!(fixture.operations.iter().all(|kind| matches!(
-                kind,
-                DraftOpKind::Deposit | DraftOpKind::Withdraw | DraftOpKind::Claim
-            )));
+            assert!(fixture
+                .operations
+                .iter()
+                .all(|kind| matches!(kind, DraftOpKind::Deposit | DraftOpKind::Withdraw | DraftOpKind::Claim)));
             if fixture.venue_id == VenueId::Aquarius {
                 assert_eq!(fixture.share_token.as_deref(), Some("CAQUARIUSSHARE"));
             }

@@ -74,6 +74,15 @@ function tokenDisplayLabel(
   return fallback ? shortAddr(fallback) : "Unknown";
 }
 
+function compactTokenId(value: string | null | undefined) {
+  if (!value) return "Token metadata pending";
+  const separator = value.indexOf(":");
+  if (separator <= 0) return value;
+  const code = value.slice(0, separator);
+  const issuer = value.slice(separator + 1);
+  return `${code}:${shortAddr(issuer)}`;
+}
+
 function findPointHoursBack(points: HistoryPoint[], hoursBack: number) {
   if (points.length === 0) return null;
   const latestTs = Date.parse(points[points.length - 1].ts);
@@ -196,7 +205,7 @@ function PoolDetailInner() {
     address: tokenAddress,
     meta: detail?.token_meta?.[index],
     label: tokenDisplayLabel(detail?.token_meta?.[index], tokenAddress),
-    name: detail?.token_meta?.[index]?.name?.trim() || null,
+    name: compactTokenId(detail?.token_meta?.[index]?.name?.trim()),
     issuer: detail?.token_meta?.[index]?.issuer?.trim() || null,
     domain: detail?.token_meta?.[index]?.domain?.trim() || null,
     icon: detail?.token_meta?.[index]?.icon?.trim() || null,
@@ -259,7 +268,7 @@ function PoolDetailInner() {
       label: "Swaps",
       value: activitySummary?.swap_count_24h ?? 0,
       tone: "good",
-      hint: `${fmtNum(currentWindow?.tx_count ?? 0, 0)} txs in ${windowKey}`,
+      hint: `${fmtNum(currentWindow?.tx_count ?? 0, 0)} total txs in ${windowKey}`,
       format: "count" as const,
     },
     {

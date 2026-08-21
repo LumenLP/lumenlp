@@ -1,12 +1,17 @@
-use crate::pricing::asset_id::{resolve_freighter_asset_id, FreighterAssetId, NATIVE_SAC_MAINNET};
-use crate::pricing::value::{coverage_for, QuoteCoverage, UsdPriceMap};
-use serde::Deserialize;
-use std::collections::{HashMap, HashSet};
-use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use {
+    crate::pricing::{
+        asset_id::{resolve_freighter_asset_id, FreighterAssetId, NATIVE_SAC_MAINNET},
+        value::{coverage_for, QuoteCoverage, UsdPriceMap},
+    },
+    serde::Deserialize,
+    std::{
+        collections::{HashMap, HashSet},
+        sync::Mutex,
+        time::{Duration, Instant},
+    },
+};
 
-const FREIGHTER_URL: &str =
-    "https://freighter-backend-v2.stellar.org/api/v1/token-prices?network=PUBLIC";
+const FREIGHTER_URL: &str = "https://freighter-backend-v2.stellar.org/api/v1/token-prices?network=PUBLIC";
 const EXPERT_ASSET_URL: &str = "https://api.stellar.expert/explorer/public/asset";
 const CACHE_TTL: Duration = Duration::from_secs(90);
 const USER_AGENT: &str = "lumenlp-api/0.1";
@@ -34,7 +39,9 @@ impl PriceService {
     pub fn new() -> Self {
         Self {
             client: reqwest::Client::builder()
-                .timeout(Duration::from_secs(8))
+                // Pricing is enrichment, not a reason to block pool discovery.
+                // Fall back to cached/no-quote data when the upstream is slow.
+                .timeout(Duration::from_secs(3))
                 .user_agent(USER_AGENT)
                 .build()
                 .expect("reqwest"),
@@ -49,32 +56,23 @@ impl PriceService {
     ) -> (UsdPriceMap, QuoteMeta) {
         let mut resolved: Vec<(String, FreighterAssetId)> = Vec::new();
         for (contract, symbol, name, issuer) in wanted {
-            if let Some(id) = resolve_freighter_asset_id(
-                contract,
-                symbol.as_deref(),
-                name.as_deref(),
-                issuer.as_deref(),
-            ) {
+            if let Some(id) =
+                resolve_freighter_asset_id(contract, symbol.as_deref(), name.as_deref(), issuer.as_deref())
+            {
                 resolved.push((contract.clone(), id));
             }
         }
 
-        let needed_keys: HashSet<String> = resolved
-            .iter()
-            .map(|(_, id)| id.as_freighter_key())
-            .collect();
+        let needed_keys: HashSet<String> = resolved.iter().map(|(_, id)| id.as_freighter_key()).collect();
 
         let mut freighter_sourced: HashSet<String> = HashSet::new();
         let mut expert_sourced: HashSet<String> = HashSet::new();
 
         let cache_snapshot = {
             let guard = self.cache.lock().expect("price cache lock");
-            guard.as_ref().map(|e| {
-                (
-                    e.prices_by_freighter_key.clone(),
-                    e.fetched_at.elapsed() < CACHE_TTL,
-                )
-            })
+            guard
+                .as_ref()
+                .map(|e| (e.prices_by_freighter_key.clone(), e.fetched_at.elapsed() < CACHE_TTL))
         };
 
         let cache_covers = cache_snapshot
@@ -128,10 +126,7 @@ impl PriceService {
         // the current XLM-quote valuation path. Per-asset Expert fallbacks turn
         // one request into dozens of serial network calls and make `/v1/pools`
         // slow whenever the token set is large.
-        if !prices_by_key
-            .get("native")
-            .is_some_and(|p| p.is_finite() && *p > 0.0)
-        {
+        if !prices_by_key.get("native").is_some_and(|p| p.is_finite() && *p > 0.0) {
             if let Some(price) = self.fetch_expert("XLM").await {
                 prices_by_key.insert("native".to_string(), price);
                 expert_sourced.insert("native".to_string());
@@ -290,19 +285,12 @@ mod tests {
             ),
         ];
         let (map, meta) = svc.prices_for_tokens(&wanted).await;
-        assert!(
-            meta.xlm_usd.is_some_and(|p| p > 0.0),
-            "xlm_usd={:?}",
-            meta.xlm_usd
-        );
+        assert!(meta.xlm_usd.is_some_and(|p| p > 0.0), "xlm_usd={:?}", meta.xlm_usd);
         assert!(
             map.contains_key(NATIVE_SAC_MAINNET),
             "map keys={:?}",
             map.keys().collect::<Vec<_>>()
         );
-        assert!(
-            map.values().any(|p| *p > 0.0),
-            "expected at least one positive price"
-        );
+        assert!(map.values().any(|p| *p > 0.0), "expected at least one positive price");
     }
 }
