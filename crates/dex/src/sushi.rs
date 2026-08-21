@@ -43,6 +43,7 @@ pub struct SushiPositionRangeCandidate {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SushiManagedPosition {
+    fee: u32,
     liquidity: u128,
     tokens_owed_0: u128,
     tokens_owed_1: u128,
@@ -164,6 +165,45 @@ async fn read_managed_positions(rpc: &SorobanRpc, owner: &str) -> Result<Vec<Sus
     parse_managed_positions(&value)
 }
 
+/// Resolve currently owned Sushi positions against concrete known pools.
+/// This path does not depend on the event index, but only emits a position
+/// when token pair, fee tier, and range identify a concrete Sushi pool.
+pub async fn positions_for_managed_pools(
+    rpc: &SorobanRpc,
+    user: &str,
+    pool_addresses: &[String],
+    pricing_pools: &[SharePoolState],
+) -> Vec<UserPosition> {
+    let managed = read_managed_positions(rpc, user).await.unwrap_or_default();
+    let mut candidates = Vec::new();
+    for pool_address in pool_addresses {
+        let state = if let Some(state) = pricing_pools
+            .iter()
+            .find(|state| state.address == *pool_address)
+            .cloned()
+        {
+            state
+        } else {
+            let Ok(state) = hydrate_pool(rpc, pool_address).await else {
+                continue;
+            };
+            state
+        };
+        for position in managed.iter().filter(|position| {
+            position.token0 == state.tokens[0]
+                && position.token1 == state.tokens[1]
+                && (position.fee / 100 == state.fee_bps || position.fee == state.fee_bps)
+        }) {
+            candidates.push(SushiPositionRangeCandidate {
+                pool_address: pool_address.clone(),
+                tick_lower: position.tick_lower,
+                tick_upper: position.tick_upper,
+            });
+        }
+    }
+    positions_for_candidates(rpc, user, &candidates, pricing_pools).await
+}
+
 /// Resolve event-derived range candidates against current Sushi pool state.
 /// This is intentionally a point-read workflow: Sushi does not expose an
 /// enumerable owner-position method, so candidates come from indexed mint /
@@ -230,6 +270,7 @@ pub async fn positions_for_candidates(
             .map(|p| position.tokens_owed_0 as f64 * p[0] + position.tokens_owed_1 as f64 * p[1]);
         out.push(UserPosition {
             pool_address: state.address,
+            venue: "sushi".into(),
             pool_type: PoolType::Concentrated,
             tokens: state.tokens,
             fee_bps: state.fee_bps,
@@ -290,6 +331,7 @@ fn parse_managed_position(value: &xdr::ScVal) -> Result<SushiManagedPosition> {
         return Err(anyhow!("Sushi managed position is not a map"));
     };
     let mut position = SushiManagedPosition {
+        fee: 0,
         liquidity: 0,
         tokens_owed_0: 0,
         tokens_owed_1: 0,
@@ -301,6 +343,7 @@ fn parse_managed_position(value: &xdr::ScVal) -> Result<SushiManagedPosition> {
     for entry in map.0.iter() {
         let key = scval_to_symbol_string(&entry.key).unwrap_or_default();
         match key.as_str() {
+            "fee" => position.fee = parse_fee_bps_u32(&entry.val).unwrap_or(0),
             "liquidity" => position.liquidity = scval_to_u128(&entry.val)?,
             "tokens_owed0" | "tokens_owed_0" => position.tokens_owed_0 = scval_to_u128(&entry.val)?,
             "tokens_owed1" | "tokens_owed_1" => position.tokens_owed_1 = scval_to_u128(&entry.val)?,
@@ -440,5 +483,53 @@ mod tests {
                 tokens_owed_1: 4,
             }
         );
+    }
+
+    #[test]
+    fn parses_sushi_managed_position_info() {
+        let token0 = xdr::ScVal::Address(xdr::ScAddress::Contract(xdr::ContractId(xdr::Hash([1; 32]))));
+        let token1 = xdr::ScVal::Address(xdr::ScAddress::Contract(xdr::ContractId(xdr::Hash([2; 32]))));
+        let value = xdr::ScVal::Vec(Some(
+            vec![xdr::ScVal::Map(Some(
+                vec![
+                    xdr::ScMapEntry {
+                        key: xdr::ScVal::Symbol("fee".try_into().unwrap()),
+                        val: xdr::ScVal::U32(3000),
+                    },
+                    xdr::ScMapEntry {
+                        key: xdr::ScVal::Symbol("liquidity".try_into().unwrap()),
+                        val: xdr::ScVal::U128(xdr::UInt128Parts { hi: 0, lo: 11 }),
+                    },
+                    xdr::ScMapEntry {
+                        key: xdr::ScVal::Symbol("tick_lower".try_into().unwrap()),
+                        val: xdr::ScVal::I32(-120),
+                    },
+                    xdr::ScMapEntry {
+                        key: xdr::ScVal::Symbol("tick_upper".try_into().unwrap()),
+                        val: xdr::ScVal::I32(120),
+                    },
+                    xdr::ScMapEntry {
+                        key: xdr::ScVal::Symbol("token0".try_into().unwrap()),
+                        val: token0,
+                    },
+                    xdr::ScMapEntry {
+                        key: xdr::ScVal::Symbol("token1".try_into().unwrap()),
+                        val: token1,
+                    },
+                ]
+                .try_into()
+                .unwrap(),
+            ))]
+            .try_into()
+            .unwrap(),
+        ));
+        let positions = parse_managed_positions(&value).unwrap();
+        assert_eq!(positions.len(), 1);
+        assert_eq!(positions[0].fee, 3000);
+        assert_eq!(positions[0].liquidity, 11);
+        assert_eq!(positions[0].tick_lower, -120);
+        assert_eq!(positions[0].tick_upper, 120);
+        assert!(!positions[0].token0.is_empty());
+        assert!(!positions[0].token1.is_empty());
     }
 }

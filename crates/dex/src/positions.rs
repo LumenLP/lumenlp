@@ -74,6 +74,7 @@ async fn share_positions(
             .and_then(|p| value_xlm(&amounts, p));
         out.push(UserPosition {
             pool_address: state.address,
+            venue: venue.to_owned(),
             pool_type: state.pool_type,
             tokens: state.tokens,
             fee_bps: state.fee_bps,

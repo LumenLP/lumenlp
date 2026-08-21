@@ -26,7 +26,10 @@ use {
         positions::positions_for_venue,
         rpc::scval_to_symbol_string,
         support_matrix,
-        sushi::{positions_for_candidates, SushiPositionRangeCandidate},
+        sushi::{
+            discover_mainnet_pool_addresses, positions_for_candidates, positions_for_managed_pools,
+            SushiPositionRangeCandidate,
+        },
         types::UserPosition,
         SorobanRpc, NATIVE_SAC,
     },
@@ -1296,10 +1299,29 @@ async fn load_sushi_positions(
             })
             .collect::<Vec<_>>()
     };
-    if candidates.is_empty() {
-        return Vec::new();
+    let mut sushi_pools = discover_mainnet_pool_addresses(state.rpc.as_ref())
+        .await
+        .unwrap_or_default();
+    sushi_pools.extend(candidates.iter().map(|candidate| candidate.pool_address.clone()));
+    sushi_pools.sort();
+    sushi_pools.dedup();
+
+    let mut positions = positions_for_managed_pools(state.rpc.as_ref(), address, &sushi_pools, pricing).await;
+    if !candidates.is_empty() {
+        positions.extend(positions_for_candidates(state.rpc.as_ref(), address, &candidates, pricing).await);
     }
-    positions_for_candidates(state.rpc.as_ref(), address, &candidates, pricing).await
+
+    let mut seen = HashSet::new();
+    positions.retain(|position| {
+        let range = position
+            .cl_ranges
+            .as_ref()
+            .and_then(|ranges| ranges.first())
+            .map(|range| format!(":{}:{}", range.tick_lower, range.tick_upper))
+            .unwrap_or_default();
+        seen.insert(format!("{}{}", position.pool_address, range))
+    });
+    positions
 }
 
 /// Route actor-touched pools to their owning DEX reader. Pool ABIs are not
@@ -1613,7 +1635,7 @@ async fn lp_profile(State(state): State<AppState>, Query(q): Query<AddressQuery>
         .collect();
 
     let position_scan_note = if scan_pools.is_empty() {
-        Some("Open positions skipped — no indexed liquidity events for this address in 90d (RPC scan would hit all pools)")
+        Some("Open positions skipped — no indexed liquidity events for this address in 90d (non-Sushi RPC scan would hit all pools)")
     } else {
         None
     };
@@ -1678,7 +1700,7 @@ async fn lp_profile(State(state): State<AppState>, Query(q): Query<AddressQuery>
         } else {
             None
         }),
-        "honesty": "Proxies use indexed claim/deposit quotes — not full PnL vs entry, not win rate. Open positions scan pools touched in ~90d only.",
+        "honesty": "Proxies use indexed claim/deposit quotes — not full PnL vs entry, not win rate. Open positions scan pools touched in ~90d; Sushi V3 also verifies the Position Manager list against known pools.",
     }))
     .into_response()
 }

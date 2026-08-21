@@ -64,6 +64,7 @@ async fn load_position(rpc: &SorobanRpc, user: &str, pool: &str, book: &PriceBoo
             let priced = prices.is_some();
             Ok(Some(UserPosition {
                 pool_address: state.address,
+                venue: "aquarius".into(),
                 pool_type: state.pool_type,
                 tokens: state.tokens,
                 fee_bps: state.fee_bps,
@@ -142,6 +143,7 @@ async fn load_cl_position(
 
     Ok(Some(UserPosition {
         pool_address: state.address.clone(),
+        venue: "aquarius".into(),
         pool_type: PoolType::Concentrated,
         tokens: state.tokens.clone(),
         fee_bps: state.fee_bps,

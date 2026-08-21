@@ -57,6 +57,7 @@ pub struct ClPositionRange {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserPosition {
     pub pool_address: String,
+    pub venue: String,
     pub pool_type: PoolType,
     pub tokens: Vec<String>,
     pub fee_bps: u32,

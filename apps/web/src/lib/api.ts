@@ -16,6 +16,7 @@ const API_BASE = resolveApiBase();
 
 export type Position = {
   pool_address: string;
+  venue?: string;
   pool_type: string;
   tokens: string[];
   fee_bps: number;

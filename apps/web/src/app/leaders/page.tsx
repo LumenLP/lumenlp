@@ -503,7 +503,7 @@ function LeadersInner() {
                       <Link href={`/pools/view?address=${encodeURIComponent(p.pool_address)}`}>
                         {tokenLabel(p)}
                       </Link>
-                      <span className="badge">{p.pool_type}</span>
+                      <span className="badge">{p.venue ?? p.pool_type}</span>
                     </div>
                     <div className="muted">
                       Value {fmtNum(p.value_quote, 2)} XLM
