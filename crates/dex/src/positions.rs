@@ -11,7 +11,7 @@ use {
         types::{SharePoolState, UserPosition},
         SorobanRpc,
     },
-    metrics::{cp_position_amounts, value_xlm},
+    metrics::value_xlm,
 };
 
 pub async fn positions_for_venue(
@@ -62,12 +62,7 @@ async fn share_positions(
         if shares == 0 {
             continue;
         }
-        let (a, b) = if state.reserves.len() >= 2 {
-            cp_position_amounts(shares, state.total_shares, state.reserves[0], state.reserves[1])
-        } else {
-            (0.0, 0.0)
-        };
-        let amounts = vec![a, b];
+        let amounts = proportional_share_amounts(shares, state.total_shares, &state.reserves);
         let value_quote = book
             .required(&state.tokens)
             .as_ref()
@@ -90,4 +85,32 @@ async fn share_positions(
         });
     }
     out
+}
+
+fn proportional_share_amounts(shares: u128, total_shares: u128, reserves: &[u128]) -> Vec<f64> {
+    if total_shares == 0 {
+        return vec![0.0; reserves.len()];
+    }
+    reserves
+        .iter()
+        .map(|reserve| (*reserve as f64) * (shares as f64) / (total_shares as f64))
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::proportional_share_amounts;
+
+    #[test]
+    fn weighted_positions_preserve_all_token_legs() {
+        assert_eq!(
+            proportional_share_amounts(250, 1_000, &[100, 200, 300]),
+            vec![25.0, 50.0, 75.0]
+        );
+    }
+
+    #[test]
+    fn zero_supply_does_not_create_position_amounts() {
+        assert_eq!(proportional_share_amounts(10, 0, &[100, 200]), vec![0.0, 0.0]);
+    }
 }

@@ -400,30 +400,10 @@ impl DexAdaptor for ScaffoldAdaptor {
 pub fn default_venue_registry() -> Vec<Box<dyn DexAdaptor>> {
     vec![
         Box::new(AquariusAdaptor),
-        Box::new(IndexedAnalyticsAdaptor {
-            venue_id: VenueId::SushiV3,
-            name: "Sushi V3",
-            capabilities: VenueCapabilities::indexed_analytics(true),
-            notes: "Read-only indexed CLMM analytics and LP lifecycle events; Copy LP execution is fail-closed.",
-        }),
-        Box::new(IndexedAnalyticsAdaptor {
-            venue_id: VenueId::Phoenix,
-            name: "Phoenix",
-            capabilities: VenueCapabilities::indexed_analytics(true),
-            notes: "Read-only indexed AMM analytics and liquidity events; Copy LP execution is fail-closed.",
-        }),
-        Box::new(IndexedAnalyticsAdaptor {
-            venue_id: VenueId::SoroswapAmm,
-            name: "Soroswap AMM",
-            capabilities: VenueCapabilities::indexed_analytics(true),
-            notes: "Read-only indexed AMM analytics and liquidity events; Copy LP execution is fail-closed.",
-        }),
-        Box::new(IndexedAnalyticsAdaptor {
-            venue_id: VenueId::Comet,
-            name: "Comet",
-            capabilities: VenueCapabilities::indexed_analytics(true),
-            notes: "Read-only indexed weighted-pool analytics; Copy LP execution is fail-closed.",
-        }),
+        Box::new(crate::sushi::SushiAdaptor),
+        Box::new(crate::phoenix::PhoenixAdaptor),
+        Box::new(crate::soroswap::SoroswapAdaptor),
+        Box::new(crate::comet::CometAdaptor),
     ]
 }
 
@@ -489,6 +469,15 @@ mod tests {
     }
 
     #[test]
+    fn share_venues_expose_position_reading() {
+        for row in support_matrix() {
+            if matches!(row.venue_id, VenueId::Phoenix | VenueId::SoroswapAmm | VenueId::Comet) {
+                assert!(row.capabilities.positions, "{} must expose position reads", row.name);
+            }
+        }
+    }
+
+    #[test]
     fn every_registered_venue_normalizes_shared_pool_fixture() {
         let fixture = SharePoolState {
             address: "CPOOL".into(),
@@ -520,11 +509,68 @@ mod tests {
         };
 
         for adaptor in default_venue_registry() {
-            let result = adaptor.build_draft_op(request.clone());
-            if adaptor.venue_id() == VenueId::Aquarius {
-                assert!(result.is_ok());
+            if matches!(
+                adaptor.venue_id(),
+                VenueId::Phoenix | VenueId::SoroswapAmm | VenueId::SushiV3 | VenueId::Comet
+            ) {
+                let payload = if adaptor.venue_id() == VenueId::Phoenix {
+                    serde_json::json!({
+                        "pool_type": "constant_product",
+                        "depositor": "GUSER",
+                        "desired_a": "10",
+                        "min_a": "9",
+                        "desired_b": "20",
+                        "min_b": "18",
+                        "custom_slippage_bps": null,
+                        "deadline": "123",
+                        "auto_stake": false
+                    })
+                } else if adaptor.venue_id() == VenueId::SoroswapAmm {
+                    serde_json::json!({
+                        "token_a": "CTOKENA",
+                        "token_b": "CTOKENB",
+                        "amount_a_desired": "10",
+                        "amount_b_desired": "20",
+                        "amount_a_min": "9",
+                        "amount_b_min": "18",
+                        "to": "GUSER",
+                        "deadline": "123"
+                    })
+                } else if adaptor.venue_id() == VenueId::SushiV3 {
+                    serde_json::json!({
+                        "token0": "CTOKENA",
+                        "token1": "CTOKENB",
+                        "fee": "3000",
+                        "recipient": "GUSER",
+                        "sender": "GUSER",
+                        "tick_lower": "-100",
+                        "tick_upper": "100",
+                        "amount0_desired": "10",
+                        "amount0_min": "9",
+                        "amount1_desired": "20",
+                        "amount1_min": "18",
+                        "deadline": "123"
+                    })
+                } else {
+                    serde_json::json!({
+                        "pool_amount_out": "10",
+                        "max_amounts_in": ["100", "200", "300"],
+                        "user": "GUSER"
+                    })
+                };
+                let soroswap_request = DraftRequest {
+                    payload,
+                    ..request.clone()
+                };
+                assert!(adaptor.build_draft_op(soroswap_request).is_ok());
+            } else if adaptor.venue_id() == VenueId::Aquarius {
+                assert!(adaptor.build_draft_op(request.clone()).is_ok());
             } else {
-                assert!(result.is_err(), "{} must fail closed", adaptor.name());
+                assert!(
+                    adaptor.build_draft_op(request.clone()).is_err(),
+                    "{} must fail closed",
+                    adaptor.name()
+                );
             }
         }
     }

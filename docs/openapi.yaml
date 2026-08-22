@@ -66,7 +66,7 @@ paths:
       responses:
         "200":
           description: Pool detail
-  /v1/positions:
+    /v1/positions:
     get:
       summary: Positions for an account
       parameters:
@@ -78,6 +78,16 @@ paths:
       responses:
         "200":
           description: Positions
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  address: { type: string }
+                  positions:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/UserPosition"
   /v1/lp/profile:
     get:
       summary: LP leader profile (positions + 7d/30d liquidity activity)
@@ -269,7 +279,10 @@ components:
       type: object
       properties:
         address: { type: string }
-        venue_id: { type: string }
+        venue_id:
+          type: string
+          description: Profile scope. This endpoint may combine positions and activity across supported venues.
+          enum: [multi_venue]
         first_activity_at: { type: integer, nullable: true }
         last_activity_at: { type: integer, nullable: true }
         portfolio:
@@ -292,7 +305,46 @@ components:
               $ref: "#/components/schemas/ActivityWindow"
         activity_30d:
           $ref: "#/components/schemas/ActivityWindow"
+        positions:
+          type: array
+          items:
+            $ref: "#/components/schemas/UserPosition"
         honesty: { type: string }
+        note: { type: string, nullable: true }
+    UserPosition:
+      type: object
+      description: Verified LP position; entries that cannot be attributed to a concrete venue are omitted.
+      properties:
+        pool_address: { type: string }
+        venue:
+          type: string
+          enum: [aquarius, sushi, phoenix, soroswap, comet]
+        pool_type:
+          type: string
+          enum: [constant_product, stable, concentrated, weighted, unknown]
+        tokens:
+          type: array
+          items: { type: string }
+        fee_bps: { type: integer }
+        amounts:
+          type: array
+          items: { type: number }
+        value_quote: { type: number, nullable: true }
+        fees_unclaimed_quote: { type: number, nullable: true }
+        status: { type: string, enum: [ok] }
+        shares: { type: integer, format: int128, nullable: true }
+        cl_ranges:
+          type: array
+          nullable: true
+          items:
+            type: object
+            properties:
+              tick_lower: { type: integer }
+              tick_upper: { type: integer }
+              liquidity: { type: integer, format: int128 }
+              tokens_owed_0: { type: integer, format: int128 }
+              tokens_owed_1: { type: integer, format: int128 }
+              in_range: { type: boolean }
         note: { type: string, nullable: true }
     ActivityWindow:
       type: object

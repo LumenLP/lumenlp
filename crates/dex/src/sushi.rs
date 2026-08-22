@@ -7,20 +7,110 @@
 
 use {
     crate::{
-        adaptor::{DexAdaptor, ScaffoldAdaptor, VenueId},
+        adaptor::{
+            DexAdaptor, DraftOp, DraftOpKind, DraftRequest, ScaffoldAdaptor, VenueCapabilities, VenueId, VenueStatus,
+        },
         rpc::{
             account_address_scval, parse_fee_bps_u32, scval_to_address, scval_to_i32, scval_to_symbol_string,
             scval_to_u128, SorobanRpc,
         },
         types::{ClPositionRange, PoolType, SharePoolState, UserPosition},
     },
-    anyhow::{anyhow, Result},
+    anyhow::{anyhow, bail, Result},
     metrics::{cl_position_amounts, value_xlm},
+    serde_json::Value,
     stellar_xdr::curr as xdr,
 };
 
 pub const SUSHI_MAINNET_FACTORY: &str = "CD3KRKGDRVWPXVB3VXLUMQKMX6XZ6Q2H334IVZD4XXNAMKSRVQL5GLYF";
 pub const SUSHI_MAINNET_POSITION_MANAGER: &str = "CC5CQHSGZEVKPDLMYTJYGUBDL5UW4NBMTRQ5Y43YDBJTJZKMZMKCEEDU";
+
+/// Sushi V3 position-manager operation boundary. These drafts mirror the
+/// deployed mint/increase/decrease/collect parameter structs, but remain
+/// unsigned until the policy contract supports this venue explicitly.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct SushiAdaptor;
+
+impl DexAdaptor for SushiAdaptor {
+    fn venue_id(&self) -> VenueId {
+        VenueId::SushiV3
+    }
+
+    fn name(&self) -> &'static str {
+        "Sushi V3"
+    }
+
+    fn status(&self) -> VenueStatus {
+        VenueStatus::Scaffold
+    }
+
+    fn capabilities(&self) -> VenueCapabilities {
+        VenueCapabilities {
+            list_pools: true,
+            positions: true,
+            liquidity_events: true,
+            quotes: true,
+            draft_ops: true,
+            deposit: true,
+            withdraw: true,
+            claim: true,
+            copy_scale: false,
+        }
+    }
+
+    fn notes(&self) -> &'static str {
+        "Validated unsigned Position Manager drafts; policy-controlled execution remains fail-closed."
+    }
+
+    fn build_draft_op(&self, request: DraftRequest) -> Result<DraftOp> {
+        if request.pool_address.is_empty() || request.position_key.is_empty() {
+            bail!("draft operation requires pool_address and position_key");
+        }
+        match request.kind {
+            DraftOpKind::Deposit => validate_payload(
+                &request.payload,
+                &[
+                    "token0",
+                    "token1",
+                    "fee",
+                    "recipient",
+                    "sender",
+                    "tick_lower",
+                    "tick_upper",
+                    "amount0_desired",
+                    "amount0_min",
+                    "amount1_desired",
+                    "amount1_min",
+                    "deadline",
+                ],
+            )?,
+            DraftOpKind::Withdraw => validate_payload(
+                &request.payload,
+                &[
+                    "token_id",
+                    "operator",
+                    "liquidity",
+                    "amount0_min",
+                    "amount1_min",
+                    "deadline",
+                ],
+            )?,
+            DraftOpKind::Claim => validate_payload(
+                &request.payload,
+                &["token_id", "operator", "recipient", "amount0_max", "amount1_max"],
+            )?,
+            _ => bail!("Sushi V3 supports deposit, withdraw, and claim drafts only"),
+        }
+        Ok(DraftOp {
+            venue_id: self.venue_id(),
+            pool_address: request.pool_address,
+            kind: request.kind,
+            position_key: request.position_key,
+            amounts: request.payload,
+            quote_xlm: request.quote_xlm,
+        })
+    }
+}
 
 /// Current state for one Sushi V3 CL position range.
 ///
@@ -78,7 +168,19 @@ pub fn scaffold() -> ScaffoldAdaptor {
 }
 
 pub fn adaptor() -> impl DexAdaptor {
-    scaffold()
+    SushiAdaptor
+}
+
+fn validate_payload(payload: &Value, required: &[&str]) -> Result<()> {
+    let object = payload
+        .as_object()
+        .ok_or_else(|| anyhow!("Sushi Position Manager payload must be an object"))?;
+    for key in required {
+        if !object.contains_key(*key) {
+            bail!("Sushi Position Manager payload missing {key}");
+        }
+    }
+    Ok(())
 }
 
 /// Return the validated mainnet pool catalogue used by the Sushi integration.

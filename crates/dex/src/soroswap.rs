@@ -6,11 +6,14 @@
 
 use {
     crate::{
-        adaptor::{DexAdaptor, LiquidityEventKind, ScaffoldAdaptor, VenueId},
+        adaptor::{
+            DexAdaptor, DraftOp, DraftOpKind, DraftRequest, LiquidityEventKind, VenueCapabilities, VenueId, VenueStatus,
+        },
         rpc::{scval_to_address, scval_to_u128, SorobanRpc},
         types::{PoolType, SharePoolState},
     },
-    anyhow::{anyhow, Result},
+    anyhow::{anyhow, bail, Result},
+    serde_json::Value,
     stellar_xdr::curr as xdr,
 };
 
@@ -19,22 +22,111 @@ pub const FACTORY_ALL_PAIRS_METHOD: &str = "all_pairs";
 pub const PAIR_TOKEN_0_METHOD: &str = "token_0";
 pub const PAIR_TOKEN_1_METHOD: &str = "token_1";
 pub const PAIR_GET_RESERVES_METHOD: &str = "get_reserves";
+pub const ROUTER_ADD_LIQUIDITY_METHOD: &str = "add_liquidity";
+pub const ROUTER_REMOVE_LIQUIDITY_METHOD: &str = "remove_liquidity";
 pub const DEPOSIT_EVENT: &str = "deposit";
 pub const WITHDRAW_EVENT: &str = "withdraw";
 pub const SWAP_EVENT: &str = "swap";
 pub const SYNC_EVENT: &str = "sync";
 pub const SOROSWAP_MAINNET_FACTORY: &str = "CA4HEQTL2WPEUYKYKCDOHCDNIV4QHNJ7EL4J4NQ6VADP7SYHVRYZ7AW2";
 
-pub fn scaffold() -> ScaffoldAdaptor {
-    ScaffoldAdaptor {
-        venue_id: VenueId::SoroswapAmm,
-        name: "Soroswap AMM",
-        notes: "Scaffold. AMM only (not aggregator).",
+/// Soroswap's Router operation boundary. This only creates a validated,
+/// unsigned operation draft; the policy contract and relayer do not execute
+/// it until the venue-specific authorization path is implemented.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct SoroswapAdaptor;
+
+impl DexAdaptor for SoroswapAdaptor {
+    fn venue_id(&self) -> VenueId {
+        VenueId::SoroswapAmm
+    }
+
+    fn name(&self) -> &'static str {
+        "Soroswap AMM"
+    }
+
+    fn status(&self) -> VenueStatus {
+        VenueStatus::Scaffold
+    }
+
+    fn capabilities(&self) -> VenueCapabilities {
+        VenueCapabilities {
+            list_pools: true,
+            positions: true,
+            liquidity_events: true,
+            quotes: true,
+            draft_ops: true,
+            deposit: true,
+            withdraw: true,
+            claim: false,
+            copy_scale: false,
+        }
+    }
+
+    fn notes(&self) -> &'static str {
+        "Validated unsigned Router drafts; policy-controlled execution remains fail-closed."
+    }
+
+    fn build_draft_op(&self, request: DraftRequest) -> Result<DraftOp> {
+        if request.pool_address.is_empty() || request.position_key.is_empty() {
+            bail!("draft operation requires pool_address and position_key");
+        }
+        match request.kind {
+            DraftOpKind::Deposit => validate_router_payload(
+                &request.payload,
+                &[
+                    "token_a",
+                    "token_b",
+                    "amount_a_desired",
+                    "amount_b_desired",
+                    "amount_a_min",
+                    "amount_b_min",
+                    "to",
+                    "deadline",
+                ],
+            )?,
+            DraftOpKind::Withdraw => validate_router_payload(
+                &request.payload,
+                &[
+                    "token_a",
+                    "token_b",
+                    "liquidity",
+                    "amount_a_min",
+                    "amount_b_min",
+                    "to",
+                    "deadline",
+                ],
+            )?,
+            _ => bail!("Soroswap AMM supports deposit and withdraw drafts only"),
+        }
+        Ok(DraftOp {
+            venue_id: self.venue_id(),
+            pool_address: request.pool_address,
+            kind: request.kind,
+            position_key: request.position_key,
+            amounts: request.payload,
+            quote_xlm: request.quote_xlm,
+        })
     }
 }
 
 pub fn adaptor() -> impl DexAdaptor {
-    scaffold()
+    SoroswapAdaptor
+}
+
+fn validate_router_payload(payload: &Value, required: &[&str]) -> Result<()> {
+    let object = payload
+        .as_object()
+        .ok_or_else(|| anyhow!("Soroswap Router payload must be an object"))?;
+    for key in required {
+        let value = object
+            .get(*key)
+            .ok_or_else(|| anyhow!("Soroswap Router payload missing {key}"))?;
+        if value.as_str().is_none_or(str::is_empty) {
+            bail!("Soroswap Router payload field {key} must be a non-empty string");
+        }
+    }
+    Ok(())
 }
 
 pub async fn discover_pool_addresses(rpc: &SorobanRpc, factory_address: &str) -> Result<Vec<String>> {
@@ -146,5 +238,48 @@ mod tests {
         assert_eq!(classify_liquidity_event(SWAP_EVENT), None);
         assert_eq!(classify_liquidity_event(SYNC_EVENT), None);
         assert_eq!(classify_liquidity_event("admin"), None);
+    }
+
+    #[test]
+    fn soroswap_builds_deposit_draft_only_with_router_safety_fields() {
+        let request = DraftRequest {
+            pool_address: "CPOOL".into(),
+            kind: DraftOpKind::Deposit,
+            position_key: "shares:100".into(),
+            payload: serde_json::json!({
+                "token_a": "CTOKENA",
+                "token_b": "CTOKENB",
+                "amount_a_desired": "100",
+                "amount_b_desired": "200",
+                "amount_a_min": "99",
+                "amount_b_min": "198",
+                "to": "GUSER",
+                "deadline": "12345"
+            }),
+            quote_xlm: Some(1.0),
+        };
+        let draft = SoroswapAdaptor.build_draft_op(request).unwrap();
+        assert_eq!(draft.venue_id, VenueId::SoroswapAmm);
+        assert!(SoroswapAdaptor
+            .build_draft_op(DraftRequest {
+                pool_address: "CPOOL".into(),
+                kind: DraftOpKind::Deposit,
+                position_key: "shares:100".into(),
+                payload: serde_json::json!({"token_a": "CTOKENA"}),
+                quote_xlm: None,
+            })
+            .is_err());
+    }
+
+    #[test]
+    fn soroswap_rejects_claim_and_malformed_router_payloads() {
+        let base = DraftRequest {
+            pool_address: "CPOOL".into(),
+            kind: DraftOpKind::Claim,
+            position_key: "shares:100".into(),
+            payload: serde_json::json!({}),
+            quote_xlm: None,
+        };
+        assert!(SoroswapAdaptor.build_draft_op(base).is_err());
     }
 }

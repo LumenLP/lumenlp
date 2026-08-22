@@ -7,24 +7,130 @@
 
 use {
     crate::{
-        adaptor::{DexAdaptor, LiquidityEventKind, ScaffoldAdaptor, VenueId},
+        adaptor::{
+            DexAdaptor, DraftOp, DraftOpKind, DraftRequest, LiquidityEventKind, VenueCapabilities, VenueId, VenueStatus,
+        },
         rpc::{scval_to_address, scval_to_u128, SorobanRpc},
         types::{PoolType, SharePoolState},
     },
-    anyhow::{anyhow, Result},
+    anyhow::{anyhow, bail, Result},
+    serde_json::Value,
     stellar_xdr::curr as xdr,
 };
 
-pub fn scaffold() -> ScaffoldAdaptor {
-    ScaffoldAdaptor {
-        venue_id: VenueId::Phoenix,
-        name: "Phoenix",
-        notes: "Scaffold. CP AMM read+draft planned.",
+/// Phoenix pool operation boundary. The two pool implementations use
+/// different provide_liquidity signatures, so the pool type must be explicit
+/// in every draft rather than inferred from a token pair.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct PhoenixAdaptor;
+
+impl DexAdaptor for PhoenixAdaptor {
+    fn venue_id(&self) -> VenueId {
+        VenueId::Phoenix
+    }
+
+    fn name(&self) -> &'static str {
+        "Phoenix"
+    }
+
+    fn status(&self) -> VenueStatus {
+        VenueStatus::Scaffold
+    }
+
+    fn capabilities(&self) -> VenueCapabilities {
+        VenueCapabilities {
+            list_pools: true,
+            positions: true,
+            liquidity_events: true,
+            quotes: true,
+            draft_ops: true,
+            deposit: true,
+            withdraw: true,
+            claim: false,
+            copy_scale: false,
+        }
+    }
+
+    fn notes(&self) -> &'static str {
+        "Validated unsigned pool drafts for XYK and stable pools; policy-controlled execution remains fail-closed."
+    }
+
+    fn build_draft_op(&self, request: DraftRequest) -> Result<DraftOp> {
+        if request.pool_address.is_empty() || request.position_key.is_empty() {
+            bail!("draft operation requires pool_address and position_key");
+        }
+        let pool_type = request
+            .payload
+            .get("pool_type")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("Phoenix draft requires pool_type"))?;
+        match request.kind {
+            DraftOpKind::Deposit => match pool_type {
+                "constant_product" => validate_payload(
+                    &request.payload,
+                    &[
+                        "depositor",
+                        "desired_a",
+                        "min_a",
+                        "desired_b",
+                        "min_b",
+                        "custom_slippage_bps",
+                        "deadline",
+                        "auto_stake",
+                    ],
+                )?,
+                "stable" => validate_payload(
+                    &request.payload,
+                    &[
+                        "depositor",
+                        "desired_a",
+                        "desired_b",
+                        "custom_slippage_bps",
+                        "deadline",
+                        "min_shares_to_receive",
+                        "auto_stake",
+                    ],
+                )?,
+                other => bail!("unsupported Phoenix pool_type: {other}"),
+            },
+            DraftOpKind::Withdraw => validate_payload(
+                &request.payload,
+                &[
+                    "recipient",
+                    "share_amount",
+                    "min_a",
+                    "min_b",
+                    "deadline",
+                    "auto_unstake",
+                ],
+            )?,
+            _ => bail!("Phoenix supports deposit and withdraw drafts only"),
+        }
+        Ok(DraftOp {
+            venue_id: self.venue_id(),
+            pool_address: request.pool_address,
+            kind: request.kind,
+            position_key: request.position_key,
+            amounts: request.payload,
+            quote_xlm: request.quote_xlm,
+        })
     }
 }
 
 pub fn adaptor() -> impl DexAdaptor {
-    scaffold()
+    PhoenixAdaptor
+}
+
+fn validate_payload(payload: &Value, required: &[&str]) -> Result<()> {
+    let object = payload
+        .as_object()
+        .ok_or_else(|| anyhow!("Phoenix draft payload must be an object"))?;
+    for key in required {
+        if !object.contains_key(*key) {
+            bail!("Phoenix draft payload missing {key}");
+        }
+    }
+    Ok(())
 }
 
 pub const FACTORY_QUERY_ALL_POOLS_DETAILS_METHOD: &str = "query_all_pools_details";
@@ -207,5 +313,60 @@ mod tests {
         );
         assert_eq!(classify_liquidity_event("swap"), None);
         assert_eq!(classify_liquidity_event("initialize"), None);
+    }
+
+    #[test]
+    fn phoenix_requires_pool_specific_deposit_parameters() {
+        let request = DraftRequest {
+            pool_address: "CPOOL".into(),
+            kind: DraftOpKind::Deposit,
+            position_key: "shares:100".into(),
+            payload: serde_json::json!({
+                "pool_type": "constant_product",
+                "depositor": "GUSER",
+                "desired_a": "100",
+                "min_a": "99",
+                "desired_b": "200",
+                "min_b": "198",
+                "custom_slippage_bps": null,
+                "deadline": "12345",
+                "auto_stake": false
+            }),
+            quote_xlm: Some(1.0),
+        };
+        assert!(PhoenixAdaptor.build_draft_op(request).is_ok());
+        assert!(PhoenixAdaptor
+            .build_draft_op(DraftRequest {
+                payload: serde_json::json!({
+                    "pool_type": "stable",
+                    "depositor": "GUSER",
+                    "desired_a": "100",
+                    "desired_b": "200",
+                    "custom_slippage_bps": null,
+                    "deadline": "12345",
+                    "min_shares_to_receive": "90",
+                    "auto_stake": false
+                }),
+                ..DraftRequest {
+                    pool_address: "CPOOL".into(),
+                    kind: DraftOpKind::Deposit,
+                    position_key: "shares:100".into(),
+                    payload: Value::Null,
+                    quote_xlm: None,
+                }
+            })
+            .is_ok());
+    }
+
+    #[test]
+    fn phoenix_rejects_unknown_pool_type_and_claim() {
+        let request = DraftRequest {
+            pool_address: "CPOOL".into(),
+            kind: DraftOpKind::Deposit,
+            position_key: "shares:100".into(),
+            payload: serde_json::json!({"pool_type": "clmm"}),
+            quote_xlm: None,
+        };
+        assert!(PhoenixAdaptor.build_draft_op(request).is_err());
     }
 }

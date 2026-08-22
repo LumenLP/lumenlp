@@ -19,6 +19,7 @@ pub fn coefficient_ppm(coefficient: f64) -> Option<u32> {
 #[derive(Debug, Clone, PartialEq)]
 pub enum PolicyReject {
     Expired,
+    VenueNotEnabled,
     PoolNotAllowed,
     OperationLimit,
     DailyLimit,
@@ -28,6 +29,7 @@ impl PolicyReject {
     pub fn code(&self) -> &'static str {
         match self {
             Self::Expired => "policy_expired",
+            Self::VenueNotEnabled => "venue_not_enabled",
             Self::PoolNotAllowed => "pool_not_allowed",
             Self::OperationLimit => "per_operation_limit",
             Self::DailyLimit => "daily_limit",
@@ -40,6 +42,7 @@ impl PolicyReject {
 /// sessions; new automated sessions should always set explicit limits.
 pub fn validate_copy_op(
     session: &CopySessionRow,
+    venue: &str,
     pool_address: &str,
     scaled_quote_xlm: Option<f64>,
     now: i64,
@@ -47,6 +50,13 @@ pub fn validate_copy_op(
 ) -> Result<(), PolicyReject> {
     if session.expires_at.is_some_and(|expires_at| now >= expires_at) {
         return Err(PolicyReject::Expired);
+    }
+
+    // The on-chain policy entry point currently executes the Aquarius pool
+    // interface only. Keep other venues visible in the queue, but never allow
+    // them to reach the Aquarius recorder or relayer path by accident.
+    if venue != "aquarius" {
+        return Err(PolicyReject::VenueNotEnabled);
     }
 
     if !session.allowed_pools.is_empty() && !session.allowed_pools.iter().any(|pool| pool == pool_address) {
@@ -90,11 +100,11 @@ mod tests {
     #[test]
     fn rejects_outside_policy_scope() {
         assert_eq!(
-            validate_copy_op(&session(), "COTHER", Some(1.0), 1_000, 0.0),
+            validate_copy_op(&session(), "aquarius", "COTHER", Some(1.0), 1_000, 0.0),
             Err(PolicyReject::PoolNotAllowed)
         );
         assert_eq!(
-            validate_copy_op(&session(), "CPOOL", Some(11.0), 1_000, 0.0),
+            validate_copy_op(&session(), "aquarius", "CPOOL", Some(11.0), 1_000, 0.0),
             Err(PolicyReject::OperationLimit)
         );
     }
@@ -102,12 +112,20 @@ mod tests {
     #[test]
     fn rejects_daily_limit_and_expiry() {
         assert_eq!(
-            validate_copy_op(&session(), "CPOOL", Some(5.0), 1_000, 16.0),
+            validate_copy_op(&session(), "aquarius", "CPOOL", Some(5.0), 1_000, 16.0),
             Err(PolicyReject::DailyLimit)
         );
         assert_eq!(
-            validate_copy_op(&session(), "CPOOL", Some(1.0), 2_000, 0.0),
+            validate_copy_op(&session(), "aquarius", "CPOOL", Some(1.0), 2_000, 0.0),
             Err(PolicyReject::Expired)
+        );
+    }
+
+    #[test]
+    fn rejects_non_aquarius_until_execution_adapter_is_enabled() {
+        assert_eq!(
+            validate_copy_op(&session(), "soroswap_amm", "CPOOL", Some(1.0), 1_000, 0.0),
+            Err(PolicyReject::VenueNotEnabled)
         );
     }
 

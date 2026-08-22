@@ -7,12 +7,15 @@
 
 use {
     crate::{
-        adaptor::{DexAdaptor, ScaffoldAdaptor, VenueId},
+        adaptor::{
+            DexAdaptor, DraftOp, DraftOpKind, DraftRequest, ScaffoldAdaptor, VenueCapabilities, VenueId, VenueStatus,
+        },
         rpc::{scval_to_address, scval_to_u128, SorobanRpc},
         types::{PoolType, SharePoolState},
     },
-    anyhow::{anyhow, Result},
+    anyhow::{anyhow, bail, Result},
     base64::{engine::general_purpose::STANDARD as BASE64, Engine as _},
+    serde_json::Value,
     stellar_xdr::curr as xdr,
 };
 
@@ -27,8 +30,92 @@ pub fn scaffold() -> ScaffoldAdaptor {
     }
 }
 
+#[derive(Debug, Default, Clone, Copy)]
+pub struct CometAdaptor;
+
+impl DexAdaptor for CometAdaptor {
+    fn venue_id(&self) -> VenueId {
+        VenueId::Comet
+    }
+
+    fn name(&self) -> &'static str {
+        "Comet"
+    }
+
+    fn status(&self) -> VenueStatus {
+        VenueStatus::Scaffold
+    }
+
+    fn capabilities(&self) -> VenueCapabilities {
+        VenueCapabilities {
+            list_pools: true,
+            positions: true,
+            liquidity_events: true,
+            quotes: true,
+            draft_ops: true,
+            deposit: true,
+            withdraw: true,
+            claim: false,
+            copy_scale: false,
+        }
+    }
+
+    fn notes(&self) -> &'static str {
+        "Validated unsigned weighted-pool join/exit drafts; policy-controlled execution remains fail-closed."
+    }
+
+    fn build_draft_op(&self, request: DraftRequest) -> Result<DraftOp> {
+        if request.pool_address.is_empty() || request.position_key.is_empty() {
+            bail!("draft operation requires pool_address and position_key");
+        }
+        match request.kind {
+            DraftOpKind::Deposit => validate_join_exit_payload(&request.payload, "pool_amount_out", "max_amounts_in")?,
+            DraftOpKind::Withdraw => validate_join_exit_payload(&request.payload, "pool_amount_in", "min_amounts_out")?,
+            _ => bail!("Comet supports join and exit drafts only"),
+        }
+        Ok(DraftOp {
+            venue_id: self.venue_id(),
+            pool_address: request.pool_address,
+            kind: request.kind,
+            position_key: request.position_key,
+            amounts: request.payload,
+            quote_xlm: request.quote_xlm,
+        })
+    }
+}
+
 pub fn adaptor() -> impl DexAdaptor {
-    scaffold()
+    CometAdaptor
+}
+
+fn validate_join_exit_payload(payload: &Value, amount_key: &str, limits_key: &str) -> Result<()> {
+    let object = payload
+        .as_object()
+        .ok_or_else(|| anyhow!("Comet draft payload must be an object"))?;
+    let amount = object
+        .get(amount_key)
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("Comet draft payload missing {amount_key}"))?;
+    if amount.parse::<u128>().ok().filter(|value| *value > 0).is_none() {
+        bail!("Comet {amount_key} must be a positive integer string");
+    }
+    let limits = object
+        .get(limits_key)
+        .and_then(Value::as_array)
+        .ok_or_else(|| anyhow!("Comet draft payload missing {limits_key} array"))?;
+    if limits.len() < 2 {
+        bail!("Comet weighted pool requires at least two token limits");
+    }
+    if limits
+        .iter()
+        .any(|value| value.as_str().and_then(|value| value.parse::<u128>().ok()).is_none())
+    {
+        bail!("Comet token limits must be integer strings");
+    }
+    if object.get("user").and_then(Value::as_str).is_none_or(str::is_empty) {
+        bail!("Comet draft payload requires user");
+    }
+    Ok(())
 }
 
 pub async fn discover_mainnet_pool_addresses(rpc: &SorobanRpc) -> Result<Vec<String>> {
@@ -180,5 +267,34 @@ mod tests {
     #[test]
     fn invalid_event_xdr_is_ignored() {
         assert_eq!(contract_hash_from_xdr("not-xdr"), None);
+    }
+
+    #[test]
+    fn comet_requires_ordered_token_limit_arrays() {
+        let request = DraftRequest {
+            pool_address: "CPOOL".into(),
+            kind: DraftOpKind::Deposit,
+            position_key: "shares:100".into(),
+            payload: serde_json::json!({
+                "pool_amount_out": "100",
+                "max_amounts_in": ["1000", "2000", "3000"],
+                "user": "GUSER"
+            }),
+            quote_xlm: Some(1.0),
+        };
+        assert!(CometAdaptor.build_draft_op(request).is_ok());
+
+        let bad = DraftRequest {
+            pool_address: "CPOOL".into(),
+            kind: DraftOpKind::Withdraw,
+            position_key: "shares:100".into(),
+            payload: serde_json::json!({
+                "pool_amount_in": "100",
+                "min_amounts_out": ["0"],
+                "user": "GUSER"
+            }),
+            quote_xlm: None,
+        };
+        assert!(CometAdaptor.build_draft_op(bad).is_err());
     }
 }

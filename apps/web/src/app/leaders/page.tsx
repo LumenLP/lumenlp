@@ -26,6 +26,19 @@ function tokenLabel(p: Position) {
   return p.tokens.map(shortAddr).join(" · ") || "—";
 }
 
+function venueLabel(venue?: string, poolType?: string) {
+  switch (venue) {
+    case "aquarius": return "Aquarius";
+    case "sushi":
+    case "sushi_v3": return "Sushi V3";
+    case "soroswap":
+    case "soroswap_amm": return "Soroswap";
+    case "phoenix": return "Phoenix";
+    case "comet": return "Comet";
+    default: return poolType ?? "—";
+  }
+}
+
 function quoteLabel(usd: number | null | undefined, xlm: number, digits = 1) {
   if (fmtUsd(usd) !== "—") return fmtUsd(usd);
   return `${fmtNum(xlm, digits)} XLM`;
@@ -503,7 +516,7 @@ function LeadersInner() {
                       <Link href={`/pools/view?address=${encodeURIComponent(p.pool_address)}`}>
                         {tokenLabel(p)}
                       </Link>
-                      <span className="badge">{p.venue ?? p.pool_type}</span>
+                      <span className="badge">{venueLabel(p.venue, p.pool_type)}</span>
                     </div>
                     <div className="muted">
                       Value {fmtNum(p.value_quote, 2)} XLM

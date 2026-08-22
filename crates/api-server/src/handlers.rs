@@ -15,7 +15,7 @@ use {
     },
     axum::{
         extract::{Path, Query, State},
-        http::{header::CACHE_CONTROL, HeaderValue, StatusCode},
+        http::{header::CACHE_CONTROL, HeaderName, HeaderValue, StatusCode},
         response::IntoResponse,
         routing::{get, patch, post},
         Json, Router,
@@ -640,21 +640,6 @@ async fn list_pools(State(state): State<AppState>, Query(query): Query<PoolListQ
     // does not synchronously rebuild the full multi-DEX ranking catalogue.
     const REDIS_POOL_LIST_CACHE_SECS: u64 = 300;
     const REDIS_POOL_LIST_KEY: &str = "lumenlp:pools:v1";
-    if let Some(client) = state.redis.clone() {
-        if let Ok(mut connection) = client.get_multiplexed_async_connection().await {
-            let cached: redis::RedisResult<Option<String>> = connection.get(REDIS_POOL_LIST_KEY).await;
-            if let Ok(Some(serialized)) = cached {
-                if let Ok(body) = serde_json::from_str::<Value>(&serialized) {
-                    let mut response = Json(paginate_pool_body(body, &query)).into_response();
-                    response.headers_mut().insert(
-                        CACHE_CONTROL,
-                        HeaderValue::from_static("public, max-age=60, s-maxage=60, stale-while-revalidate=120"),
-                    );
-                    return response;
-                }
-            }
-        }
-    }
     if let Some(body) = {
         let cache = state.pool_list_cache.lock().unwrap();
         cache
@@ -666,7 +651,30 @@ async fn list_pools(State(state): State<AppState>, Query(query): Query<PoolListQ
             CACHE_CONTROL,
             HeaderValue::from_static("public, max-age=60, s-maxage=60, stale-while-revalidate=120"),
         );
+        response.headers_mut().insert(
+            HeaderName::from_static("cdn-cache-control"),
+            HeaderValue::from_static("public, max-age=60, stale-while-revalidate=120"),
+        );
         return response;
+    }
+    if let Some(client) = state.redis.clone() {
+        if let Ok(mut connection) = client.get_multiplexed_async_connection().await {
+            let cached: redis::RedisResult<Option<String>> = connection.get(REDIS_POOL_LIST_KEY).await;
+            if let Ok(Some(serialized)) = cached {
+                if let Ok(body) = serde_json::from_str::<Value>(&serialized) {
+                    let mut response = Json(paginate_pool_body(body, &query)).into_response();
+                    response.headers_mut().insert(
+                        CACHE_CONTROL,
+                        HeaderValue::from_static("public, max-age=60, s-maxage=60, stale-while-revalidate=120"),
+                    );
+                    response.headers_mut().insert(
+                        HeaderName::from_static("cdn-cache-control"),
+                        HeaderValue::from_static("public, max-age=60, stale-while-revalidate=120"),
+                    );
+                    return response;
+                }
+            }
+        }
     }
     let (
         rows,
@@ -827,6 +835,10 @@ async fn list_pools(State(state): State<AppState>, Query(query): Query<PoolListQ
             response.headers_mut().insert(
                 CACHE_CONTROL,
                 HeaderValue::from_static("public, max-age=60, s-maxage=60, stale-while-revalidate=120"),
+            );
+            response.headers_mut().insert(
+                HeaderName::from_static("cdn-cache-control"),
+                HeaderValue::from_static("public, max-age=60, stale-while-revalidate=120"),
             );
             response
         }
@@ -1642,7 +1654,7 @@ async fn lp_profile(State(state): State<AppState>, Query(q): Query<AddressQuery>
 
     Json(json!({
         "address": q.address,
-        "venue_id": "aquarius",
+        "venue_id": "multi_venue",
         "portfolio": {
             "net_worth_xlm": net_worth,
             "net_worth_usd": to_usd(net_worth),
@@ -1804,8 +1816,18 @@ fn reconcile_copy_ops(index_db: &IndexDb, session: &mut CopySessionRow) -> Resul
                 .and_hms_opt(0, 0, 0)
                 .map(|value| value.and_utc().timestamp())
                 .unwrap_or(0);
+            // Older Aquarius rows predate the explicit venue marker. Treat
+            // missing metadata as Aquarius for migration compatibility, but
+            // require an explicit allow-list for every other venue.
+            let venue = event
+                .body
+                .get("derived")
+                .and_then(|derived| derived.get("venue"))
+                .and_then(Value::as_str)
+                .unwrap_or("aquarius");
             let policy_result = validate_copy_op(
                 session,
+                venue,
                 &event.pool_address,
                 draft.scaled_quote_xlm,
                 Utc::now().timestamp(),
