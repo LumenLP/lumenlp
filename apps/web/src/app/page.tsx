@@ -9,8 +9,8 @@ export default function HomePage() {
           Track LPs. Copy the best. <span className="text-gradient">Automate the rest.</span>
         </h1>
         <p className="landing-lead">
-          Discover active Aquarius LPs, set your copy rules and limits, and let
-          policy-controlled automation execute approved liquidity actions.
+          Discover active LPs across Stellar DEX pools, set your copy rules and
+          limits, and let policy-controlled automation execute approved liquidity actions.
         </p>
         <div className="landing-actions">
           <Link className="btn-solid" href="/leaders">
@@ -21,7 +21,7 @@ export default function HomePage() {
           </Link>
         </div>
         <div className="protocol-row">
-          <span className="protocol-pill">Aquarius</span>
+          <span className="protocol-pill">Multi-DEX</span>
           <span className="protocol-pill">Soroban</span>
           <span className="protocol-pill">Stellar</span>
         </div>
@@ -69,7 +69,7 @@ export default function HomePage() {
             <div className="act-label">Act 02 · Copy</div>
             <h3 className="act-title">Copy LP actions, not random swaps</h3>
             <p className="act-body">
-              Follow Aquarius deposits, withdrawals, and fee claims at a
+              Follow supported DEX deposits, withdrawals, and fee claims at a
               coefficient you choose. Each operation stays tied to its source
               event and pool.
             </p>

@@ -138,7 +138,7 @@ from this public architecture document.
 | Data plane | `crates/pool-indexer` | Reads bounded Soroban `getEvents` ranges, classifies LP lifecycle events, attributes actors, advances a ledger cursor, and builds time-window rollups. | `pool-indexer.db` |
 | State plane | `crates/snapshotter` + `crates/dex` | Discovers pools, reads tokens/reserves/fees/shares through RPC simulation, resolves prices, and records snapshots. | `lumenlp.db` |
 | Read plane | `crates/api-server` + `apps/web` | Joins indexed events and snapshots into pool, Leader, Copy LP, and status APIs and renders the UI. | JSON responses and user views |
-| Execution plane | `contracts/copy-policy` + recorder boundary + relayer + `crates/dex` | Normalizes accepted source events, persists an idempotent recorder payload, validates session scope on Soroban, and authorizes only declared token movements through the selected DEX adapter. | Recorder outbox, on-chain policy state, and transaction history |
+| Execution plane | `contracts/copy-policy` + recorder boundary + relayer + `crates/dex` | Normalizes accepted source events, persists an idempotent recorder payload, validates session scope on Soroban, and authorizes only declared token movements through a production-enabled DEX adapter. Draft-only venues remain fail-closed. | Recorder outbox, on-chain policy state, and transaction history |
 
 The key separation is intentional: the indexer observes and proposes source
 events off-chain, while the Soroban policy contract is the final authority for

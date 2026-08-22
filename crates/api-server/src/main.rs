@@ -16,6 +16,7 @@ use {
     std::{
         collections::HashMap,
         net::SocketAddr,
+        sync::atomic::AtomicUsize,
         sync::{Arc, Mutex},
     },
     tower_http::cors::{Any, CorsLayer},
@@ -48,18 +49,33 @@ async fn main() -> Result<()> {
         token_meta_cache,
         prices,
         pool_list_cache: Arc::new(Mutex::new(None)),
+        pool_list_refresh: Arc::new(tokio::sync::Mutex::new(())),
         redis,
+        leader_fee_scan_cursor: Arc::new(AtomicUsize::new(0)),
     };
 
     let cors = CorsLayer::new().allow_origin(Any).allow_methods(Any).allow_headers(Any);
 
     let warm_state = state.clone();
+    let fee_state = state.clone();
     let app = Router::new().merge(handlers::router()).layer(cors).with_state(state);
 
     tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         handlers::warm_pool_list_cache(warm_state).await;
         info!("pool list cache warmed");
+    });
+
+    let fee_refresh_secs = std::env::var("LEADER_FEE_SNAPSHOT_SECS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value >= 30)
+        .unwrap_or(300);
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(fee_refresh_secs));
+        loop {
+            interval.tick().await;
+            handlers::refresh_leader_fee_snapshots(fee_state.clone()).await;
+        }
     });
 
     let addr: SocketAddr = bind.parse()?;

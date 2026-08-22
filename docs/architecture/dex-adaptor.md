@@ -34,9 +34,20 @@ crates/dex/
 
 ## Capabilities
 
-Each row exposes booleans for pool discovery and normalized LP actions: `list_pools`, `positions`, `liquidity_events`, `quotes`, `draft_ops`, `deposit`, `withdraw`, `claim`, and `copy_scale`.
+Each row exposes booleans for pool discovery and normalized LP actions:
+`list_pools`, `positions`, `liquidity_events`, `quotes`, `draft_ops`,
+`deposit`, `withdraw`, `claim`, and `copy_scale`. These operation fields mean
+that the adaptor can validate and build an unsigned venue-specific draft; they
+do not by themselves authorize an automated transaction.
 
-Aquarius currently sets all to `true`. Scaffolds set all to `false` until a production adaptor lands. Stellar Classic DEX is intentionally outside this pool-LP adapter registry because its order-book model does not expose the same pool deposit/withdraw lifecycle.
+`copy_execution_enabled` is the separate production gate. It is true only when
+the venue is marked `production`, supports coefficient-scaled operations, and
+has the required deposit and withdrawal policy path. Today only Aquarius is
+enabled. Phoenix, Sushi V3, Soroswap AMM, and Comet can expose analytics and
+validated unsigned drafts while remaining fail-closed for automated Copy LP.
+Stellar Classic DEX is intentionally outside this pool-LP adapter registry
+because its order-book model does not expose the same pool deposit/withdraw
+lifecycle.
 
 ## Normalized boundary
 
@@ -47,7 +58,8 @@ DexAdaptor
   normalize_position(UserPosition)     → PositionDescriptor
   normalize_event(LiquidityEvent)      → validated event
   build_draft_op(DraftRequest)          → DraftOp or fail-closed error
-  support_row()                         → matrix row for docs/API
+  support_row()                         → matrix row for docs/API, including
+                                          copy_execution_enabled
 ```
 
 `PoolDescriptor`, `PositionDescriptor`, `LiquidityEvent`, and `DraftRequest` are shared strategy-facing types. Their payload fields intentionally retain venue-specific JSON where CP shares and CL ticks cannot be represented by one fixed schema.

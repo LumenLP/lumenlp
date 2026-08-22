@@ -136,6 +136,12 @@ export type LeaderBoardRow = {
   deposit_quote_usd?: number | null;
   withdraw_quote_usd?: number | null;
   claim_quote_usd?: number | null;
+  unclaimed_fee_quote_xlm?: number | null;
+  unclaimed_fee_quote_usd?: number | null;
+  accrued_fee_quote_xlm?: number | null;
+  accrued_fee_quote_usd?: number | null;
+  fee_snapshot_at?: number | null;
+  fee_snapshot_position_count?: number;
   net_liquidity_quote_xlm: number;
   fee_capital_ratio?: number | null;
   distinct_pools: number;
@@ -409,9 +415,9 @@ export function fetchLpProfile(address: string) {
   return getJson<LpProfile>(`/v1/lp/profile?address=${encodeURIComponent(address)}`);
 }
 
-export function fetchLpLeaders(limit = 25, windowDays = 30) {
+export function fetchLpLeaders(limit = 25, windowDays = 30, sort: "fees" | "activity" = "fees") {
   return getJson<LeadersBoardResponse>(
-    `/v1/lp/leaders?limit=${limit}&window_days=${windowDays}`,
+    `/v1/lp/leaders?limit=${limit}&window_days=${windowDays}&sort=${sort}`,
   );
 }
 
@@ -445,7 +451,7 @@ export function fmtNum(n: number | null | undefined, digits = 4) {
   return n.toLocaleString(undefined, { maximumFractionDigits: digits });
 }
 
-/** Compact USD like lpagent: `$1.22m`, `$48.51k`, `$377.88`. */
+/** Compact USD formatting used across the LumenLP pool and leader views. */
 export function fmtUsd(n: number | null | undefined, digits = 2) {
   if (n == null || Number.isNaN(n)) return "—";
   const abs = Math.abs(n);

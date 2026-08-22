@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { fmtUsd } from "./api";
 
 describe("fmtUsd", () => {
-  it("formats millions like lpagent", () => {
+  it("formats millions consistently for LumenLP", () => {
     expect(fmtUsd(1_217_341.73)).toBe("$1.22m");
   });
 

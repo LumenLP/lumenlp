@@ -12,7 +12,8 @@ promotion remains blocked until all downstream authorization paths are tested.
   per-operation quote limit, UTC daily quote limit, and expiry.
 - Owner can pause, resume, or disarm a session.
 - The relayer can submit a source-event identifier only when the session is
-  active, the pool and operation are allowed, and both limits pass.
+  active, the source event belongs to the session's configured Leader, the
+  pool and operation are allowed, and both limits pass.
 - Source-event identifiers are replay-protected and successful executions emit
   a `copy` event.
 
@@ -23,6 +24,24 @@ adapter boundary for standard Aquarius pools: it invokes only `deposit`,
 also requires an explicit reward-token address and derives the claim amount
 from the pool before authorizing the transfer. It is still not enabled on
 production and does not yet support concentrated-liquidity position calls.
+For deposits, the requested token amounts must equal the coefficient-scaled
+source event. For withdrawals, the requested share amount is likewise bound to
+the coefficient-scaled source event. A relayer cannot replace the Leader,
+change the copy size, or reuse an event by changing downstream call arguments.
+
+The contract intentionally does not dispatch arbitrary calls to a DEX. A venue
+must first have a reviewed adapter contract interface, deterministic fixtures,
+capability reporting, and fail-closed behavior for unsupported operations.
+Aquarius is the current contract reference path; Phoenix, Sushi V3, Soroswap
+AMM, and Comet remain separate adapter-validation work and are not implicitly
+enabled by the policy contract.
+
+The `execute_standard_op` entry point is the venue-neutral boundary for future
+adapters. It currently routes only the `aquarius` venue and rejects every
+other venue before loading authorization state, consuming quota, or writing a
+replay marker. A future venue must be added through an explicit adapter branch
+with its own contract fixtures and capability-gated tests; it cannot inherit
+Aquarius call semantics by passing a different venue string.
 
 ## Build
 
@@ -32,11 +51,19 @@ stellar contract build --package lumenlp-copy-policy --out-dir target/contracts
 
 The current local build artifact is
 `target/wasm32v1-none/release/lumenlp_copy_policy.wasm`. It was built on
-2026-08-18 with hash:
+2026-08-22 with hash:
 
-`b4e0bde92aa7549c630b7f16a049e40bfeb9ac8cc96ca8e817d890a318be3d58`
+`dcfd401e75f1a71b6a30a9117f31dd1c2f529fbc459631487bd4d4388a909f9e`
 
-This build is deployed as the v3 testnet instance below.
+The deployed v3 testnet instance below is the previous promotion-gated build;
+the new generic entry point remains local until its testnet deployment and
+smoke tests are completed.
+
+To deploy a separate testnet instance without replacing this contract, use
+`deploy/deploy-copy-policy-testnet.sh` with `STELLAR_TESTNET_SOURCE` and
+`STELLAR_TESTNET_SIGNER` set to testnet-only credentials. The script refuses
+non-testnet configuration and uses a deterministic, overridable deployment
+salt.
 
 ## Testnet Deployment
 

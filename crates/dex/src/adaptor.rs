@@ -206,6 +206,9 @@ pub struct VenueSupportRow {
     pub name: &'static str,
     pub status: VenueStatus,
     pub capabilities: VenueCapabilities,
+    /// True only when the venue is production-enabled and the policy path can
+    /// safely scale and execute its supported LP operations.
+    pub copy_execution_enabled: bool,
     pub notes: &'static str,
 }
 
@@ -299,11 +302,16 @@ pub trait DexAdaptor: Send + Sync {
     }
 
     fn support_row(&self) -> VenueSupportRow {
+        let capabilities = self.capabilities();
         VenueSupportRow {
             venue_id: self.venue_id(),
             name: self.name(),
             status: self.status(),
-            capabilities: self.capabilities(),
+            copy_execution_enabled: self.status() == VenueStatus::Production
+                && capabilities.copy_scale
+                && capabilities.deposit
+                && capabilities.withdraw,
+            capabilities,
             notes: self.notes(),
         }
     }
@@ -450,6 +458,7 @@ mod tests {
         assert_eq!(prod.len(), 1);
         assert_eq!(prod[0].venue_id, VenueId::Aquarius);
         assert!(prod[0].capabilities.copy_scale);
+        assert!(prod[0].copy_execution_enabled);
     }
 
     #[test]
@@ -572,6 +581,18 @@ mod tests {
                     adaptor.name()
                 );
             }
+        }
+    }
+
+    #[test]
+    fn only_production_venue_is_copy_execution_enabled() {
+        for row in support_matrix() {
+            assert_eq!(
+                row.copy_execution_enabled,
+                row.venue_id == VenueId::Aquarius,
+                "unexpected copy execution flag for {}",
+                row.name
+            );
         }
     }
 

@@ -55,6 +55,21 @@ paths:
           name: limit
           schema:
             type: integer
+        - in: query
+          name: page
+          schema:
+            type: integer
+            minimum: 1
+        - in: query
+          name: dex
+          description: Filter by venue id, for example aquarius or soroswap_amm.
+          schema:
+            type: string
+        - in: query
+          name: venue
+          description: Alias for dex.
+          schema:
+            type: string
       responses:
         "200":
           description: Pool list
@@ -191,6 +206,16 @@ paths:
       responses:
         "200":
           description: Ops queue
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  session_id: { type: string }
+                  ops:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/CopyOp"
   /v1/copy/ops/{id}:
     get:
       summary: Get one copy op (scaled amounts)
@@ -203,6 +228,10 @@ paths:
       responses:
         "200":
           description: Copy op
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CopyOp"
         "404":
           description: Not found
 components:
@@ -231,6 +260,9 @@ components:
         status:
           type: string
           enum: [production, scaffold, deferred]
+        copy_execution_enabled:
+          type: boolean
+          description: True only when policy-controlled Copy LP execution is enabled for this venue.
         capabilities:
           type: object
           properties:
@@ -239,6 +271,9 @@ components:
             liquidity_events: { type: boolean }
             quotes: { type: boolean }
             draft_ops: { type: boolean }
+            deposit: { type: boolean }
+            withdraw: { type: boolean }
+            claim: { type: boolean }
             copy_scale: { type: boolean }
         notes:
           type: string
@@ -275,6 +310,27 @@ components:
             max_per_op_quote_xlm: { type: number }
             max_daily_quote_xlm: { type: number }
             expires_at: { type: integer, format: int64, nullable: true }
+    CopyOp:
+      type: object
+      properties:
+        id: { type: string }
+        session_id: { type: string }
+        source_event_id: { type: string }
+        pool_address: { type: string }
+        venue:
+          type: string
+          nullable: true
+          enum: [aquarius, sushi, sushi_v3, phoenix, soroswap, soroswap_amm, comet]
+        kind: { type: string }
+        position_key: { type: string }
+        leader_amounts: { nullable: true }
+        scaled_amounts: { nullable: true }
+        leader_quote_xlm: { type: number, nullable: true }
+        scaled_quote_xlm: { type: number, nullable: true }
+        status: { type: string }
+        note: { type: string, nullable: true }
+        created_at: { type: integer, format: int64 }
+        updated_at: { type: integer, format: int64 }
     LpProfile:
       type: object
       properties:

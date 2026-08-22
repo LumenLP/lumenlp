@@ -3,6 +3,7 @@
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { useIdentity } from "@/lib/identity";
+import { fetchPoolDetail } from "@/lib/api";
 import {
   STRATEGY_CATALOG,
   buildRebalancePreview,
@@ -18,6 +19,15 @@ import {
 } from "@/lib/strategies";
 import { copyOpToDraftSnapshot, getCopyOp } from "@/lib/copyLp";
 
+function venueLabel(venue: string | null | undefined) {
+  if (venue === "aquarius") return "Aquarius";
+  if (venue === "phoenix") return "Phoenix";
+  if (venue === "soroswap" || venue === "soroswap_amm") return "Soroswap";
+  if (venue === "sushi" || venue === "sushi_v3") return "Sushi V3";
+  if (venue === "comet") return "Comet";
+  return venue || "Stellar DEX";
+}
+
 function StrategiesInner() {
   const searchParams = useSearchParams();
   const poolFromQuery = searchParams.get("pool") ?? "";
@@ -28,6 +38,7 @@ function StrategiesInner() {
   const [poolAddress, setPoolAddress] = useState(poolFromQuery);
   const [saved, setSaved] = useState<SavedStrategy[]>([]);
   const [copyDraft, setCopyDraft] = useState<CopyDraftSnapshot | null>(null);
+  const [poolVenue, setPoolVenue] = useState<string | null>(null);
   const catalog = STRATEGY_CATALOG.find((c) => c.kind === kind)!;
   const [params, setParams] = useState<StrategyParams>(catalog.defaultParams);
 
@@ -38,6 +49,25 @@ function StrategiesInner() {
   useEffect(() => {
     if (poolFromQuery) setPoolAddress(poolFromQuery);
   }, [poolFromQuery]);
+
+  useEffect(() => {
+    const candidate = poolAddress.trim();
+    if (!candidate || !candidate.startsWith("C") || candidate.length < 50) {
+      setPoolVenue(null);
+      return;
+    }
+    let cancelled = false;
+    void fetchPoolDetail(candidate)
+      .then((detail) => {
+        if (!cancelled) setPoolVenue(detail.venue ?? null);
+      })
+      .catch(() => {
+        if (!cancelled) setPoolVenue(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [poolAddress]);
 
   useEffect(() => {
     const entry = STRATEGY_CATALOG.find((c) => c.kind === kind)!;
@@ -140,7 +170,9 @@ function StrategiesInner() {
         <div className="panel-head">Configure · {catalog.title}</div>
         <div className="strategy-config">
           <label className="filter-field">
-            <span className="filter-label">Pool contract</span>
+            <span className="filter-label">
+              Pool contract {poolVenue ? <span className="badge">{venueLabel(poolVenue)}</span> : null}
+            </span>
             <input
               className="filter-input"
               value={poolAddress}
@@ -150,6 +182,12 @@ function StrategiesInner() {
               readOnly={poolLocked}
             />
           </label>
+          {poolVenue && poolVenue !== "aquarius" ? (
+            <p className="sign-disabled-note">
+              {venueLabel(poolVenue)} analytics and strategy previews are available. Live Copy LP
+              execution is not enabled for this venue yet.
+            </p>
+          ) : null}
 
           {kind === "stay_in_range" && "widthBps" in params ? (
             <label className="filter-field">

@@ -1973,10 +1973,10 @@ th { color: var(--muted); font-weight: 500; }
 
 .leaders-layout { display: grid; gap: 18px; }
 .leaders-blurb {
-  padding: 0 18px 14px;
+  padding: 14px 18px;
   margin: 0;
   line-height: 1.5;
-  max-width: 52rem;
+  max-width: 60rem;
   font-size: 0.95rem;
 }
 .leaders-search {

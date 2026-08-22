@@ -28,8 +28,18 @@ function poolTypeLabel(type: string | null | undefined) {
   if (!type) return "Unknown";
   if (type === "constant_product") return "AMM";
   if (type === "concentrated") return "CLMM";
+  if (type === "weighted") return "Weighted";
   if (type === "stable") return "Stable";
   return type;
+}
+
+function venueLabel(venue: string | null | undefined) {
+  if (venue === "aquarius") return "Aquarius";
+  if (venue === "phoenix") return "Phoenix";
+  if (venue === "soroswap" || venue === "soroswap_amm") return "Soroswap";
+  if (venue === "sushi" || venue === "sushi_v3") return "Sushi V3";
+  if (venue === "comet") return "Comet";
+  return venue || "Stellar DEX";
 }
 
 function detailTokenPairLabel(detail: PoolDetailResponse | null, address: string) {
@@ -430,6 +440,7 @@ function PoolDetailInner() {
           </div>
           <p className="detail-subtitle">{pairSubtitle || address}</p>
           <div className="detail-meta-row">
+            <span className="badge">{venueLabel(detail?.venue)}</span>
             <span className="badge">{poolTypeLabel(detail?.pool_type)}</span>
             <span className="badge">{detail?.fee_bps ?? 0} bps</span>
             {score != null ? <span className="badge">score {fmtNum(score, 2)}</span> : null}

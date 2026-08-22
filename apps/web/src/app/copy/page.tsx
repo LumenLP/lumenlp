@@ -24,6 +24,15 @@ function isGAddress(a: string) {
   return a.startsWith("G") && a.length >= 56;
 }
 
+function venueLabel(venue: string | null | undefined) {
+  if (venue === "aquarius") return "Aquarius";
+  if (venue === "soroswap" || venue === "soroswap_amm") return "Soroswap";
+  if (venue === "phoenix") return "Phoenix";
+  if (venue === "sushi" || venue === "sushi_v3") return "Sushi V3";
+  if (venue === "comet") return "Comet";
+  return venue || "Stellar DEX";
+}
+
 function formatOpQuote(op: CopyOp): string {
   if (op.leader_quote_xlm != null && op.scaled_quote_xlm != null) {
     return `${fmtNum(op.leader_quote_xlm, 2)} → ${fmtNum(op.scaled_quote_xlm, 2)} XLM`;
@@ -194,6 +203,11 @@ function CopyInner() {
         LumenLP does not submit transactions for you. You review and sign every action — no
         custodial auto-execution.
       </div>
+      <div className="copy-banner">
+        Copy LP execution is currently enabled for Aquarius pools only. Activity from other
+        Stellar DEXes remains available for analysis, but is kept out of the execution queue
+        until its adapter is validated.
+      </div>
 
       {!connected ? (
         <div className="panel">
@@ -335,17 +349,19 @@ function CopyInner() {
           ) : (
             <div className="copy-queue">
               {ops.map((op) => {
-                const done = op.status === "drafted" || op.status === "skipped";
+                const done = ["drafted", "skipped", "rejected", "failed", "insufficient"].includes(op.status);
                 return (
                   <div key={op.id} className="copy-op">
                     <div className="copy-op-head">
                       <strong>{op.kind}</strong>
+                      <span className="badge">{venueLabel(op.venue)}</span>
                       <span className="badge">{op.status}</span>
                     </div>
                     <div className="muted" title={op.pool_address}>
                       Pool {shortAddr(op.pool_address)}
                     </div>
                     <div>{formatOpQuote(op)}</div>
+                    {op.note ? <div className="sign-disabled-note">{op.note}</div> : null}
                     {!done ? (
                       <div className="copy-op-actions">
                         <button

@@ -276,6 +276,9 @@ impl CopyPolicy {
             return Err(Error::EventMismatch);
         }
         let session = Self::load_session(&env, session_id)?;
+        if event.leader != session.leader {
+            return Err(Error::EventMismatch);
+        }
         if scale_i128(event.quote, session.coefficient_ppm)? != quote {
             return Err(Error::EventMismatch);
         }
@@ -285,6 +288,42 @@ impl CopyPolicy {
             (source_event_id, pool, kind, quote),
         );
         Ok(())
+    }
+
+    /// Generic venue boundary. The policy keeps the dispatch explicit: until a
+    /// venue-specific adapter is reviewed, only Aquarius is routable here.
+    /// Unsupported venues are rejected before authorization consumes quota or
+    /// creates a replay marker.
+    pub fn execute_standard_op(
+        env: Env,
+        venue: Symbol,
+        session_id: u32,
+        source_event_id: BytesN<32>,
+        pool: Address,
+        kind: Symbol,
+        quote: i128,
+        desired_amounts: Vec<u128>,
+        min_shares: u128,
+        share_amount: u128,
+        min_amounts: Vec<u128>,
+        claim_token: Address,
+    ) -> Result<(), Error> {
+        if venue != symbol_short!("aquarius") {
+            return Err(Error::OperationNotAllowed);
+        }
+        Self::execute_aquarius_standard_op(
+            env,
+            session_id,
+            source_event_id,
+            pool,
+            kind,
+            quote,
+            desired_amounts,
+            min_shares,
+            share_amount,
+            min_amounts,
+            claim_token,
+        )
     }
 
     /// Authorize and invoke one Aquarius standard-pool operation. The policy
@@ -311,6 +350,9 @@ impl CopyPolicy {
         if event.pool != pool || event.kind != kind {
             return Err(Error::EventMismatch);
         }
+        if event.leader != session.leader {
+            return Err(Error::EventMismatch);
+        }
         if scale_i128(event.quote, session.coefficient_ppm)? != quote {
             return Err(Error::EventMismatch);
         }
@@ -318,6 +360,16 @@ impl CopyPolicy {
             && scale_amounts(&env, &event.amounts, session.coefficient_ppm) != desired_amounts
         {
             return Err(Error::EventMismatch);
+        }
+        if kind == symbol_short!("withdraw") {
+            let expected_shares = if event.amounts.is_empty() {
+                0
+            } else {
+                scale_amount(&env, event.amounts.get(0).unwrap(), session.coefficient_ppm)
+            };
+            if expected_shares != share_amount {
+                return Err(Error::EventMismatch);
+            }
         }
         Self::authorize_copy_op(&env, session_id, &source_event_id, &pool, &kind, quote)?;
         let user = env.current_contract_address();
@@ -563,6 +615,14 @@ fn scale_amounts(env: &Env, amounts: &Vec<u128>, coefficient_ppm: u32) -> Vec<u1
         scaled.push_back(value);
     }
     scaled
+}
+
+fn scale_amount(env: &Env, amount: u128, coefficient_ppm: u32) -> u128 {
+    U256::from_u128(env, amount)
+        .mul(&U256::from_u128(env, u128::from(coefficient_ppm)))
+        .div(&U256::from_u128(env, COEFFICIENT_SCALE))
+        .to_u128()
+        .unwrap()
 }
 
 fn proportional_floor(env: &Env, reserve: u128, shares: u128, total_shares: u128) -> u128 {
@@ -843,6 +903,109 @@ mod test {
     }
 
     #[test]
+    fn session_must_match_event_leader() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let policy = env.register(CopyPolicy, ());
+        let pool = env.register(MockPool, ());
+        let owner = Address::generate(&env);
+        let relayer = Address::generate(&env);
+        let recorder = Address::generate(&env);
+        let registered_leader = Address::generate(&env);
+        let other_leader = Address::generate(&env);
+        let client = CopyPolicyClient::new(&env, &policy);
+
+        client.initialize(&owner, &relayer);
+        client.set_event_recorder(&recorder);
+        client.register_session(
+            &23,
+            &registered_leader,
+            &Vec::from_array(&env, [pool.clone()]),
+            &true,
+            &100,
+            &100,
+            &100_000,
+        );
+        let event_id = BytesN::from_array(&env, &[23; 32]);
+        client.record_leader_event(
+            &event_id,
+            &other_leader,
+            &pool,
+            &symbol_short!("deposit"),
+            &Vec::from_array(&env, [10u128]),
+            &10,
+            &1,
+        );
+
+        assert!(client
+            .try_execute_copy_op(&23, &event_id, &pool, &symbol_short!("deposit"), &10)
+            .is_err());
+    }
+
+    #[test]
+    fn withdraw_share_amount_must_match_scaled_event_amount() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let policy = env.register(CopyPolicy, ());
+        let pool = env.register(MockPool, ());
+        let owner = Address::generate(&env);
+        let relayer = Address::generate(&env);
+        let recorder = Address::generate(&env);
+        let leader = Address::generate(&env);
+        let client = CopyPolicyClient::new(&env, &policy);
+
+        client.initialize(&owner, &relayer);
+        client.set_event_recorder(&recorder);
+        client.register_session_coeff(
+            &24,
+            &leader,
+            &Vec::from_array(&env, [pool.clone()]),
+            &500_000,
+            &true,
+            &100,
+            &100,
+            &100_000,
+        );
+        let event_id = BytesN::from_array(&env, &[24; 32]);
+        client.record_leader_event(
+            &event_id,
+            &leader,
+            &pool,
+            &symbol_short!("withdraw"),
+            &Vec::from_array(&env, [10u128]),
+            &10,
+            &1,
+        );
+
+        assert!(client
+            .try_execute_aquarius_standard_op(
+                &24,
+                &event_id,
+                &pool,
+                &symbol_short!("withdraw"),
+                &5,
+                &Vec::new(&env),
+                &0,
+                &4,
+                &Vec::new(&env),
+                &Address::generate(&env),
+            )
+            .is_err());
+        client.execute_aquarius_standard_op(
+            &24,
+            &event_id,
+            &pool,
+            &symbol_short!("withdraw"),
+            &5,
+            &Vec::new(&env),
+            &0,
+            &5,
+            &Vec::new(&env),
+            &Address::generate(&env),
+        );
+    }
+
+    #[test]
     fn disarm_removes_session_and_expiry_blocks_resume() {
         let env = Env::default();
         env.mock_all_auths();
@@ -898,6 +1061,22 @@ mod test {
             &10,
             &1,
         );
+        assert!(policy_client
+            .try_execute_standard_op(
+                &Symbol::new(&env, "soroswap_amm"),
+                &7,
+                &deposit_id,
+                &pool_address,
+                &symbol_short!("deposit"),
+                &10,
+                &desired,
+                &0,
+                &0,
+                &Vec::new(&env),
+                &Address::generate(&env),
+            )
+            .is_err());
+        assert_eq!(policy_client.session(&7).daily_used_quote, 0);
         policy_client.execute_aquarius_standard_op(
             &7,
             &deposit_id,

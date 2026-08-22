@@ -51,7 +51,11 @@ pub struct AppState {
     pub token_meta_cache: Arc<Mutex<HashMap<String, TokenMeta>>>,
     pub prices: Arc<PriceService>,
     pub pool_list_cache: Arc<Mutex<Option<(StdInstant, Value)>>>,
+    /// Serializes a full pool-list rebuild so concurrent cold requests do not
+    /// all repeat the RPC, pricing, and rollup work.
+    pub pool_list_refresh: Arc<tokio::sync::Mutex<()>>,
     pub redis: Option<redis::Client>,
+    pub leader_fee_scan_cursor: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 #[derive(Debug, Clone)]
@@ -87,6 +91,7 @@ pub fn router() -> Router<AppState> {
 
 const WINDOWS: [(&str, i64); 4] = [("5m", 5), ("1h", 60), ("6h", 360), ("24h", 1_440)];
 const SCORE_TVL_FLOOR: f64 = 10.0;
+const DUST_TVL_FLOOR: f64 = 1e-6;
 // Rollups are generated from bucketed snapshots. A short grace period covers
 // bucket alignment and the indexer's polling interval, but prevents an old
 // rollup from being presented as a current activity window.
@@ -107,7 +112,10 @@ fn pool_score_json(
     net_liq_override: Option<f64>,
     fee_24h_override: Option<f64>,
 ) -> Value {
-    let has_liquidity = tvl.is_finite() && tvl > 0.0;
+    // Below this floor, fee/TVL is dominated by dust and stale rollup history
+    // rather than usable liquidity. Keep these pools visible, but remove them
+    // from ranking signals until they have meaningful current TVL.
+    let has_liquidity = tvl.is_finite() && tvl >= DUST_TVL_FLOOR;
     let metrics_24h = window_metrics.get("24h");
     let reported_fee_tvl = metrics_24h
         .and_then(|v| v.get("fee_tvl"))
@@ -296,7 +304,7 @@ fn fill_window_from_activity(metrics: &mut Value, summary: Option<&PoolActivityS
 /// average TVL for historical context, but using it for the headline ratio
 /// can make a recently refilled pool look artificially profitable.
 fn recompute_fee_tvl_with_current_tvl(metrics: &mut Value, current_tvl: f64) {
-    let ratio = if current_tvl.is_finite() && current_tvl > 0.0 {
+    let ratio = if current_tvl.is_finite() && current_tvl >= DUST_TVL_FLOOR {
         Some(current_tvl)
     } else {
         None
@@ -572,6 +580,7 @@ async fn list_venues() -> impl IntoResponse {
                 "venue_id": row.venue_id,
                 "name": row.name,
                 "status": row.status,
+                "copy_execution_enabled": row.copy_execution_enabled,
                 "capabilities": row.capabilities,
                 "notes": row.notes,
             })
@@ -612,12 +621,41 @@ async fn indexer_status(State(state): State<AppState>) -> impl IntoResponse {
 struct PoolListQuery {
     page: Option<usize>,
     limit: Option<usize>,
+    /// `dex` is the public UI spelling; `venue` is retained for API clients.
+    dex: Option<String>,
+    venue: Option<String>,
 }
 
 fn paginate_pool_body(mut body: Value, query: &PoolListQuery) -> Value {
     let Some(pools) = body.get_mut("pools").and_then(Value::as_array_mut) else {
         return body;
     };
+    let requested_venue = query
+        .dex
+        .as_deref()
+        .or(query.venue.as_deref())
+        .map(str::trim)
+        .filter(|venue| !venue.is_empty() && !venue.eq_ignore_ascii_case("all"));
+    let requested_venue = requested_venue.map(|venue| {
+        match venue.to_ascii_lowercase().as_str() {
+            "soroswap" => "soroswap_amm",
+            "sushi" => "sushi_v3",
+            other => other,
+        }
+        .to_string()
+    });
+    if let Some(requested_venue) = requested_venue {
+        pools.retain(|pool| {
+            let Some(venue) = pool.get("venue").and_then(Value::as_str) else {
+                return false;
+            };
+            match requested_venue.as_str() {
+                "soroswap_amm" => venue.eq_ignore_ascii_case("soroswap") || venue.eq_ignore_ascii_case("soroswap_amm"),
+                "sushi_v3" => venue.eq_ignore_ascii_case("sushi") || venue.eq_ignore_ascii_case("sushi_v3"),
+                _ => venue.eq_ignore_ascii_case(&requested_venue),
+            }
+        });
+    }
     let total = pools.len();
     let limit = query.limit.unwrap_or(total.max(1)).clamp(1, 100);
     let page = query.page.unwrap_or(1).max(1);
@@ -639,7 +677,29 @@ async fn list_pools(State(state): State<AppState>, Query(query): Query<PoolListQ
     // Keep a shared Redis copy beyond the local refresh interval so a request
     // does not synchronously rebuild the full multi-DEX ranking catalogue.
     const REDIS_POOL_LIST_CACHE_SECS: u64 = 300;
-    const REDIS_POOL_LIST_KEY: &str = "lumenlp:pools:v1";
+    // Bump this when derived pool metrics change so a deploy cannot serve an
+    // older catalogue with incompatible score or Fee/TVL calculations.
+    const REDIS_POOL_LIST_KEY: &str = "lumenlp:pools:v2";
+    if let Some(body) = {
+        let cache = state.pool_list_cache.lock().unwrap();
+        cache
+            .as_ref()
+            .and_then(|(expires_at, body)| (*expires_at > StdInstant::now()).then(|| body.clone()))
+    } {
+        let mut response = Json(paginate_pool_body(body, &query)).into_response();
+        response.headers_mut().insert(
+            CACHE_CONTROL,
+            HeaderValue::from_static("public, max-age=60, s-maxage=60, stale-while-revalidate=120"),
+        );
+        response.headers_mut().insert(
+            HeaderName::from_static("cdn-cache-control"),
+            HeaderValue::from_static("public, max-age=60, stale-while-revalidate=120"),
+        );
+        return response;
+    }
+    let _refresh_guard = state.pool_list_refresh.lock().await;
+    // Another request may have populated the local cache while this request
+    // waited for the refresh lock.
     if let Some(body) = {
         let cache = state.pool_list_cache.lock().unwrap();
         cache
@@ -1222,16 +1282,22 @@ struct AddressQuery {
 struct LeadersBoardQuery {
     limit: Option<usize>,
     window_days: Option<i64>,
+    sort: Option<String>,
 }
 
-/// Ranked Aquarius LP actors by claimed fees / deposits (Copy scouting board).
+/// Ranked Stellar LP actors by claimed fees / deposits (Copy scouting board).
 async fn lp_leaders(State(state): State<AppState>, Query(q): Query<LeadersBoardQuery>) -> impl IntoResponse {
     let limit = q.limit.unwrap_or(25).clamp(1, 100);
     let window_days = q.window_days.unwrap_or(30).clamp(1, 90);
+    let sort = (q.sort.as_deref() == Some("activity"))
+        .then_some("activity")
+        .unwrap_or("fees");
     let since_ts = Utc::now().timestamp() - window_days * 24 * 3600;
-    let leaders = {
+    let mut leaders = {
         let index_db = state.index_db.lock().unwrap();
-        match index_db.top_liquidity_actors(since_ts, limit) {
+        // Rank after joining the fee snapshots. Limiting by claimed fees first
+        // could hide a leader whose current unclaimed fees are substantial.
+        match index_db.top_liquidity_actors(since_ts, 10_000, sort) {
             Ok(v) => v,
             Err(error) => {
                 return (
@@ -1254,10 +1320,41 @@ async fn lp_leaders(State(state): State<AppState>, Query(q): Query<LeadersBoardQ
         .await;
     let xlm_usd = quote_meta.xlm_usd;
     let to_usd = |xlm: f64| xlm_usd.and_then(|px| xlm_quote_to_usd(xlm, px));
+    let fee_snapshots = {
+        let index_db = state.index_db.lock().unwrap();
+        leaders
+            .iter()
+            .filter_map(|leader| {
+                index_db
+                    .actor_fee_snapshot_total(&leader.address)
+                    .ok()
+                    .map(|snapshot| (leader.address.clone(), snapshot))
+            })
+            .collect::<HashMap<_, _>>()
+    };
+    if sort == "fees" {
+        leaders.sort_by(|a, b| {
+            let total = |leader: &crate::index_db::TopLiquidityActor| {
+                fee_snapshots
+                    .get(&leader.address)
+                    .and_then(|snapshot| {
+                        snapshot
+                            .observed_at
+                            .map(|_| leader.claim_quote_xlm + snapshot.unclaimed_quote_xlm)
+                    })
+                    .unwrap_or(leader.claim_quote_xlm)
+            };
+            total(b).partial_cmp(&total(a)).unwrap_or(std::cmp::Ordering::Equal)
+        });
+    }
+    leaders.truncate(limit);
 
     let rows: Vec<Value> = leaders
         .into_iter()
         .map(|a| {
+            let snapshot = fee_snapshots.get(&a.address).cloned().unwrap_or_default();
+            let unclaimed_fee = snapshot.observed_at.map(|_| snapshot.unclaimed_quote_xlm);
+            let accrued_fee = unclaimed_fee.map(|unclaimed| a.claim_quote_xlm + unclaimed);
             let fee_capital_ratio = if a.deposit_quote_xlm > 0.0 {
                 Some(a.claim_quote_xlm / a.deposit_quote_xlm)
             } else {
@@ -1275,6 +1372,12 @@ async fn lp_leaders(State(state): State<AppState>, Query(q): Query<LeadersBoardQ
                 "deposit_quote_usd": to_usd(a.deposit_quote_xlm),
                 "withdraw_quote_usd": to_usd(a.withdraw_quote_xlm),
                 "claim_quote_usd": to_usd(a.claim_quote_xlm),
+                "unclaimed_fee_quote_xlm": unclaimed_fee,
+                "unclaimed_fee_quote_usd": unclaimed_fee.and_then(to_usd),
+                "accrued_fee_quote_xlm": accrued_fee,
+                "accrued_fee_quote_usd": accrued_fee.and_then(to_usd),
+                "fee_snapshot_at": snapshot.observed_at,
+                "fee_snapshot_position_count": snapshot.position_count,
                 "net_liquidity_quote_xlm": a.deposit_quote_xlm - a.withdraw_quote_xlm,
                 "fee_capital_ratio": fee_capital_ratio,
                 "distinct_pools": a.distinct_pools,
@@ -1288,10 +1391,80 @@ async fn lp_leaders(State(state): State<AppState>, Query(q): Query<LeadersBoardQ
         "since_ts": since_ts,
         "xlm_usd": xlm_usd,
         "leaders": rows,
-        "sort": "claim_quote_xlm_desc",
-        "honesty": "Claimed fee quote is the best indexed earnings proxy; fee_capital_ratio = claimed/deposits (not ROI/win rate).",
+        "sort": sort,
+        "honesty": "Claimed fees come from indexed claim events. Accrued fees add the latest verified unclaimed position fees when the venue reader supports them; missing venue coverage is left unavailable rather than estimated.",
     }))
     .into_response()
+}
+
+/// Refresh a small rotating batch of current position fee snapshots. This is
+/// deliberately off the request path: RPC position reads are venue-specific
+/// and must not make the leaders endpoint slow or unreliable.
+pub async fn refresh_leader_fee_snapshots(state: AppState) {
+    const ACTOR_LIMIT: usize = 10_000;
+    const BATCH_SIZE: usize = 10;
+    const MAX_POOLS_PER_ACTOR: usize = 40;
+
+    let actors = {
+        let db = state.index_db.lock().unwrap();
+        db.known_liquidity_actors(ACTOR_LIMIT).unwrap_or_default()
+    };
+    if actors.is_empty() {
+        return;
+    }
+    let start = state
+        .leader_fee_scan_cursor
+        .fetch_add(BATCH_SIZE, std::sync::atomic::Ordering::Relaxed)
+        % actors.len();
+    let selected = (0..BATCH_SIZE.min(actors.len()))
+        .map(|offset| actors[(start + offset) % actors.len()].clone())
+        .collect::<Vec<_>>();
+    let pricing = {
+        let db = state.db.lock().unwrap();
+        db.pool_states_for_pricing().unwrap_or_default()
+    };
+
+    for actor in selected {
+        let mut pools = {
+            let db = state.index_db.lock().unwrap();
+            db.actor_pool_addresses(&actor, 0).unwrap_or_default()
+        };
+        pools.sort();
+        pools.dedup();
+        pools.truncate(MAX_POOLS_PER_ACTOR);
+
+        let grouped = {
+            let db = state.db.lock().unwrap();
+            let mut grouped: HashMap<String, Vec<String>> = HashMap::new();
+            for pool in pools {
+                let venue = db
+                    .pool_meta(&pool)
+                    .ok()
+                    .flatten()
+                    .map(|(_, _, _, venue)| venue)
+                    .unwrap_or_else(|| "aquarius".into());
+                grouped.entry(venue).or_default().push(pool);
+            }
+            grouped
+        };
+
+        for (venue, venue_pools) in grouped {
+            let positions = positions_for_venue(state.rpc.as_ref(), &actor, &venue, &venue_pools, &pricing).await;
+            let observed_at = Utc::now().timestamp();
+            let db = state.index_db.lock().unwrap();
+            for position in positions {
+                let _ = db.upsert_actor_fee_snapshot(
+                    &actor,
+                    &position.pool_address,
+                    &position.venue,
+                    position.fees_unclaimed_quote,
+                    position.value_quote,
+                    "ok",
+                    observed_at,
+                );
+            }
+        }
+    }
 }
 
 async fn load_sushi_positions(
@@ -1708,7 +1881,7 @@ async fn lp_profile(State(state): State<AppState>, Query(q): Query<AddressQuery>
         "note": position_scan_note.or(if indexed_pool_count == 0 {
             Some("No indexed pools yet — run snapshotter first")
         } else if positions.is_empty() && empty_activity && lifetime.claim_count == 0 {
-            Some("No Aquarius LP or recent liquidity events for this address in the indexed set")
+            Some("No LP or recent liquidity events for this address in the indexed set")
         } else {
             None
         }),
@@ -1757,7 +1930,7 @@ fn copy_session_json(session: &CopySessionRow) -> Value {
     })
 }
 
-fn copy_op_json(op: &CopyOpRow) -> Value {
+fn copy_op_json(op: &CopyOpRow, venue: Option<&str>) -> Value {
     let leader_amounts = serde_json::from_str(&op.leader_amounts_json).unwrap_or(Value::Null);
     let scaled_amounts = serde_json::from_str(&op.scaled_amounts_json).unwrap_or(Value::Null);
     json!({
@@ -1765,6 +1938,7 @@ fn copy_op_json(op: &CopyOpRow) -> Value {
         "session_id": op.session_id,
         "source_event_id": op.source_event_id,
         "pool_address": op.pool_address,
+        "venue": venue,
         "kind": op.kind,
         "position_key": op.position_key,
         "leader_amounts": leader_amounts,
@@ -1828,6 +2002,7 @@ fn reconcile_copy_ops(index_db: &IndexDb, session: &mut CopySessionRow) -> Resul
             let policy_result = validate_copy_op(
                 session,
                 venue,
+                &draft.kind,
                 &event.pool_address,
                 draft.scaled_quote_xlm,
                 Utc::now().timestamp(),
@@ -2107,7 +2282,15 @@ async fn list_copy_ops(
 
     match index_db.list_copy_ops(&id, q.status.as_deref()) {
         Ok(ops) => {
-            let ops_json = ops.iter().map(copy_op_json).collect::<Vec<_>>();
+            drop(index_db);
+            let db = state.db.lock().unwrap();
+            let ops_json = ops
+                .iter()
+                .map(|op| {
+                    let venue = db.pool_meta(&op.pool_address).ok().flatten().map(|meta| meta.3);
+                    copy_op_json(op, venue.as_deref())
+                })
+                .collect::<Vec<_>>();
             Json(json!({
                 "session_id": id,
                 "ops": ops_json,
@@ -2130,8 +2313,18 @@ struct SetCopyOpStatusBody {
 
 async fn get_copy_op(State(state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
     let index_db = state.index_db.lock().unwrap();
-    match index_db.get_copy_op(&id) {
-        Ok(Some(op)) => Json(copy_op_json(&op)).into_response(),
+    let result = index_db.get_copy_op(&id);
+    drop(index_db);
+    match result {
+        Ok(Some(op)) => {
+            let venue = state
+                .db
+                .lock()
+                .ok()
+                .and_then(|db| db.pool_meta(&op.pool_address).ok().flatten())
+                .map(|meta| meta.3);
+            Json(copy_op_json(&op, venue.as_deref())).into_response()
+        }
         Ok(None) => (
             StatusCode::NOT_FOUND,
             Json(json!({ "error": "copy op not found", "code": "not_found" })),
@@ -2213,6 +2406,54 @@ mod tests {
     }
 
     #[test]
+    fn pool_pagination_filters_by_dex_before_counting_pages() {
+        let body = json!({
+            "pools": [
+                {"address": "A", "venue": "aquarius"},
+                {"address": "B", "venue": "soroswap_amm"},
+                {"address": "C", "venue": "aquarius"}
+            ]
+        });
+        let query = PoolListQuery {
+            page: Some(1),
+            limit: Some(1),
+            dex: Some("soroswap".into()),
+            venue: None,
+        };
+        let filtered = paginate_pool_body(body, &query);
+        assert_eq!(filtered["pagination"]["total"], 1);
+        assert_eq!(filtered["pools"][0]["address"], "B");
+
+        let query = PoolListQuery {
+            page: Some(1),
+            limit: Some(1),
+            dex: Some("soroswap_amm".into()),
+            venue: None,
+        };
+        let filtered = paginate_pool_body(
+            json!({
+                "pools": [
+                    {"address": "A", "venue": "aquarius"},
+                    {"address": "B", "venue": "soroswap_amm"},
+                    {"address": "C", "venue": "aquarius"}
+                ]
+            }),
+            &query,
+        );
+        assert_eq!(filtered["pagination"]["total"], 1);
+        assert_eq!(filtered["pools"][0]["address"], "B");
+
+        let query = PoolListQuery {
+            page: Some(1),
+            limit: Some(10),
+            dex: Some("sushi_v3".into()),
+            venue: None,
+        };
+        let filtered = paginate_pool_body(json!({"pools": [{"address": "D", "venue": "sushi"}]}), &query);
+        assert_eq!(filtered["pagination"]["total"], 1);
+    }
+
+    #[test]
     fn fee_tvl_uses_current_tvl_not_historical_average() {
         let mut metrics = json!({
             "24h": {"fee": 0.0009955694677558605, "avg_tvl": 0.00009491574383001295, "fee_tvl": 10.48},
@@ -2222,6 +2463,15 @@ mod tests {
         let ratio = metrics["24h"]["fee_tvl"].as_f64().unwrap();
         assert!((ratio - 0.002522).abs() < 0.000001, "ratio={ratio}");
         assert_eq!(metrics["1h"]["fee_tvl"], 0.0);
+    }
+
+    #[test]
+    fn fee_tvl_is_zero_for_dust_liquidity() {
+        let mut metrics = json!({
+            "24h": {"fee": 0.01, "avg_tvl": 100.0, "fee_tvl": 0.0001}
+        });
+        recompute_fee_tvl_with_current_tvl(&mut metrics, 0.00000007);
+        assert_eq!(metrics["24h"]["fee_tvl"], 0.0);
     }
 
     #[test]

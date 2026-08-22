@@ -32,6 +32,7 @@ type SortKey =
 type ViewMode = "table" | "card";
 
 const POOLS_PAGE_SIZE = 12;
+const DUST_TVL_FLOOR = 1e-6;
 
 function poolTokenPairLabel(pool: PoolRow) {
   const labels =
@@ -95,7 +96,7 @@ function venueLabel(venue: string | null | undefined) {
 }
 
 function isEmptyPool(pool: PoolRow) {
-  return !(pool.tvl != null && Number.isFinite(pool.tvl) && pool.tvl > 0);
+  return !(pool.tvl != null && Number.isFinite(pool.tvl) && pool.tvl >= DUST_TVL_FLOOR);
 }
 
 function fmtActivitySummary(pool: PoolRow, xlmUsd?: number | null) {
@@ -127,6 +128,7 @@ function cadenceLabel(value: number | null | undefined) {
 }
 
 function poolScore(pool: PoolRow, windowKey: "5m" | "1h" | "6h" | "24h") {
+  if (isEmptyPool(pool)) return 0;
   if (pool.score != null && Number.isFinite(pool.score)) {
     return pool.score;
   }

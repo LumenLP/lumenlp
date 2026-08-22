@@ -139,6 +139,14 @@ pub struct TopLiquidityActor {
     pub last_activity_at: Option<i64>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ActorFeeSnapshotTotal {
+    pub unclaimed_quote_xlm: f64,
+    pub position_value_quote_xlm: f64,
+    pub position_count: usize,
+    pub observed_at: Option<i64>,
+}
+
 /// Lifetime (indexed) liquidity aggregates for an actor — used for avg monthly
 /// claimed fees proxy.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -274,6 +282,19 @@ impl IndexDb {
               icon TEXT,
               updated_at INTEGER NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS actor_fee_snapshots (
+              actor TEXT NOT NULL,
+              pool_address TEXT NOT NULL,
+              venue TEXT NOT NULL,
+              unclaimed_quote_xlm REAL,
+              position_value_quote_xlm REAL,
+              status TEXT NOT NULL,
+              observed_at INTEGER NOT NULL,
+              PRIMARY KEY (actor, pool_address)
+            );
+            CREATE INDEX IF NOT EXISTS idx_actor_fee_snapshots_actor
+              ON actor_fee_snapshots(actor, observed_at DESC);
             "#,
         )?;
         self.ensure_column("copy_sessions", "watermark_event_id", "TEXT NOT NULL DEFAULT ''")?;
@@ -859,6 +880,86 @@ impl IndexDb {
         Ok(out)
     }
 
+    pub fn known_liquidity_actors(&self, limit: usize) -> Result<Vec<String>> {
+        let limit = limit.max(1).min(10_000) as i64;
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT DISTINCT json_extract(body_json, '$.derived.actor') AS actor
+            FROM pool_events
+            WHERE kind IN ('deposit_liquidity', 'withdraw_liquidity', 'claim_fees', 'claim_protocol_fee')
+              AND json_extract(body_json, '$.derived.actor') GLOB 'G*'
+            ORDER BY actor ASC
+            LIMIT ?1
+            "#,
+        )?;
+        let rows = stmt.query_map(params![limit], |row| row.get::<_, String>(0))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    pub fn upsert_actor_fee_snapshot(
+        &self,
+        actor: &str,
+        pool_address: &str,
+        venue: &str,
+        unclaimed_quote_xlm: Option<f64>,
+        position_value_quote_xlm: Option<f64>,
+        status: &str,
+        observed_at: i64,
+    ) -> Result<()> {
+        self.conn.execute(
+            r#"
+            INSERT INTO actor_fee_snapshots
+              (actor, pool_address, venue, unclaimed_quote_xlm, position_value_quote_xlm, status, observed_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            ON CONFLICT(actor, pool_address) DO UPDATE SET
+              venue=excluded.venue,
+              unclaimed_quote_xlm=excluded.unclaimed_quote_xlm,
+              position_value_quote_xlm=excluded.position_value_quote_xlm,
+              status=excluded.status,
+              observed_at=excluded.observed_at
+            "#,
+            params![
+                actor,
+                pool_address,
+                venue,
+                unclaimed_quote_xlm,
+                position_value_quote_xlm,
+                status,
+                observed_at
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn actor_fee_snapshot_total(&self, actor: &str) -> Result<ActorFeeSnapshotTotal> {
+        self.conn
+            .query_row(
+                r#"
+                SELECT
+                  COALESCE(SUM(unclaimed_quote_xlm), 0),
+                  COALESCE(SUM(position_value_quote_xlm), 0),
+                  COUNT(CASE WHEN position_value_quote_xlm IS NOT NULL THEN 1 END),
+                  MAX(observed_at)
+                FROM actor_fee_snapshots
+                WHERE actor = ?1 AND status = 'ok'
+                "#,
+                params![actor],
+                |row| {
+                    Ok(ActorFeeSnapshotTotal {
+                        unclaimed_quote_xlm: row.get(0)?,
+                        position_value_quote_xlm: row.get(1)?,
+                        position_count: row.get::<_, i64>(2)?.max(0) as usize,
+                        observed_at: row.get(3)?,
+                    })
+                },
+            )
+            .map_err(Into::into)
+    }
+
     /// Return Sushi V3 tick ranges observed for an actor. Sushi pools expose
     /// point reads for a known range, not an enumerable owner-position list;
     /// callers must verify these candidates against current contract state.
@@ -939,10 +1040,11 @@ impl IndexDb {
         Ok(out)
     }
 
-    /// Ranked actors by claimed fee quote (then deposits) over a window — Smart
-    /// LP–style board.
-    pub fn top_liquidity_actors(&self, since_ts: i64, limit: usize) -> Result<Vec<TopLiquidityActor>> {
-        let limit = limit.max(1).min(100) as i64;
+    /// Ranked actors over a window. `fees` is the default claimed-fee proxy;
+    /// `activity` surfaces deposit/withdraw/claim actors even when they have
+    /// not claimed fees yet.
+    pub fn top_liquidity_actors(&self, since_ts: i64, limit: usize, sort: &str) -> Result<Vec<TopLiquidityActor>> {
+        let limit = limit.max(1).min(10_000) as i64;
         let mut stmt = self.conn.prepare(
             r#"
             SELECT
@@ -967,6 +1069,49 @@ impl IndexDb {
         )?;
         let mut by_actor: HashMap<String, TopLiquidityActor> = HashMap::new();
         let mut pools_by_actor: HashMap<String, HashSet<String>> = HashMap::new();
+
+        // Build the candidate universe from all indexed LP lifecycle history.
+        // The requested window controls the metrics below, not whether a
+        // previously observed actor disappears from the board entirely.
+        let mut known_stmt = self.conn.prepare(
+            r#"
+            SELECT
+              json_extract(body_json, '$.derived.actor') AS actor,
+              pool_address,
+              MAX(created_at) AS last_activity_at
+            FROM pool_events
+            WHERE kind IN (
+              'deposit_liquidity', 'withdraw_liquidity', 'claim_fees', 'claim_protocol_fee'
+            )
+              AND json_extract(body_json, '$.derived.actor') IS NOT NULL
+              AND length(json_extract(body_json, '$.derived.actor')) >= 56
+            GROUP BY actor, pool_address
+            "#,
+        )?;
+        let known_rows = known_stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })?;
+        for row in known_rows {
+            let (actor, pool, last_activity_at) = row?;
+            if !actor.starts_with('G') {
+                continue;
+            }
+            let entry = by_actor.entry(actor.clone()).or_insert_with(|| TopLiquidityActor {
+                address: actor.clone(),
+                last_activity_at: Some(last_activity_at),
+                ..Default::default()
+            });
+            entry.last_activity_at = entry
+                .last_activity_at
+                .map(|t| t.max(last_activity_at))
+                .or(Some(last_activity_at));
+            pools_by_actor.entry(actor).or_default().insert(pool);
+        }
+
         let rows = stmt.query_map(params![since_ts], |row| {
             Ok((
                 row.get::<_, String>(0)?,
@@ -1011,17 +1156,30 @@ impl IndexDb {
             }
         }
         let mut ranked: Vec<TopLiquidityActor> = by_actor.into_values().collect();
-        ranked.sort_by(|a, b| {
-            b.claim_quote_xlm
-                .partial_cmp(&a.claim_quote_xlm)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| {
-                    b.deposit_quote_xlm
-                        .partial_cmp(&a.deposit_quote_xlm)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                })
-                .then_with(|| b.event_count.cmp(&a.event_count))
-        });
+        if sort == "activity" {
+            ranked.sort_by(|a, b| {
+                b.event_count
+                    .cmp(&a.event_count)
+                    .then_with(|| b.distinct_pools.cmp(&a.distinct_pools))
+                    .then_with(|| {
+                        b.deposit_quote_xlm
+                            .partial_cmp(&a.deposit_quote_xlm)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    })
+            });
+        } else {
+            ranked.sort_by(|a, b| {
+                b.claim_quote_xlm
+                    .partial_cmp(&a.claim_quote_xlm)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| {
+                        b.deposit_quote_xlm
+                            .partial_cmp(&a.deposit_quote_xlm)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    })
+                    .then_with(|| b.event_count.cmp(&a.event_count))
+            });
+        }
         ranked.truncate(limit as usize);
         Ok(ranked)
     }

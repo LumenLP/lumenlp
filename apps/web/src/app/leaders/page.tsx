@@ -83,6 +83,7 @@ function poolMix(events: LpProfile["recent_events"]) {
 }
 
 function LeadersInner() {
+  const BOARD_PAGE_SIZE = 24;
   const router = useRouter();
   const searchParams = useSearchParams();
   const initial = searchParams.get("address") ?? "";
@@ -91,7 +92,8 @@ function LeadersInner() {
   const [board, setBoard] = useState<LeaderBoardRow[]>([]);
   const [boardHonesty, setBoardHonesty] = useState<string | null>(null);
   const [windowDays, setWindowDays] = useState(1);
-  const [boardSort, setBoardSort] = useState<"fees" | "fee_cap">("fees");
+  const [boardSort, setBoardSort] = useState<"fees" | "fee_cap" | "activity">("fees");
+  const [boardPage, setBoardPage] = useState(1);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [boardLoading, setBoardLoading] = useState(true);
@@ -132,7 +134,7 @@ function LeadersInner() {
     setBoardLoading(true);
     void (async () => {
       try {
-        const data = await fetchLpLeaders(25, windowDays);
+        const data = await fetchLpLeaders(100, windowDays, boardSort === "activity" ? "activity" : "fees");
         if (!cancelled) {
           setBoard(data.leaders);
           setBoardHonesty(data.honesty ?? null);
@@ -149,7 +151,11 @@ function LeadersInner() {
     return () => {
       cancelled = true;
     };
-  }, [windowDays]);
+  }, [windowDays, boardSort]);
+
+  useEffect(() => {
+    setBoardPage(1);
+  }, [windowDays, boardSort]);
 
   useEffect(() => {
     if (profile) {
@@ -161,18 +167,22 @@ function LeadersInner() {
   const w30 = profile ? windowOrFallback(profile, "30d") : null;
   const proxies = profile?.proxies;
   const sortedBoard = [...board].sort((a, b) => {
+    if (boardSort === "activity") return 0;
     if (boardSort === "fee_cap") {
       const score = (row: LeaderBoardRow) => {
         if (row.fee_capital_ratio != null && Number.isFinite(row.fee_capital_ratio)) {
           return row.fee_capital_ratio;
         }
-        if (row.deposit_quote_xlm > 0) return row.claim_quote_xlm / row.deposit_quote_xlm;
+        const fee = row.accrued_fee_quote_xlm ?? row.claim_quote_xlm;
+        if (row.deposit_quote_xlm > 0) return fee / row.deposit_quote_xlm;
         return -1;
       };
       return score(b) - score(a);
     }
-    return b.claim_quote_xlm - a.claim_quote_xlm;
+    return (b.accrued_fee_quote_xlm ?? b.claim_quote_xlm) - (a.accrued_fee_quote_xlm ?? a.claim_quote_xlm);
   });
+  const boardPageCount = Math.max(1, Math.ceil(sortedBoard.length / BOARD_PAGE_SIZE));
+  const visibleBoard = sortedBoard.slice((boardPage - 1) * BOARD_PAGE_SIZE, boardPage * BOARD_PAGE_SIZE);
 
   function ratioPct(ratio?: number | null) {
     if (ratio == null || !Number.isFinite(ratio)) return null;
@@ -185,7 +195,7 @@ function LeadersInner() {
       <div className="panel">
         <div className="panel-head">Leaders</div>
         <p className="muted leaders-blurb">
-          Scout Aquarius LPs by claimed fees, open a profile, then copy. Claimed fees are an
+          Scout Stellar LPs by claimed fees, open a profile, then copy. Claimed fees are an
           earnings proxy — not full PnL.
         </p>
         <div className="leaders-search">
@@ -245,6 +255,13 @@ function LeadersInner() {
               >
                 Fee / cap
               </button>
+              <button
+                type="button"
+                className={boardSort === "activity" ? "is-on" : undefined}
+                onClick={() => setBoardSort("activity")}
+              >
+                Activity
+              </button>
             </div>
           </div>
         </div>
@@ -254,7 +271,7 @@ function LeadersInner() {
           <div className="empty">No actor-tagged liquidity events in this window yet.</div>
         ) : (
           <div className="leaders-card-grid">
-            {sortedBoard.map((row, i) => {
+            {visibleBoard.map((row, i) => {
               const feeCap =
                 ratioPct(row.fee_capital_ratio) ??
                 feeCapitalPct(row.claim_quote_xlm, row.deposit_quote_xlm);
@@ -275,7 +292,7 @@ function LeadersInner() {
                 >
                   <div className="leaders-board-card-top">
                     <div className="leaders-board-id">
-                      <span className="leaders-rank">#{i + 1}</span>
+                      <span className="leaders-rank">#{(boardPage - 1) * BOARD_PAGE_SIZE + i + 1}</span>
                       <span className="leaders-board-addr" title={row.address}>
                         {shortAddr(row.address)}
                       </span>
@@ -283,10 +300,16 @@ function LeadersInner() {
                     <span className="leaders-ago">{formatRelative(row.last_activity_at)}</span>
                   </div>
                   <div className="leaders-board-fee leaders-pos">
-                    {quoteLabel(row.claim_quote_usd, row.claim_quote_xlm)}
+                    {row.accrued_fee_quote_xlm != null
+                      ? quoteLabel(row.accrued_fee_quote_usd, row.accrued_fee_quote_xlm)
+                      : quoteLabel(row.claim_quote_usd, row.claim_quote_xlm)}
                   </div>
                   <div className="leaders-board-sub muted">
-                    Claimed fees · {row.claim_count} claim{row.claim_count === 1 ? "" : "s"}
+                    {row.accrued_fee_quote_xlm != null ? "Accrued fees" : "Claimed fees"}
+                    {row.accrued_fee_quote_xlm != null && row.unclaimed_fee_quote_xlm != null
+                      ? ` · ${quoteLabel(row.unclaimed_fee_quote_usd, row.unclaimed_fee_quote_xlm)} unclaimed`
+                      : null}
+                    {` · ${row.claim_count} claim${row.claim_count === 1 ? "" : "s"}`}
                   </div>
                   <div className="leaders-board-meta">
                     <div>
@@ -321,6 +344,21 @@ function LeadersInner() {
             })}
           </div>
         )}
+        {!boardLoading && boardPageCount > 1 ? (
+          <div className="leaders-filters" style={{ justifyContent: "flex-end", marginTop: 14 }}>
+            <div className="leaders-seg" role="group" aria-label="Leader pages">
+              <button type="button" disabled={boardPage === 1} onClick={() => setBoardPage((page) => Math.max(1, page - 1))}>
+                Previous
+              </button>
+              <span className="muted" style={{ alignSelf: "center", padding: "0 8px" }}>
+                Page {boardPage} / {boardPageCount}
+              </span>
+              <button type="button" disabled={boardPage === boardPageCount} onClick={() => setBoardPage((page) => Math.min(boardPageCount, page + 1))}>
+                Next
+              </button>
+            </div>
+          </div>
+        ) : null}
         {boardHonesty ? (
           <p className="sign-disabled-note leaders-foot-note">{boardHonesty}</p>
         ) : null}

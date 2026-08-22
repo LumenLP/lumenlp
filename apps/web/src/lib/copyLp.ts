@@ -26,6 +26,7 @@ export type CopyOp = {
   session_id: string;
   source_event_id: string;
   pool_address: string;
+  venue?: string | null;
   kind: string;
   position_key: string;
   leader_amounts: unknown;
