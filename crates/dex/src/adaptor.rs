@@ -53,6 +53,10 @@ impl VenueId {
 pub struct VenueCapabilities {
     pub list_pools: bool,
     pub positions: bool,
+    /// Whether the venue exposes a direct, independently readable fee
+    /// accumulator for user positions. Share-based pools may embed fees in
+    /// redemption value instead and must report this as false.
+    pub unclaimed_fees: bool,
     pub liquidity_events: bool,
     pub quotes: bool,
     /// Build unsigned / draft LP actions (deposit, withdraw, CL adjust, …).
@@ -68,6 +72,7 @@ impl VenueCapabilities {
         Self {
             list_pools: false,
             positions: false,
+            unclaimed_fees: false,
             liquidity_events: false,
             quotes: false,
             draft_ops: false,
@@ -82,6 +87,7 @@ impl VenueCapabilities {
         Self {
             list_pools: true,
             positions: true,
+            unclaimed_fees: true,
             liquidity_events: true,
             quotes: true,
             draft_ops: true,
@@ -96,6 +102,7 @@ impl VenueCapabilities {
         Self {
             list_pools: true,
             positions: false,
+            unclaimed_fees: false,
             liquidity_events,
             quotes: true,
             draft_ops: false,

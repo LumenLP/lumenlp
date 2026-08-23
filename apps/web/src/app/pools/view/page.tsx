@@ -25,7 +25,7 @@ function normalizedTokenLabel(label: string | null | undefined) {
 }
 
 function poolTypeLabel(type: string | null | undefined) {
-  if (!type) return "Unknown";
+  if (!type || type === "unknown") return "Unknown";
   if (type === "constant_product") return "AMM";
   if (type === "concentrated") return "CLMM";
   if (type === "weighted") return "Weighted";
@@ -39,7 +39,11 @@ function venueLabel(venue: string | null | undefined) {
   if (venue === "soroswap" || venue === "soroswap_amm") return "Soroswap";
   if (venue === "sushi" || venue === "sushi_v3") return "Sushi V3";
   if (venue === "comet") return "Comet";
-  return venue || "Stellar DEX";
+  return !venue || venue === "unknown" ? "Unknown DEX" : venue;
+}
+
+function venueCopyEnabled(venue: string | null | undefined) {
+  return venue === "aquarius";
 }
 
 function detailTokenPairLabel(detail: PoolDetailResponse | null, address: string) {
@@ -441,6 +445,9 @@ function PoolDetailInner() {
           <p className="detail-subtitle">{pairSubtitle || address}</p>
           <div className="detail-meta-row">
             <span className="badge">{venueLabel(detail?.venue)}</span>
+            <span className="badge">
+              {venueCopyEnabled(detail?.venue) ? "Copy enabled" : "Analytics only"}
+            </span>
             <span className="badge">{poolTypeLabel(detail?.pool_type)}</span>
             <span className="badge">{detail?.fee_bps ?? 0} bps</span>
             {score != null ? <span className="badge">score {fmtNum(score, 2)}</span> : null}
@@ -448,7 +455,7 @@ function PoolDetailInner() {
               className="btn-ghost"
               href={`/strategies?pool=${encodeURIComponent(address)}`}
             >
-              Apply strategy
+              {venueCopyEnabled(detail?.venue) ? "Apply strategy" : "View strategy preview"}
             </Link>
             <span className="muted">latest {fmtTs(detail?.last_snapshot_at)}</span>
           </div>
@@ -471,6 +478,11 @@ function PoolDetailInner() {
               <strong>{fmtNum(activitySummary?.swap_count_24h ?? activity?.swap_count ?? 0, 0)}</strong>
             </div>
           </div>
+          {detail?.tvl_status === "missing_price" ? (
+            <p className="muted">TVL unavailable: token price data is not available yet.</p>
+          ) : detail?.tvl_status === "empty_reserves" ? (
+            <p className="muted">TVL unavailable: the pool currently reports empty reserves.</p>
+          ) : null}
         </div>
         <div className="detail-hero-side">
           <div className="panel-head">{chartTitle}</div>

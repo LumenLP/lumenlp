@@ -48,6 +48,7 @@ impl DexAdaptor for SushiAdaptor {
         VenueCapabilities {
             list_pools: true,
             positions: true,
+            unclaimed_fees: true,
             liquidity_events: true,
             quotes: true,
             draft_ops: true,

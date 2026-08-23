@@ -41,6 +41,7 @@ impl DexAdaptor for PhoenixAdaptor {
         VenueCapabilities {
             list_pools: true,
             positions: true,
+            unclaimed_fees: false,
             liquidity_events: true,
             quotes: true,
             draft_ops: true,

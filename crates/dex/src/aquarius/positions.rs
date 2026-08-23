@@ -11,7 +11,9 @@ use {
     },
     anyhow::Result,
     metrics::{cl_position_amounts, cp_position_amounts, value_xlm, PriceBook},
+    std::sync::Arc,
     stellar_xdr::curr as xdr,
+    tokio::task::JoinSet,
     tracing::warn,
 };
 
@@ -25,17 +27,28 @@ pub async fn positions_for_address(
     pool_addresses: &[String],
     pricing_pools: &[SharePoolState],
 ) -> Vec<UserPosition> {
-    let book = price_book_from_pools(pricing_pools);
+    let book = Arc::new(price_book_from_pools(pricing_pools));
     let mut out = Vec::new();
-    for addr in pool_addresses {
-        match load_position(rpc, user, addr, &book).await {
-            Ok(Some(p)) => out.push(p),
-            Ok(None) => {}
-            Err(e) => {
-                warn!(pool = %addr, error = %e, "position load failed");
-                // Actor history is multi-DEX, while this scanner is Aquarius
-                // specific. A non-Aquarius pool can fail the Aquarius probe;
-                // that is not evidence of an open position.
+    for batch in pool_addresses.chunks(8) {
+        let mut tasks = JoinSet::new();
+        for addr in batch {
+            let rpc = rpc.clone();
+            let user = user.to_owned();
+            let addr = addr.clone();
+            let book = Arc::clone(&book);
+            tasks.spawn(async move { (addr.clone(), load_position(&rpc, &user, &addr, &book).await) });
+        }
+        while let Some(result) = tasks.join_next().await {
+            let Ok((pool, position)) = result else { continue };
+            match position {
+                Ok(Some(p)) => out.push(p),
+                Ok(None) => {}
+                Err(e) => {
+                    warn!(pool = %pool, error = %e, "position load failed");
+                    // Actor history is multi-DEX, while this scanner is
+                    // Aquarius specific. A non-Aquarius pool can fail the
+                    // Aquarius probe; that is not an open position.
+                }
             }
         }
     }

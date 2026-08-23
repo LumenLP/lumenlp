@@ -30,7 +30,11 @@ function venueLabel(venue: string | null | undefined) {
   if (venue === "phoenix") return "Phoenix";
   if (venue === "sushi" || venue === "sushi_v3") return "Sushi V3";
   if (venue === "comet") return "Comet";
-  return venue || "Stellar DEX";
+  return !venue || venue === "unknown" ? "Unknown DEX" : venue;
+}
+
+function copyExecutionEnabled(venue: string | null | undefined) {
+  return venue === "aquarius";
 }
 
 function formatOpQuote(op: CopyOp): string {
@@ -153,6 +157,10 @@ function CopyInner() {
 
   async function onGenerateDraft(op: CopyOp) {
     if (!address) return;
+    if (!copyExecutionEnabled(op.venue)) {
+      setError(`${venueLabel(op.venue)} is analytics-only; draft execution is disabled.`);
+      return;
+    }
     setActionBusy(`draft-${op.id}`);
     setError(null);
     try {
@@ -368,9 +376,9 @@ function CopyInner() {
                           type="button"
                           className="primary"
                           onClick={() => void onGenerateDraft(op)}
-                          disabled={actionBusy !== null}
+                          disabled={actionBusy !== null || !copyExecutionEnabled(op.venue)}
                         >
-                          Generate draft
+                          {copyExecutionEnabled(op.venue) ? "Generate draft" : "Analytics only"}
                         </button>
                         <button
                           type="button"

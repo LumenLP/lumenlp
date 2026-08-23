@@ -275,8 +275,10 @@ impl Db {
         let mut out = Vec::new();
         for s in snaps {
             let meta = self.pool_meta(&s.pool_address)?;
+            // A snapshot without metadata must not be attributed to Aquarius:
+            // that would contaminate the default venue filter and rankings.
             let (pool_type, tokens_json, fee_bps, venue) =
-                meta.unwrap_or_else(|| ("unknown".into(), "[]".into(), 0, "aquarius".into()));
+                meta.unwrap_or_else(|| ("unknown".into(), "[]".into(), 0, "unknown".into()));
             out.push(serde_json::json!({
                 "address": s.pool_address,
                 "venue": venue,

@@ -25,7 +25,7 @@ function venueLabel(venue: string | null | undefined) {
   if (venue === "soroswap" || venue === "soroswap_amm") return "Soroswap";
   if (venue === "sushi" || venue === "sushi_v3") return "Sushi V3";
   if (venue === "comet") return "Comet";
-  return venue || "Stellar DEX";
+  return !venue || venue === "unknown" ? "Unknown DEX" : venue;
 }
 
 function StrategiesInner() {

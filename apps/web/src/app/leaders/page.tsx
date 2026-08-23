@@ -35,12 +35,13 @@ function venueLabel(venue?: string, poolType?: string) {
     case "soroswap_amm": return "Soroswap";
     case "phoenix": return "Phoenix";
     case "comet": return "Comet";
-    default: return poolType ?? "—";
+    default: return venue === "unknown" ? "Unknown DEX" : "—";
   }
 }
 
-function quoteLabel(usd: number | null | undefined, xlm: number, digits = 1) {
+function quoteLabel(usd: number | null | undefined, xlm: number | null | undefined, digits = 1) {
   if (fmtUsd(usd) !== "—") return fmtUsd(usd);
+  if (xlm == null || !Number.isFinite(xlm)) return "—";
   return `${fmtNum(xlm, digits)} XLM`;
 }
 
@@ -134,7 +135,7 @@ function LeadersInner() {
     setBoardLoading(true);
     void (async () => {
       try {
-        const data = await fetchLpLeaders(100, windowDays, boardSort === "activity" ? "activity" : "fees");
+        const data = await fetchLpLeaders(500, windowDays, boardSort === "activity" ? "activity" : "fees");
         if (!cancelled) {
           setBoard(data.leaders);
           setBoardHonesty(data.honesty ?? null);
@@ -195,8 +196,8 @@ function LeadersInner() {
       <div className="panel">
         <div className="panel-head">Leaders</div>
         <p className="muted leaders-blurb">
-          Scout Stellar LPs by claimed fees, open a profile, then copy. Claimed fees are an
-          earnings proxy — not full PnL.
+          Scout Stellar LPs by accrued fees, open a profile, then copy. Accrued fees combine
+          indexed claims with the latest verified unclaimed position fees — not full PnL.
         </p>
         <div className="leaders-search">
           <input
@@ -246,7 +247,7 @@ function LeadersInner() {
                 className={boardSort === "fees" ? "is-on" : undefined}
                 onClick={() => setBoardSort("fees")}
               >
-                Fees
+                Accrued fees
               </button>
               <button
                 type="button"
@@ -268,7 +269,7 @@ function LeadersInner() {
         {boardLoading ? (
           <div className="empty">Loading board…</div>
         ) : sortedBoard.length === 0 ? (
-          <div className="empty">No actor-tagged liquidity events in this window yet.</div>
+          <div className="empty">No LP activity or verified fee snapshots in this window yet.</div>
         ) : (
           <div className="leaders-card-grid">
             {visibleBoard.map((row, i) => {
@@ -308,7 +309,9 @@ function LeadersInner() {
                     {row.accrued_fee_quote_xlm != null ? "Accrued fees" : "Claimed fees"}
                     {row.accrued_fee_quote_xlm != null && row.unclaimed_fee_quote_xlm != null
                       ? ` · ${quoteLabel(row.unclaimed_fee_quote_usd, row.unclaimed_fee_quote_xlm)} unclaimed`
-                      : null}
+                      : row.accrued_fee_quote_xlm == null
+                        ? " · unclaimed not verified"
+                        : null}
                     {` · ${row.claim_count} claim${row.claim_count === 1 ? "" : "s"}`}
                   </div>
                   <div className="leaders-board-meta">
@@ -323,7 +326,7 @@ function LeadersInner() {
                       </span>
                     </div>
                     <div>
-                      <span className="leaders-meta-k">Fee / cap</span>
+                    <span className="leaders-meta-k">Accrued / cap</span>
                       <span className="leaders-meta-v">
                         {feeCap != null ? `${feeCap < 0.01 && feeCap > 0 ? "<0.01" : feeCap.toFixed(2)}%` : "—"}
                       </span>

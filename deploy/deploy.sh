@@ -96,9 +96,14 @@ else:
 PY
 
 systemctl daemon-reload
-systemctl enable --now lumenlp-api.service lumenlp-indexer.service lumenlp-snapshotter.timer
-systemctl restart lumenlp-api.service
-systemctl restart lumenlp-indexer.service
+# Stop both writers/readers before replacing binaries. Starting both with
+# enable --now and then restarting them again can briefly leave two indexer
+# processes contending for the SQLite file during a deploy.
+systemctl stop lumenlp-api.service lumenlp-indexer.service 2>/dev/null || true
+systemctl enable lumenlp-api.service lumenlp-indexer.service
+systemctl enable --now lumenlp-snapshotter.timer
+systemctl start lumenlp-indexer.service
+systemctl start lumenlp-api.service
 nginx -t && systemctl reload nginx
 
 systemctl start lumenlp-snapshotter.service || true
@@ -106,6 +111,7 @@ systemctl start lumenlp-snapshotter.service || true
 sleep 2
 systemctl --no-pager --full status lumenlp-api.service | head -12
 systemctl --no-pager --full status lumenlp-indexer.service | head -12
+systemctl --no-pager --full status lumenlp-snapshotter.timer | head -12
 curl -sf http://127.0.0.1:${API_PORT}/health && echo " api health ok"
 EOF
 

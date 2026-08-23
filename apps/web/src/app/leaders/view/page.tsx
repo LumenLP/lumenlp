@@ -14,10 +14,17 @@ import {
 } from "@/lib/api";
 
 function tokenLabel(position: Position) {
+  if (position.token_labels?.length) {
+    return displayTokenLabels(position.token_labels).join(" / ");
+  }
   if (position.tokens.length >= 2) {
     return `${shortAddr(position.tokens[0])} / ${shortAddr(position.tokens[1])}`;
   }
   return position.tokens.map(shortAddr).join(" · ") || "—";
+}
+
+function displayTokenLabels(labels: string[]) {
+  return labels.map((label) => label.toLowerCase() === "native" ? "XLM" : label);
 }
 
 function venueLabel(venue?: string, poolType?: string) {
@@ -29,12 +36,23 @@ function venueLabel(venue?: string, poolType?: string) {
     case "soroswap_amm": return "Soroswap";
     case "phoenix": return "Phoenix";
     case "comet": return "Comet";
-    default: return poolType ?? "—";
+    default: return venue === "unknown" ? "Unknown DEX" : "—";
   }
 }
 
-function quoteLabel(usd: number | null | undefined, xlm: number, digits = 1) {
+function poolTypeLabel(poolType?: string | null) {
+  switch (poolType) {
+    case "constant_product": return "AMM";
+    case "concentrated": return "CLMM";
+    case "stable": return "Stable";
+    case "weighted": return "Weighted";
+    default: return !poolType || poolType === "unknown" ? "Unknown" : poolType;
+  }
+}
+
+function quoteLabel(usd: number | null | undefined, xlm: number | null | undefined, digits = 1) {
   if (fmtUsd(usd) !== "—") return fmtUsd(usd);
+  if (xlm == null || !Number.isFinite(xlm)) return "—";
   return `${fmtNum(xlm, digits)} XLM`;
 }
 
@@ -62,11 +80,22 @@ function windowOrFallback(profile: LpProfile, key: "7d" | "30d"): ActivityWindow
 }
 
 function poolMix(events: LpProfile["recent_events"]) {
-  const map = new Map<string, { count: number; quote: number }>();
+  const map = new Map<string, { count: number; quote: number; tokenLabels: string[]; venue?: string | null; poolType?: string | null; feeBps?: number | null }>();
   for (const event of events) {
-    const current = map.get(event.pool_address) ?? { count: 0, quote: 0 };
+    const current = map.get(event.pool_address) ?? {
+      count: 0,
+      quote: 0,
+      tokenLabels: event.token_labels ?? [],
+      venue: event.venue,
+      poolType: event.pool_type,
+      feeBps: event.fee_bps,
+    };
     current.count += 1;
     if (event.quote_xlm != null && Number.isFinite(event.quote_xlm)) current.quote += event.quote_xlm;
+    if (current.tokenLabels.length === 0 && event.token_labels?.length) current.tokenLabels = event.token_labels;
+    if (!current.venue && event.venue) current.venue = event.venue;
+    if (!current.poolType && event.pool_type) current.poolType = event.pool_type;
+    if (current.feeBps == null && event.fee_bps != null) current.feeBps = event.fee_bps;
     map.set(event.pool_address, current);
   }
   return [...map.entries()]
@@ -157,14 +186,14 @@ function LeaderViewInner() {
             <span className="muted">lifetime claims ÷ active months (proxy)</span>
           </div>
           <div className="leaders-hero-metric">
-            <span className="filter-label">Fee / capital · 30d</span>
+            <span className="filter-label">Claimed fee / capital · 30d</span>
             <strong className="leaders-pos">{feeCapital != null ? `${feeCapital.toFixed(2)}%` : "—"}</strong>
             <span className="muted">claimed ÷ deposits (not ROI)</span>
           </div>
         </div>
 
         <div className="leaders-stats leaders-stats-dense">
-          <div className="leaders-stat"><span className="filter-label">Unclaimed fees</span><strong className="leaders-pos">{quoteLabel(profile.portfolio.fees_unclaimed_usd, profile.portfolio.fees_unclaimed_xlm, 2)}</strong></div>
+          <div className="leaders-stat"><span className="filter-label">Current unclaimed fees</span><strong className="leaders-pos">{quoteLabel(profile.portfolio.fees_unclaimed_usd, profile.portfolio.fees_unclaimed_xlm, 2)}</strong></div>
           <div className="leaders-stat"><span className="filter-label">Open positions</span><strong>{profile.portfolio.position_count}</strong></div>
           <div className="leaders-stat"><span className="filter-label">Net worth</span><strong>{quoteLabel(profile.portfolio.net_worth_usd, profile.portfolio.net_worth_xlm, 2)}</strong></div>
           <div className="leaders-stat"><span className="filter-label">Claim intensity · 30d</span><strong>{proxies?.claim_intensity_30d != null ? `${proxies.claim_intensity_30d.toFixed(2)}×` : "—"}</strong></div>
@@ -185,11 +214,11 @@ function LeaderViewInner() {
         <p className="sign-disabled-note">{profile.honesty}</p>
       </div>
 
-      {mix.length > 0 ? <div className="panel"><div className="panel-head">Pool mix · recent events</div><div className="leaders-pool-mix">{mix.map((row) => <div key={row.pool} className="leaders-pool-mix-row"><Link href={`/pools/view?address=${encodeURIComponent(row.pool)}`}>{shortAddr(row.pool)}</Link><span className="muted">{row.count} events</span><span>{row.quote > 0 ? `${fmtNum(row.quote, 1)} XLM` : "—"}</span></div>)}</div></div> : null}
+      {mix.length > 0 ? <div className="panel"><div className="panel-head">Pool mix · recent events</div><div className="leaders-pool-mix">{mix.map((row) => <div key={row.pool} className="leaders-pool-mix-row"><div><Link href={`/pools/view?address=${encodeURIComponent(row.pool)}`}>{row.tokenLabels.length ? displayTokenLabels(row.tokenLabels).join(" / ") : shortAddr(row.pool)}</Link><div className="muted">{venueLabel(row.venue ?? undefined, row.poolType ?? undefined)} · {poolTypeLabel(row.poolType)}{row.feeBps != null ? ` · ${row.feeBps} bps` : ""} · {shortAddr(row.pool)}</div></div><span className="muted">{row.count} events</span><span>{row.quote > 0 ? `${fmtNum(row.quote, 1)} XLM` : "—"}</span></div>)}</div></div> : null}
 
-      <div className="panel"><div className="panel-head">Open positions</div>{profile.positions.length === 0 ? <div className="empty">No open positions in scanned pools.</div> : <div className="leaders-positions">{profile.positions.map((position) => <div key={`${position.pool_address}-${position.status}`} className="leaders-position"><div className="leaders-position-head"><Link href={`/pools/view?address=${encodeURIComponent(position.pool_address)}`}>{tokenLabel(position)}</Link><span className="badge">{venueLabel(position.venue, position.pool_type)}</span></div><div className="muted">Value {fmtNum(position.value_quote, 2)} XLM{position.fees_unclaimed_quote != null ? ` · fees ${fmtNum(position.fees_unclaimed_quote, 3)}` : ""}{position.il_est != null ? ` · IL ~(${(position.il_est * 100).toFixed(2)}%)` : ""}</div></div>)}</div>}</div>
+      <div className="panel"><div className="panel-head">Open positions</div>{profile.positions.length === 0 ? <div className="empty">No open positions in scanned pools.</div> : <div className="leaders-positions">{profile.positions.map((position) => <div key={`${position.pool_address}-${position.status}`} className="leaders-position"><div className="leaders-position-head"><div><Link href={`/pools/view?address=${encodeURIComponent(position.pool_address)}`}>{tokenLabel(position)}</Link><div className="muted">{shortAddr(position.pool_address)} · {poolTypeLabel(position.pool_type)} · {position.fee_bps} bps</div></div><span className="badge">{venueLabel(position.venue, position.pool_type)}</span></div><div className="muted">Value {fmtNum(position.value_quote, 2)} XLM{position.fees_unclaimed_quote != null ? ` · fees ${fmtNum(position.fees_unclaimed_quote, 3)}` : " · unclaimed fee unavailable"}{position.il_est != null ? ` · IL ~(${(position.il_est * 100).toFixed(2)}%)` : ""}</div></div>)}</div>}</div>
 
-      <div className="panel"><div className="panel-head">Recent LP events</div>{profile.recent_events.length === 0 ? <div className="empty">No deposit/withdraw/claim events with actor in the last 30d.</div> : <div className="leaders-events">{profile.recent_events.map((event) => <div key={event.event_id} className="leaders-event"><span className="badge">{event.kind.replace("_liquidity", "").replace("_", " ")}</span><Link href={`/pools/view?address=${encodeURIComponent(event.pool_address)}`}>{shortAddr(event.pool_address)}</Link><span className="muted">{event.quote_xlm != null ? `${fmtNum(event.quote_xlm, 2)} XLM · ` : ""}{new Date(event.created_at * 1000).toLocaleString()}</span></div>)}</div>}</div>
+      <div className="panel"><div className="panel-head">Recent LP events</div>{profile.recent_events.length === 0 ? <div className="empty">No deposit/withdraw/claim events with actor in the last 30d.</div> : <div className="leaders-events">{profile.recent_events.map((event) => <div key={event.event_id} className="leaders-event"><span className="badge">{event.kind.replace("_liquidity", "").replace("_", " ")}</span><div><Link href={`/pools/view?address=${encodeURIComponent(event.pool_address)}`}>{event.token_labels?.length ? displayTokenLabels(event.token_labels).join(" / ") : shortAddr(event.pool_address)}</Link><div className="muted">{venueLabel(event.venue ?? undefined, event.pool_type ?? undefined)} · {poolTypeLabel(event.pool_type)}{event.fee_bps != null ? ` · ${event.fee_bps} bps` : ""} · {shortAddr(event.pool_address)}</div></div><span className="muted">{event.quote_xlm != null ? `${fmtNum(event.quote_xlm, 2)} XLM · ` : ""}{new Date(event.created_at * 1000).toLocaleString()}</span></div>)}</div>}</div>
     </div>
   );
 }

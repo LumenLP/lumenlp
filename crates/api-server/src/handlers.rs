@@ -26,21 +26,20 @@ use {
         positions::positions_for_venue,
         rpc::scval_to_symbol_string,
         support_matrix,
-        sushi::{
-            discover_mainnet_pool_addresses, positions_for_candidates, positions_for_managed_pools,
-            SushiPositionRangeCandidate,
-        },
+        sushi::{positions_for_candidates, positions_for_managed_pools, SushiPositionRangeCandidate},
         types::UserPosition,
         SorobanRpc, NATIVE_SAC,
     },
     redis::AsyncCommands,
-    serde::Deserialize,
+    serde::{Deserialize, Serialize},
     serde_json::{json, Value},
     std::{
         collections::{HashMap, HashSet},
+        sync::atomic::{AtomicBool, Ordering},
         sync::{Arc, Mutex},
         time::{Duration as StdDuration, Instant as StdInstant},
     },
+    tokio::task::JoinSet,
 };
 
 #[derive(Clone)]
@@ -54,11 +53,12 @@ pub struct AppState {
     /// Serializes a full pool-list rebuild so concurrent cold requests do not
     /// all repeat the RPC, pricing, and rollup work.
     pub pool_list_refresh: Arc<tokio::sync::Mutex<()>>,
+    pub pool_list_refreshing: Arc<AtomicBool>,
     pub redis: Option<redis::Client>,
     pub leader_fee_scan_cursor: Arc<std::sync::atomic::AtomicUsize>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TokenMeta {
     pub address: String,
     pub symbol: String,
@@ -91,7 +91,18 @@ pub fn router() -> Router<AppState> {
 
 const WINDOWS: [(&str, i64); 4] = [("5m", 5), ("1h", 60), ("6h", 360), ("24h", 1_440)];
 const SCORE_TVL_FLOOR: f64 = 10.0;
+const SCORE_TVL_FLOOR_USD: f64 = 0.05;
 const DUST_TVL_FLOOR: f64 = 1e-6;
+const REDIS_TOKEN_META_TTL_SECS: u64 = 3_600;
+const REDIS_LP_PROFILE_TTL_SECS: u64 = 30;
+
+fn redis_token_meta_key(address: &str) -> String {
+    format!("lumenlp:token-meta:v1:{address}")
+}
+
+fn redis_lp_profile_key(address: &str) -> String {
+    format!("lumenlp:lp-profile:v3:{address}")
+}
 // Rollups are generated from bucketed snapshots. A short grace period covers
 // bucket alignment and the indexer's polling interval, but prevents an old
 // rollup from being presented as a current activity window.
@@ -112,10 +123,33 @@ fn pool_score_json(
     net_liq_override: Option<f64>,
     fee_24h_override: Option<f64>,
 ) -> Value {
+    pool_score_json_with_floor(
+        tvl,
+        window_metrics,
+        activity_summary,
+        volume_24h_override,
+        net_liq_override,
+        fee_24h_override,
+        SCORE_TVL_FLOOR,
+    )
+}
+
+fn pool_score_json_with_floor(
+    tvl: f64,
+    window_metrics: &Value,
+    activity_summary: Option<&PoolActivitySummaryRow>,
+    volume_24h_override: Option<f64>,
+    net_liq_override: Option<f64>,
+    fee_24h_override: Option<f64>,
+    score_tvl_floor: f64,
+) -> Value {
     // Below this floor, fee/TVL is dominated by dust and stale rollup history
     // rather than usable liquidity. Keep these pools visible, but remove them
     // from ranking signals until they have meaningful current TVL.
-    let has_liquidity = tvl.is_finite() && tvl >= DUST_TVL_FLOOR;
+    // A pool can be non-zero while still being economically meaningless. Use
+    // the same usable-liquidity floor for every ranking component so cadence
+    // or net-flow activity cannot push a dust pool to the top.
+    let has_usable_liquidity = tvl.is_finite() && tvl >= score_tvl_floor;
     let metrics_24h = window_metrics.get("24h");
     let reported_fee_tvl = metrics_24h
         .and_then(|v| v.get("fee_tvl"))
@@ -135,16 +169,16 @@ fn pool_score_json(
     });
     // A tiny pool can produce a mathematically huge Fee/TVL from a few cents
     // of fees. Keep that signal visible, but prevent it from dominating rank.
-    let liquidity = tvl.max(SCORE_TVL_FLOOR);
+    let liquidity = tvl.max(score_tvl_floor);
     let fee_tvl = fee
-        .filter(|_| has_liquidity)
+        .filter(|_| has_usable_liquidity)
         .map(|value| value / liquidity)
-        .unwrap_or_else(|| if tvl >= SCORE_TVL_FLOOR { reported_fee_tvl } else { 0.0 });
-    let volume_efficiency = if has_liquidity { volume / liquidity } else { 0.0 };
+        .unwrap_or_else(|| if tvl >= score_tvl_floor { reported_fee_tvl } else { 0.0 });
+    let volume_efficiency = if has_usable_liquidity { volume / liquidity } else { 0.0 };
     let net_liq =
         net_liq_override.unwrap_or_else(|| activity_summary.map(|s| s.net_liquidity_delta_quote_24h).unwrap_or(0.0));
-    let net_liq_ratio = if has_liquidity { net_liq / liquidity } else { 0.0 };
-    let cadence = if has_liquidity {
+    let net_liq_ratio = if has_usable_liquidity { net_liq / liquidity } else { 0.0 };
+    let cadence = if has_usable_liquidity {
         cadence_sort_value(activity_summary.and_then(|s| s.avg_update_interval_secs_24h))
     } else {
         0.0
@@ -411,13 +445,14 @@ fn score_with_usd_preference(
             .get("24h")
             .and_then(|v| v.get("fee_usd"))
             .and_then(|v| v.as_f64());
-        pool_score_json(
+        pool_score_json_with_floor(
             tvl_usd.unwrap_or(latest_tvl),
             metrics,
             activity_summary,
             volume_usd,
             net_liq_usd,
             fee_usd,
+            SCORE_TVL_FLOOR_USD,
         )
     } else {
         pool_score_json(latest_tvl, metrics, activity_summary, None, None, None)
@@ -624,6 +659,8 @@ struct PoolListQuery {
     /// `dex` is the public UI spelling; `venue` is retained for API clients.
     dex: Option<String>,
     venue: Option<String>,
+    #[serde(rename = "refresh")]
+    refresh: Option<bool>,
 }
 
 fn paginate_pool_body(mut body: Value, query: &PoolListQuery) -> Value {
@@ -676,26 +713,77 @@ async fn list_pools(State(state): State<AppState>, Query(query): Query<PoolListQ
     const POOL_LIST_CACHE_SECS: u64 = 60;
     // Keep a shared Redis copy beyond the local refresh interval so a request
     // does not synchronously rebuild the full multi-DEX ranking catalogue.
-    const REDIS_POOL_LIST_CACHE_SECS: u64 = 300;
+    const REDIS_POOL_LIST_CACHE_SECS: u64 = 60;
     // Bump this when derived pool metrics change so a deploy cannot serve an
     // older catalogue with incompatible score or Fee/TVL calculations.
     const REDIS_POOL_LIST_KEY: &str = "lumenlp:pools:v2";
-    if let Some(body) = {
-        let cache = state.pool_list_cache.lock().unwrap();
-        cache
-            .as_ref()
-            .and_then(|(expires_at, body)| (*expires_at > StdInstant::now()).then(|| body.clone()))
-    } {
-        let mut response = Json(paginate_pool_body(body, &query)).into_response();
-        response.headers_mut().insert(
-            CACHE_CONTROL,
-            HeaderValue::from_static("public, max-age=60, s-maxage=60, stale-while-revalidate=120"),
-        );
-        response.headers_mut().insert(
-            HeaderName::from_static("cdn-cache-control"),
-            HeaderValue::from_static("public, max-age=60, stale-while-revalidate=120"),
-        );
-        return response;
+    if query.refresh != Some(true) {
+        if let Some(body) = {
+            let cache = state.pool_list_cache.lock().unwrap();
+            cache
+                .as_ref()
+                .and_then(|(expires_at, body)| (*expires_at > StdInstant::now()).then(|| body.clone()))
+        } {
+            let mut response = Json(paginate_pool_body(body, &query)).into_response();
+            response.headers_mut().insert(
+                HeaderName::from_static("x-lumenlp-cache"),
+                HeaderValue::from_static("pool-local-hit"),
+            );
+            response.headers_mut().insert(
+                CACHE_CONTROL,
+                HeaderValue::from_static("public, max-age=60, s-maxage=60, stale-while-revalidate=120"),
+            );
+            response.headers_mut().insert(
+                HeaderName::from_static("cdn-cache-control"),
+                HeaderValue::from_static("public, max-age=60, stale-while-revalidate=120"),
+            );
+            return response;
+        }
+    }
+    // Do not make an expired catalogue a user-visible cold start. Serve the
+    // last complete body immediately and let the refresh lock serialize a
+    // background rebuild for the next request.
+    if query.refresh != Some(true) {
+        if let Some(body) = {
+            let cache = state.pool_list_cache.lock().unwrap();
+            cache.as_ref().map(|(_, body)| body.clone())
+        } {
+            if state
+                .pool_list_refreshing
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                let refresh_state = state.clone();
+                let refresh_flag = Arc::clone(&state.pool_list_refreshing);
+                std::thread::spawn(move || {
+                    let Ok(runtime) = tokio::runtime::Builder::new_current_thread().enable_all().build() else {
+                        refresh_flag.store(false, Ordering::Release);
+                        return;
+                    };
+                    runtime.block_on(async move {
+                        let _ = list_pools(
+                            State(refresh_state),
+                            Query(PoolListQuery {
+                                refresh: Some(true),
+                                ..PoolListQuery::default()
+                            }),
+                        )
+                        .await;
+                    });
+                    refresh_flag.store(false, Ordering::Release);
+                });
+            }
+            let mut response = Json(paginate_pool_body(body, &query)).into_response();
+            response.headers_mut().insert(
+                CACHE_CONTROL,
+                HeaderValue::from_static("public, max-age=60, s-maxage=60, stale-while-revalidate=120"),
+            );
+            response.headers_mut().insert(
+                HeaderName::from_static("x-lumenlp-cache"),
+                HeaderValue::from_static("stale"),
+            );
+            return response;
+        }
     }
     let _refresh_guard = state.pool_list_refresh.lock().await;
     // Another request may have populated the local cache while this request
@@ -707,6 +795,10 @@ async fn list_pools(State(state): State<AppState>, Query(query): Query<PoolListQ
             .and_then(|(expires_at, body)| (*expires_at > StdInstant::now()).then(|| body.clone()))
     } {
         let mut response = Json(paginate_pool_body(body, &query)).into_response();
+        response.headers_mut().insert(
+            HeaderName::from_static("x-lumenlp-cache"),
+            HeaderValue::from_static("pool-local-hit"),
+        );
         response.headers_mut().insert(
             CACHE_CONTROL,
             HeaderValue::from_static("public, max-age=60, s-maxage=60, stale-while-revalidate=120"),
@@ -722,7 +814,18 @@ async fn list_pools(State(state): State<AppState>, Query(query): Query<PoolListQ
             let cached: redis::RedisResult<Option<String>> = connection.get(REDIS_POOL_LIST_KEY).await;
             if let Ok(Some(serialized)) = cached {
                 if let Ok(body) = serde_json::from_str::<Value>(&serialized) {
+                    {
+                        let mut cache = state.pool_list_cache.lock().unwrap();
+                        *cache = Some((
+                            StdInstant::now() + StdDuration::from_secs(POOL_LIST_CACHE_SECS),
+                            body.clone(),
+                        ));
+                    }
                     let mut response = Json(paginate_pool_body(body, &query)).into_response();
+                    response.headers_mut().insert(
+                        HeaderName::from_static("x-lumenlp-cache"),
+                        HeaderValue::from_static("pool-redis-hit"),
+                    );
                     response.headers_mut().insert(
                         CACHE_CONTROL,
                         HeaderValue::from_static("public, max-age=60, s-maxage=60, stale-while-revalidate=120"),
@@ -777,6 +880,7 @@ async fn list_pools(State(state): State<AppState>, Query(query): Query<PoolListQ
                 state.rpc.clone(),
                 state.index_db.clone(),
                 &state.token_meta_cache,
+                state.redis.clone(),
                 &token_ids,
             )
             .await;
@@ -831,9 +935,28 @@ async fn list_pools(State(state): State<AppState>, Query(query): Query<PoolListQ
                 recompute_fee_tvl_with_current_tvl(&mut metrics, latest_tvl);
                 enrich_window_metrics_usd(&mut metrics, xlm_usd);
                 let tvl_usd = bridge_tvl_usd(latest_tvl, xlm_usd);
+                let pool_tokens = obj
+                    .get("tokens")
+                    .and_then(|value| value.as_array())
+                    .map(|tokens| {
+                        tokens
+                            .iter()
+                            .filter_map(|token| token.as_str().map(ToOwned::to_owned))
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                let pool_quote_coverage = coverage_label(&pool_tokens, &price_map);
+                let tvl_status = if latest_tvl > 0.0 {
+                    "ok"
+                } else if pool_quote_coverage == "none" {
+                    "missing_price"
+                } else {
+                    "empty_reserves"
+                };
                 let activity_summary = activity_summary_map.get(&address);
                 let score_json = score_with_usd_preference(latest_tvl, tvl_usd, &metrics, activity_summary, xlm_usd);
                 obj.insert("tvl_usd".into(), json!(tvl_usd));
+                obj.insert("tvl_status".into(), json!(tvl_status));
                 obj.insert("window_metrics".into(), metrics);
                 if let Some(activity) = activity_map.get(&address) {
                     obj.insert("activity".into(), activity_json(activity));
@@ -892,6 +1015,10 @@ async fn list_pools(State(state): State<AppState>, Query(query): Query<PoolListQ
                 }
             }
             let mut response = Json(paginate_pool_body(body, &query)).into_response();
+            response.headers_mut().insert(
+                HeaderName::from_static("x-lumenlp-cache"),
+                HeaderValue::from_static("pool-origin"),
+            );
             response.headers_mut().insert(
                 CACHE_CONTROL,
                 HeaderValue::from_static("public, max-age=60, s-maxage=60, stale-while-revalidate=120"),
@@ -959,6 +1086,7 @@ async fn pool_detail(State(state): State<AppState>, Path(address): Path<String>)
                 state.rpc.clone(),
                 state.index_db.clone(),
                 &state.token_meta_cache,
+                state.redis.clone(),
                 &token_ids,
             )
             .await;
@@ -1016,6 +1144,17 @@ async fn pool_detail(State(state): State<AppState>, Path(address): Path<String>)
     recompute_fee_tvl_with_current_tvl(&mut window_metrics, latest_tvl);
     enrich_window_metrics_usd(&mut window_metrics, xlm_usd);
     let tvl_usd = bridge_tvl_usd(latest_tvl, xlm_usd);
+    let detail_tokens = meta
+        .as_ref()
+        .and_then(|row| serde_json::from_str::<Vec<String>>(&row.1).ok())
+        .unwrap_or_default();
+    let tvl_status = if latest_tvl > 0.0 {
+        "ok"
+    } else if coverage_label(&detail_tokens, &price_map) == "none" {
+        "missing_price"
+    } else {
+        "empty_reserves"
+    };
     let score_json =
         score_with_usd_preference(latest_tvl, tvl_usd, &window_metrics, activity_summary.as_ref(), xlm_usd);
     let activity_summary_value = activity_summary.as_ref().map(|summary| {
@@ -1042,6 +1181,7 @@ async fn pool_detail(State(state): State<AppState>, Path(address): Path<String>)
         "latest": latest,
         "tvl": if latest_tvl > 0.0 { Some(latest_tvl) } else { None },
         "tvl_usd": tvl_usd,
+        "tvl_status": tvl_status,
         "tvl_source": tvl_source,
         "activity": activity.as_ref().map(activity_json),
         "activity_summary": activity_summary_value,
@@ -1059,6 +1199,7 @@ async fn resolve_token_meta_map(
     rpc: Arc<SorobanRpc>,
     index_db: Arc<Mutex<IndexDb>>,
     cache: &Arc<Mutex<HashMap<String, TokenMeta>>>,
+    redis: Option<redis::Client>,
     token_ids: &HashSet<String>,
 ) -> HashMap<String, TokenMeta> {
     let mut out = HashMap::new();
@@ -1070,6 +1211,34 @@ async fn resolve_token_meta_map(
                 out.insert(token.clone(), meta.clone());
             } else {
                 missing.push(token.clone());
+            }
+        }
+    }
+
+    // The local map is the hot path, but it is process-local. Check the shared
+    // Redis cache before falling back to the database or Soroban RPC so API
+    // workers do not independently hydrate the same token metadata.
+    if let Some(client) = redis.as_ref() {
+        if let Ok(mut connection) = client.get_multiplexed_async_connection().await {
+            let candidate_tokens = std::mem::take(&mut missing);
+            let keys: Vec<String> = candidate_tokens
+                .iter()
+                .map(|token| redis_token_meta_key(token))
+                .collect();
+            let cached: redis::RedisResult<Vec<Option<String>>> = connection.mget(keys).await;
+            match cached {
+                Ok(values) if values.len() == candidate_tokens.len() => {
+                    for (token, serialized) in candidate_tokens.into_iter().zip(values) {
+                        match serialized.and_then(|value| serde_json::from_str::<TokenMeta>(&value).ok()) {
+                            Some(meta) => {
+                                cache.lock().unwrap().insert(token.clone(), meta.clone());
+                                out.insert(token, meta);
+                            }
+                            None => missing.push(token),
+                        }
+                    }
+                }
+                _ => missing = candidate_tokens,
             }
         }
     }
@@ -1090,6 +1259,9 @@ async fn resolve_token_meta_map(
                 icon: metadata.icon,
             };
             cache.lock().unwrap().insert(token.clone(), meta.clone());
+            if let Some(client) = redis.as_ref() {
+                let _ = write_token_meta_redis(client, &token, &meta).await;
+            }
             out.insert(token, meta);
         } else if token_registry::find_token(&token).is_none() {
             // Unknown assets do not need an RPC round trip just to render a
@@ -1137,9 +1309,26 @@ async fn resolve_token_meta_map(
             let mut cache_guard = cache.lock().unwrap();
             cache_guard.insert(token.clone(), meta.clone());
         }
+        if let Some(client) = redis.as_ref() {
+            let _ = write_token_meta_redis(client, &token, &meta).await;
+        }
         out.insert(token, meta);
     }
     out
+}
+
+async fn write_token_meta_redis(client: &redis::Client, token: &str, meta: &TokenMeta) -> redis::RedisResult<()> {
+    let mut connection = client.get_multiplexed_async_connection().await?;
+    let serialized = serde_json::to_string(meta).map_err(|error| {
+        redis::RedisError::from((
+            redis::ErrorKind::TypeError,
+            "token metadata serialization",
+            error.to_string(),
+        ))
+    })?;
+    connection
+        .set_ex(redis_token_meta_key(token), serialized, REDIS_TOKEN_META_TTL_SECS)
+        .await
 }
 
 async fn resolve_one_token_meta(rpc: &SorobanRpc, token: &str) -> TokenMeta {
@@ -1236,6 +1425,7 @@ async fn pool_events(
             state.rpc.clone(),
             state.index_db.clone(),
             &state.token_meta_cache,
+            state.redis.clone(),
             &token_ids,
         )
         .await
@@ -1287,7 +1477,7 @@ struct LeadersBoardQuery {
 
 /// Ranked Stellar LP actors by claimed fees / deposits (Copy scouting board).
 async fn lp_leaders(State(state): State<AppState>, Query(q): Query<LeadersBoardQuery>) -> impl IntoResponse {
-    let limit = q.limit.unwrap_or(25).clamp(1, 100);
+    let limit = q.limit.unwrap_or(25).clamp(1, 500);
     let window_days = q.window_days.unwrap_or(30).clamp(1, 90);
     let sort = (q.sort.as_deref() == Some("activity"))
         .then_some("activity")
@@ -1308,6 +1498,37 @@ async fn lp_leaders(State(state): State<AppState>, Query(q): Query<LeadersBoardQ
             }
         }
     };
+    // A current position snapshot is also a valid discovery signal. Include
+    // actors whose latest fee snapshot is outside the selected activity
+    // window, otherwise a quiet LP with accruing fees disappears from the
+    // default 1d board.
+    {
+        let index_db = state.index_db.lock().unwrap();
+        let known = leaders
+            .iter()
+            .map(|leader| leader.address.clone())
+            .collect::<HashSet<_>>();
+        for actor in index_db.actor_fee_snapshot_actors(10_000).unwrap_or_default() {
+            if known.contains(&actor) {
+                continue;
+            }
+            let Ok((activity, _)) = index_db.actor_liquidity_activity(&actor, since_ts, 200) else {
+                continue;
+            };
+            leaders.push(crate::index_db::TopLiquidityActor {
+                address: actor,
+                event_count: activity.event_count,
+                deposit_count: activity.deposit_count,
+                withdraw_count: activity.withdraw_count,
+                claim_count: activity.claim_count,
+                deposit_quote_xlm: activity.deposit_quote_xlm,
+                withdraw_quote_xlm: activity.withdraw_quote_xlm,
+                claim_quote_xlm: activity.claim_quote_xlm,
+                distinct_pools: activity.distinct_pools,
+                last_activity_at: activity.last_activity_at,
+            });
+        }
+    }
 
     let (_, quote_meta) = state
         .prices
@@ -1356,7 +1577,7 @@ async fn lp_leaders(State(state): State<AppState>, Query(q): Query<LeadersBoardQ
             let unclaimed_fee = snapshot.observed_at.map(|_| snapshot.unclaimed_quote_xlm);
             let accrued_fee = unclaimed_fee.map(|unclaimed| a.claim_quote_xlm + unclaimed);
             let fee_capital_ratio = if a.deposit_quote_xlm > 0.0 {
-                Some(a.claim_quote_xlm / a.deposit_quote_xlm)
+                Some(accrued_fee.unwrap_or(a.claim_quote_xlm) / a.deposit_quote_xlm)
             } else {
                 None
             };
@@ -1433,6 +1654,13 @@ pub async fn refresh_leader_fee_snapshots(state: AppState) {
         pools.dedup();
         pools.truncate(MAX_POOLS_PER_ACTOR);
 
+        // Rebuild this actor's current position set so closed positions do
+        // not leave stale unclaimed fees in the accrued total.
+        {
+            let db = state.index_db.lock().unwrap();
+            let _ = db.clear_actor_fee_snapshots(&actor);
+        }
+
         let grouped = {
             let db = state.db.lock().unwrap();
             let mut grouped: HashMap<String, Vec<String>> = HashMap::new();
@@ -1449,34 +1677,57 @@ pub async fn refresh_leader_fee_snapshots(state: AppState) {
         };
 
         for (venue, venue_pools) in grouped {
-            let positions = positions_for_venue(state.rpc.as_ref(), &actor, &venue, &venue_pools, &pricing).await;
+            let fee_readable = support_matrix()
+                .into_iter()
+                .find(|row| {
+                    row.venue_id.as_str() == venue
+                        || (venue.eq_ignore_ascii_case("sushi") && row.venue_id.as_str() == "sushi_v3")
+                        || (venue.eq_ignore_ascii_case("soroswap") && row.venue_id.as_str() == "soroswap_amm")
+                })
+                .is_some_and(|row| row.capabilities.unclaimed_fees);
+            if !fee_readable {
+                continue;
+            }
+            let positions = if venue.eq_ignore_ascii_case("sushi") || venue.eq_ignore_ascii_case("sushi_v3") {
+                load_sushi_positions_for_pools(&state, &actor, &venue_pools, &pricing).await
+            } else {
+                positions_for_venue(state.rpc.as_ref(), &actor, &venue, &venue_pools, &pricing).await
+            };
             let observed_at = Utc::now().timestamp();
             let db = state.index_db.lock().unwrap();
             for position in positions {
-                let _ = db.upsert_actor_fee_snapshot(
-                    &actor,
-                    &position.pool_address,
-                    &position.venue,
-                    position.fees_unclaimed_quote,
-                    position.value_quote,
-                    "ok",
-                    observed_at,
-                );
+                // A position can be readable while its venue does not expose
+                // an independent fee accumulator. Do not turn that unknown
+                // fee into a misleading zero in the leader ranking.
+                if let Some(unclaimed_fee) = position.fees_unclaimed_quote {
+                    let _ = db.upsert_actor_fee_snapshot(
+                        &actor,
+                        &position.pool_address,
+                        &position.venue,
+                        Some(unclaimed_fee),
+                        position.value_quote,
+                        "ok",
+                        observed_at,
+                    );
+                }
             }
         }
     }
 }
 
-async fn load_sushi_positions(
+async fn load_sushi_positions_for_pools(
     state: &AppState,
     address: &str,
+    pools: &[String],
     pricing: &[dex::types::SharePoolState],
 ) -> Vec<UserPosition> {
+    let pool_set = pools.iter().cloned().collect::<HashSet<_>>();
     let candidates = {
         let db = state.index_db.lock().unwrap();
         db.sushi_position_range_candidates(address, Utc::now().timestamp() - 90 * 86_400, 500)
             .unwrap_or_default()
             .into_iter()
+            .filter(|candidate| pool_set.contains(&candidate.pool_address))
             .map(|candidate| SushiPositionRangeCandidate {
                 pool_address: candidate.pool_address,
                 tick_lower: candidate.tick_lower,
@@ -1484,18 +1735,10 @@ async fn load_sushi_positions(
             })
             .collect::<Vec<_>>()
     };
-    let mut sushi_pools = discover_mainnet_pool_addresses(state.rpc.as_ref())
-        .await
-        .unwrap_or_default();
-    sushi_pools.extend(candidates.iter().map(|candidate| candidate.pool_address.clone()));
-    sushi_pools.sort();
-    sushi_pools.dedup();
-
-    let mut positions = positions_for_managed_pools(state.rpc.as_ref(), address, &sushi_pools, pricing).await;
+    let mut positions = positions_for_managed_pools(state.rpc.as_ref(), address, pools, pricing).await;
     if !candidates.is_empty() {
         positions.extend(positions_for_candidates(state.rpc.as_ref(), address, &candidates, pricing).await);
     }
-
     let mut seen = HashSet::new();
     positions.retain(|position| {
         let range = position
@@ -1532,11 +1775,27 @@ async fn load_actor_positions(
         }
         grouped
     };
-    let mut positions = Vec::new();
+    let mut tasks = JoinSet::new();
     for (venue, venue_pools) in grouped {
-        positions.extend(positions_for_venue(state.rpc.as_ref(), address, &venue, &venue_pools, pricing).await);
+        let state = state.clone();
+        let address = address.to_owned();
+        let pricing = pricing.to_vec();
+        tasks.spawn(async move {
+            if venue.eq_ignore_ascii_case("sushi") || venue.eq_ignore_ascii_case("sushi_v3") {
+                // Profile scans are already narrowed to pools this actor touched.
+                // Do not rediscover and probe the entire Sushi catalogue here.
+                load_sushi_positions_for_pools(&state, &address, &venue_pools, &pricing).await
+            } else {
+                positions_for_venue(state.rpc.as_ref(), &address, &venue, &venue_pools, &pricing).await
+            }
+        });
     }
-    positions.extend(load_sushi_positions(state, address, pricing).await);
+    let mut positions = Vec::new();
+    while let Some(result) = tasks.join_next().await {
+        if let Ok(mut venue_positions) = result {
+            positions.append(&mut venue_positions);
+        }
+    }
     positions
 }
 
@@ -1611,6 +1870,7 @@ async fn positions_summary(State(state): State<AppState>, Query(q): Query<Addres
     let positions = load_actor_positions(&state, &q.address, &pools, &pricing).await;
     let mut net_worth = 0.0;
     let mut fees = 0.0;
+    let mut fee_legs = 0usize;
     let mut il_sum = 0.0;
     let mut il_n = 0usize;
     for p in &positions {
@@ -1619,6 +1879,7 @@ async fn positions_summary(State(state): State<AppState>, Query(q): Query<Addres
         }
         if let Some(f) = p.fees_unclaimed_quote {
             fees += f;
+            fee_legs += 1;
         }
         if let Some(il) = p.il_est {
             il_sum += il;
@@ -1628,7 +1889,7 @@ async fn positions_summary(State(state): State<AppState>, Query(q): Query<Addres
     Json(json!({
         "address": q.address,
         "net_worth": net_worth,
-        "fees_unclaimed": fees,
+        "fees_unclaimed": (fee_legs > 0).then_some(fees),
         "il_est_avg": if il_n > 0 { Some(il_sum / il_n as f64) } else { None },
         "position_count": positions.len(),
         "indexed_pool_count": stats.as_ref().map(|s| s.pool_count).unwrap_or(indexed_pools.len()),
@@ -1654,6 +1915,30 @@ async fn lp_profile(State(state): State<AppState>, Query(q): Query<AddressQuery>
             Json(json!({ "error": "invalid stellar address", "code": "bad_address" })),
         )
             .into_response();
+    }
+
+    if let Some(client) = state.redis.clone() {
+        if let Ok(mut connection) = client.get_multiplexed_async_connection().await {
+            let cached: redis::RedisResult<Option<String>> = connection.get(redis_lp_profile_key(&q.address)).await;
+            if let Ok(Some(serialized)) = cached {
+                if let Ok(value) = serde_json::from_str::<Value>(&serialized) {
+                    let mut response = Json(value).into_response();
+                    response.headers_mut().insert(
+                        HeaderName::from_static("x-lumenlp-cache"),
+                        HeaderValue::from_static("profile-redis-hit"),
+                    );
+                    response.headers_mut().insert(
+                        CACHE_CONTROL,
+                        HeaderValue::from_static("public, max-age=30, s-maxage=30, stale-while-revalidate=60"),
+                    );
+                    response.headers_mut().insert(
+                        HeaderName::from_static("cdn-cache-control"),
+                        HeaderValue::from_static("public, max-age=30, stale-while-revalidate=60"),
+                    );
+                    return response;
+                }
+            }
+        }
     }
 
     let stats = {
@@ -1705,8 +1990,63 @@ async fn lp_profile(State(state): State<AppState>, Query(q): Query<AddressQuery>
     }
     let positions = load_actor_positions(&state, &q.address, &scan_pools, &pricing).await;
 
+    let pool_metadata: HashMap<String, (String, Vec<String>, i64, String)> = {
+        let db = state.db.lock().unwrap();
+        scan_pools
+            .iter()
+            .filter_map(|pool| {
+                db.pool_meta(pool)
+                    .ok()
+                    .flatten()
+                    .and_then(|(pool_type, tokens_json, fee_bps, venue)| {
+                        serde_json::from_str(&tokens_json)
+                            .ok()
+                            .map(|tokens| (pool.clone(), (pool_type, tokens, fee_bps, venue)))
+                    })
+            })
+            .collect()
+    };
+    let pool_tokens: HashMap<String, Vec<String>> = pool_metadata
+        .iter()
+        .map(|(pool, (_, tokens, _, _))| (pool.clone(), tokens.clone()))
+        .collect();
+    let token_ids: HashSet<String> = positions
+        .iter()
+        .flat_map(|position| position.tokens.iter().cloned())
+        .chain(pool_tokens.values().flat_map(|tokens| tokens.iter().cloned()))
+        .collect();
+    let token_meta_map = resolve_token_meta_map(
+        state.rpc.clone(),
+        state.index_db.clone(),
+        &state.token_meta_cache,
+        state.redis.clone(),
+        &token_ids,
+    )
+    .await;
+    let token_labels = |tokens: &[String]| {
+        tokens
+            .iter()
+            .map(|token| {
+                token_meta_map
+                    .get(token)
+                    .map(|meta| meta.symbol.clone())
+                    .filter(|symbol| !symbol.is_empty() && symbol != "unknown")
+                    .unwrap_or_else(|| short_token_label(token))
+            })
+            .collect::<Vec<_>>()
+    };
+    let mut positions_json = serde_json::to_value(&positions).unwrap_or_else(|_| json!([]));
+    if let Some(rows) = positions_json.as_array_mut() {
+        for (row, position) in rows.iter_mut().zip(&positions) {
+            if let Some(object) = row.as_object_mut() {
+                object.insert("token_labels".into(), json!(token_labels(&position.tokens)));
+            }
+        }
+    }
+
     let mut net_worth = 0.0;
     let mut fees = 0.0;
+    let mut fee_legs = 0usize;
     let mut il_sum = 0.0;
     let mut il_n = 0usize;
     let mut in_range = 0usize;
@@ -1717,6 +2057,7 @@ async fn lp_profile(State(state): State<AppState>, Query(q): Query<AddressQuery>
         }
         if let Some(f) = p.fees_unclaimed_quote {
             fees += f;
+            fee_legs += 1;
         }
         if let Some(il) = p.il_est {
             il_sum += il;
@@ -1811,6 +2152,13 @@ async fn lp_profile(State(state): State<AppState>, Query(q): Query<AddressQuery>
                 "event_id": e.event_id,
                 "kind": e.kind,
                 "pool_address": e.pool_address,
+                "token_labels": pool_tokens
+                    .get(&e.pool_address)
+                    .map(|tokens| token_labels(tokens))
+                    .unwrap_or_default(),
+                "pool_type": pool_metadata.get(&e.pool_address).map(|meta| meta.0.clone()),
+                "fee_bps": pool_metadata.get(&e.pool_address).map(|meta| meta.2),
+                "venue": pool_metadata.get(&e.pool_address).map(|meta| meta.3.clone()),
                 "created_at": e.created_at,
                 "tx_hash": e.tx_hash,
                 "quote_xlm": e.body.pointer("/derived/total_quote_xlm").and_then(|v| v.as_f64())
@@ -1825,14 +2173,14 @@ async fn lp_profile(State(state): State<AppState>, Query(q): Query<AddressQuery>
         None
     };
 
-    Json(json!({
+    let response_body = json!({
         "address": q.address,
         "venue_id": "multi_venue",
         "portfolio": {
             "net_worth_xlm": net_worth,
             "net_worth_usd": to_usd(net_worth),
-            "fees_unclaimed_xlm": fees,
-            "fees_unclaimed_usd": to_usd(fees),
+            "fees_unclaimed_xlm": (fee_legs > 0).then_some(fees),
+            "fees_unclaimed_usd": (fee_legs > 0).then(|| to_usd(fees)).flatten(),
             "il_est_avg": if il_n > 0 { Some(il_sum / il_n as f64) } else { None },
             "position_count": positions.len(),
             "cl_in_range": in_range,
@@ -1872,7 +2220,7 @@ async fn lp_profile(State(state): State<AppState>, Query(q): Query<AddressQuery>
                 "avg_monthly_claimed": "lifetime claimed fees / indexed active months (proxy)",
             },
         },
-        "positions": positions,
+        "positions": positions_json,
         "position_pools_scanned": scan_pools.len(),
         "recent_events": recent_json,
         "indexed_pool_count": stats.as_ref().map(|s| s.pool_count).unwrap_or(indexed_pool_count),
@@ -1886,8 +2234,30 @@ async fn lp_profile(State(state): State<AppState>, Query(q): Query<AddressQuery>
             None
         }),
         "honesty": "Proxies use indexed claim/deposit quotes — not full PnL vs entry, not win rate. Open positions scan pools touched in ~90d; Sushi V3 also verifies the Position Manager list against known pools.",
-    }))
-    .into_response()
+    });
+    if let Some(client) = state.redis.as_ref() {
+        if let Ok(serialized) = serde_json::to_string(&response_body) {
+            if let Ok(mut connection) = client.get_multiplexed_async_connection().await {
+                let _: redis::RedisResult<()> = connection
+                    .set_ex(redis_lp_profile_key(&q.address), serialized, REDIS_LP_PROFILE_TTL_SECS)
+                    .await;
+            }
+        }
+    }
+    let mut response = Json(response_body).into_response();
+    response.headers_mut().insert(
+        HeaderName::from_static("x-lumenlp-cache"),
+        HeaderValue::from_static("profile-origin"),
+    );
+    response.headers_mut().insert(
+        CACHE_CONTROL,
+        HeaderValue::from_static("public, max-age=30, s-maxage=30, stale-while-revalidate=60"),
+    );
+    response.headers_mut().insert(
+        HeaderName::from_static("cdn-cache-control"),
+        HeaderValue::from_static("public, max-age=30, stale-while-revalidate=60"),
+    );
+    response
 }
 
 const COPY_RECONCILE_BATCH: usize = 500;
@@ -2394,6 +2764,34 @@ mod tests {
     }
 
     #[test]
+    fn score_floor_disables_micro_pool_activity_signals() {
+        let metrics = json!({
+            "24h": {"fee": 0.01, "volume": 10.0, "fee_tvl": 10.0}
+        });
+        let summary = PoolActivitySummaryRow {
+            swap_count_24h: 100,
+            event_count_24h: 100,
+            volume_quote_24h: 10.0,
+            fee_quote_24h: 0.01,
+            deposit_quote_24h: 10.0,
+            withdraw_quote_24h: 0.0,
+            claim_quote_24h: 0.0,
+            net_liquidity_delta_quote_24h: 10.0,
+            avg_update_interval_secs_24h: Some(1.0),
+            latest_update_at_24h: Some(1),
+            deposit_count_24h: 10,
+            withdraw_count_24h: 0,
+            claim_count_24h: 0,
+            update_count_24h: 100,
+        };
+        let score = pool_score_json(0.031, &metrics, Some(&summary), None, None, None)
+            .get("score")
+            .and_then(Value::as_f64)
+            .unwrap();
+        assert_eq!(score, 0.0);
+    }
+
+    #[test]
     fn zero_liquidity_score_is_zero_even_with_activity() {
         let metrics = json!({
             "24h": {"fee": 0.01, "volume": 10.0, "fee_tvl": 10.0}
@@ -2419,6 +2817,7 @@ mod tests {
             limit: Some(1),
             dex: Some("soroswap".into()),
             venue: None,
+            refresh: None,
         };
         let filtered = paginate_pool_body(body, &query);
         assert_eq!(filtered["pagination"]["total"], 1);
@@ -2429,6 +2828,7 @@ mod tests {
             limit: Some(1),
             dex: Some("soroswap_amm".into()),
             venue: None,
+            refresh: None,
         };
         let filtered = paginate_pool_body(
             json!({
@@ -2448,6 +2848,7 @@ mod tests {
             limit: Some(10),
             dex: Some("sushi_v3".into()),
             venue: None,
+            refresh: None,
         };
         let filtered = paginate_pool_body(json!({"pools": [{"address": "D", "venue": "sushi"}]}), &query);
         assert_eq!(filtered["pagination"]["total"], 1);
@@ -2511,7 +2912,7 @@ mod tests {
         assert_eq!(inputs.get("tvl").and_then(Value::as_f64), Some(0.06));
         assert_eq!(inputs.get("volume_24h").and_then(Value::as_f64), Some(0.03));
         let fee_tvl = inputs.get("fee_tvl_24h").and_then(Value::as_f64).unwrap();
-        assert!((fee_tvl - 0.000015).abs() < 1e-12, "fee_tvl={fee_tvl}");
+        assert!((fee_tvl - 0.0025).abs() < 1e-12, "fee_tvl={fee_tvl}");
     }
 
     #[test]

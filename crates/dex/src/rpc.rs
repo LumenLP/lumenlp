@@ -7,6 +7,7 @@ use {
     stellar_xdr::curr as xdr,
 };
 
+#[derive(Clone)]
 pub struct SorobanRpc {
     url: String,
     client: Client,

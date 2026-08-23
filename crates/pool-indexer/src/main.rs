@@ -6,11 +6,12 @@ mod types;
 use {
     crate::{
         db::IndexDb,
-        events::{backfill_missing_actors, PoolEventScanner},
+        events::{backfill_missing_actors, EventScanResult, PoolEventScanner},
         rollups::sync_derived_tables,
     },
     anyhow::Result,
     dex::{SorobanRpc, MAINNET_PASSPHRASE},
+    std::time::{Duration, Instant},
     tracing::{info, warn},
 };
 
@@ -42,8 +43,11 @@ async fn main() -> Result<()> {
 }
 
 async fn run(rpc: &SorobanRpc, db: &IndexDb, poll_secs: u64) -> Result<()> {
+    const DISCOVERY_REFRESH_SECS: u64 = 300;
+    const DISCOVERY_LOOKBACK_LEDGERS: u32 = 360; // ~30 minutes at ~5s/ledger
     sync_derived_tables(db)?;
-    let scanner = PoolEventScanner::discover(rpc, db).await?;
+    let mut scanner = PoolEventScanner::discover(rpc, db).await?;
+    let mut last_discovery = Instant::now();
     let health = rpc.get_health().await?;
     let mut cursor = match db.cursor_ledger()? {
         Some(saved) => saved,
@@ -67,6 +71,35 @@ async fn run(rpc: &SorobanRpc, db: &IndexDb, poll_secs: u64) -> Result<()> {
 
     info!(cursor, poll_secs, "pool-indexer started");
     loop {
+        if last_discovery.elapsed() >= Duration::from_secs(DISCOVERY_REFRESH_SECS) {
+            match PoolEventScanner::discover(rpc, db).await {
+                Ok(refreshed) => {
+                    // A newly discovered pool may have emitted events after the
+                    // main cursor passed it. Re-scan a bounded overlap; event
+                    // and swap ids make this safe and idempotent.
+                    let lookback_start = cursor.saturating_sub(DISCOVERY_LOOKBACK_LEDGERS);
+                    if lookback_start < cursor {
+                        let overlap = refreshed.scan(rpc, lookback_start + 1, cursor).await?;
+                        persist_scan(db, &overlap)?;
+                        sync_derived_tables(db)?;
+                        info!(
+                            start_ledger = lookback_start + 1,
+                            end_ledger = cursor,
+                            events = overlap.events.len(),
+                            swaps = overlap.swaps.len(),
+                            "replayed discovery overlap"
+                        );
+                    }
+                    scanner = refreshed;
+                    last_discovery = Instant::now();
+                    info!("pool discovery refreshed while indexer was running");
+                }
+                Err(error) => {
+                    warn!(%error, "pool discovery refresh failed; keeping existing pool set");
+                    last_discovery = Instant::now();
+                }
+            }
+        }
         let latest = rpc.get_latest_ledger().await?.sequence;
         if latest > cursor {
             // Chunk catch-up so a large lag cannot starve pagination / RPC timeouts.
@@ -75,12 +108,7 @@ async fn run(rpc: &SorobanRpc, db: &IndexDb, poll_secs: u64) -> Result<()> {
             while from <= latest {
                 let to = (from + MAX_LEDGER_SPAN - 1).min(latest);
                 let scan = scanner.scan(rpc, from, to).await?;
-                for event in &scan.events {
-                    let _ = db.insert_event(event)?;
-                }
-                for swap in &scan.swaps {
-                    let _ = db.insert_swap(swap)?;
-                }
+                persist_scan(db, &scan)?;
                 db.set_cursor_ledger(scan.latest_ledger)?;
                 sync_derived_tables(db)?;
                 cursor = scan.latest_ledger;
@@ -100,6 +128,16 @@ async fn run(rpc: &SorobanRpc, db: &IndexDb, poll_secs: u64) -> Result<()> {
         }
         tokio::time::sleep(std::time::Duration::from_secs(poll_secs)).await;
     }
+}
+
+fn persist_scan(db: &IndexDb, scan: &EventScanResult) -> Result<()> {
+    for event in &scan.events {
+        let _ = db.insert_event(event)?;
+    }
+    for swap in &scan.swaps {
+        let _ = db.insert_swap(swap)?;
+    }
+    Ok(())
 }
 
 async fn backfill(rpc: &SorobanRpc, db: &IndexDb) -> Result<()> {

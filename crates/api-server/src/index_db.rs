@@ -900,6 +900,28 @@ impl IndexDb {
         Ok(out)
     }
 
+    /// Actors with a current on-chain fee snapshot. These actors may have no
+    /// liquidity event inside the selected leaderboard window, but can still
+    /// have an open position and accruing unclaimed fees.
+    pub fn actor_fee_snapshot_actors(&self, limit: usize) -> Result<Vec<String>> {
+        let limit = limit.max(1).min(10_000) as i64;
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT DISTINCT actor
+            FROM actor_fee_snapshots
+            WHERE actor GLOB 'G*' AND status = 'ok'
+            ORDER BY actor ASC
+            LIMIT ?1
+            "#,
+        )?;
+        let rows = stmt.query_map(params![limit], |row| row.get::<_, String>(0))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
     pub fn upsert_actor_fee_snapshot(
         &self,
         actor: &str,
@@ -935,6 +957,12 @@ impl IndexDb {
         Ok(())
     }
 
+    pub fn clear_actor_fee_snapshots(&self, actor: &str) -> Result<()> {
+        self.conn
+            .execute("DELETE FROM actor_fee_snapshots WHERE actor = ?1", params![actor])?;
+        Ok(())
+    }
+
     pub fn actor_fee_snapshot_total(&self, actor: &str) -> Result<ActorFeeSnapshotTotal> {
         self.conn
             .query_row(
@@ -942,8 +970,8 @@ impl IndexDb {
                 SELECT
                   COALESCE(SUM(unclaimed_quote_xlm), 0),
                   COALESCE(SUM(position_value_quote_xlm), 0),
-                  COUNT(CASE WHEN position_value_quote_xlm IS NOT NULL THEN 1 END),
-                  MAX(observed_at)
+                  COUNT(CASE WHEN unclaimed_quote_xlm IS NOT NULL THEN 1 END),
+                  MAX(CASE WHEN unclaimed_quote_xlm IS NOT NULL THEN observed_at END)
                 FROM actor_fee_snapshots
                 WHERE actor = ?1 AND status = 'ok'
                 "#,
@@ -1973,6 +2001,20 @@ mod tests {
         };
         db.upsert_token_metadata(&metadata).unwrap();
         assert_eq!(db.token_metadata(&metadata.address).unwrap().unwrap().symbol, "AQUA");
+    }
+
+    #[test]
+    fn fee_snapshot_total_keeps_unknown_fees_unavailable() {
+        let db = test_db();
+        db.upsert_actor_fee_snapshot("GLEADER", "CUNKNOWN", "soroswap", None, Some(100.0), "ok", 10)
+            .unwrap();
+        db.upsert_actor_fee_snapshot("GLEADER", "CKNOWN", "aquarius", Some(2.5), Some(50.0), "ok", 20)
+            .unwrap();
+
+        let total = db.actor_fee_snapshot_total("GLEADER").unwrap();
+        assert_eq!(total.unclaimed_quote_xlm, 2.5);
+        assert_eq!(total.position_count, 1);
+        assert_eq!(total.observed_at, Some(20));
     }
 
     #[test]

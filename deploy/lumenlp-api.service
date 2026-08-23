@@ -1,6 +1,7 @@
 [Unit]
 Description=LumenLP API (multi-DEX pool analytics and Copy LP)
-After=network.target
+After=network.target lumenlp-indexer.service
+Wants=lumenlp-indexer.service
 
 [Service]
 Type=simple

@@ -19,6 +19,7 @@ export type Position = {
   venue?: string;
   pool_type: string;
   tokens: string[];
+  token_labels?: string[];
   fee_bps: number;
   amounts: number[];
   value_quote: number | null;
@@ -39,7 +40,7 @@ export type Position = {
 export type Summary = {
   address: string;
   net_worth: number;
-  fees_unclaimed: number;
+  fees_unclaimed: number | null;
   il_est_avg: number | null;
   position_count: number;
   indexed_pool_count?: number;
@@ -72,7 +73,7 @@ export type LpProfile = {
   portfolio: {
     net_worth_xlm: number;
     net_worth_usd?: number | null;
-    fees_unclaimed_xlm: number;
+    fees_unclaimed_xlm: number | null;
     fees_unclaimed_usd?: number | null;
     il_est_avg: number | null;
     position_count: number;
@@ -114,6 +115,10 @@ export type LpProfile = {
     event_id: string;
     kind: string;
     pool_address: string;
+    token_labels?: string[];
+    pool_type?: string | null;
+    fee_bps?: number | null;
+    venue?: string | null;
     created_at: number;
     tx_hash?: string | null;
     quote_xlm?: number | null;
@@ -157,6 +162,12 @@ export type LeadersBoardResponse = {
   honesty?: string;
 };
 
+export type VenueSupportRow = {
+  venue_id: string;
+  name: string;
+  copy_execution_enabled: boolean;
+};
+
 export type QuoteInfo = {
   currency: string;
   as_of?: string;
@@ -195,6 +206,7 @@ export type PoolRow = {
   } | null;
   tvl: number;
   tvl_usd?: number | null;
+  tvl_status?: "ok" | "missing_price" | "empty_reserves" | string | null;
   volume_24h: number;
   est_apr: number;
   last_snapshot_at: string;
@@ -299,6 +311,7 @@ export type PoolDetailResponse = {
   fee_bps?: number | null;
   tvl?: number | null;
   tvl_usd?: number | null;
+  tvl_status?: "ok" | "missing_price" | "empty_reserves" | string | null;
   tvl_source?: string | null;
   latest?: HistoryPoint | null;
   quote?: QuoteInfo;
@@ -423,6 +436,10 @@ export function fetchLpLeaders(limit = 25, windowDays = 30, sort: "fees" | "acti
 
 export function fetchPools() {
   return getJson<PoolsResponse>("/v1/pools");
+}
+
+export function fetchVenues() {
+  return getJson<{ venues: VenueSupportRow[] }>("/v1/venues");
 }
 
 export function fetchPoolHistory(address: string) {

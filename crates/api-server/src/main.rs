@@ -16,7 +16,7 @@ use {
     std::{
         collections::HashMap,
         net::SocketAddr,
-        sync::atomic::AtomicUsize,
+        sync::atomic::{AtomicBool, AtomicUsize},
         sync::{Arc, Mutex},
     },
     tower_http::cors::{Any, CorsLayer},
@@ -50,6 +50,7 @@ async fn main() -> Result<()> {
         prices,
         pool_list_cache: Arc::new(Mutex::new(None)),
         pool_list_refresh: Arc::new(tokio::sync::Mutex::new(())),
+        pool_list_refreshing: Arc::new(AtomicBool::new(false)),
         redis,
         leader_fee_scan_cursor: Arc::new(AtomicUsize::new(0)),
     };

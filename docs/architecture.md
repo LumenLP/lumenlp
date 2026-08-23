@@ -1,6 +1,6 @@
 # LumenLP Architecture
 
-LumenLP is a Stellar-native LP discovery, analytics, and Copy LP product. It starts with Aquarius and uses Soroban RPC plus a local event indexer as its data foundation.
+LumenLP is a Stellar-native LP discovery, analytics, and Copy LP product. It uses Soroban RPC plus a local event indexer as its data foundation and presents pool data across the supported Stellar DEX venues.
 
 ## Contents
 
@@ -53,7 +53,7 @@ The current production system is RPC-first and non-custodial. The website and AP
 
 ### Current focus
 
-- Aquarius pool discovery and ranking.
+- Multi-DEX pool discovery and ranking, with Aquarius as the reference production venue.
 - Pool TVL, liquidity, fee, Fee/TVL, and activity metrics.
 - Pool snapshots and historical windows.
 - LP event indexing with actor attribution where available.
@@ -67,10 +67,10 @@ The current production system is RPC-first and non-custodial. The website and AP
   gated by security and operational validation.
 - Broader LumenLP relayer operation coverage and production hardening.
 - CLMM range copy and rebalance depth.
-- Optional fee-token conversion through LumAgg.
-- Additional liquidity protocols, only if they directly support the Copy LP product.
+- Optional fee-token conversion through a separately authorized Stellar DEX aggregator.
+- Additional venues are enabled through the common adapter boundary after their state, events, and operations are validated.
 
-LumenLP does not mirror arbitrary Leader swaps. A swap can be a fee exit, a position adjustment, or an unrelated trade. Fee-token conversion is a separate, explicitly authorized LumAgg flow.
+LumenLP does not mirror arbitrary Leader swaps. A swap can be a fee exit, a position adjustment, or an unrelated trade. Fee-token conversion is a separate, explicitly authorized DEX aggregator flow.
 
 ## System Overview
 
@@ -162,7 +162,7 @@ lumenlp/
 ├── apps/web/                  Next.js reference web application
 ├── crates/
 │   ├── api-server/             Axum API and application orchestration
-│   ├── dex/                    Soroban RPC, Aquarius integration, pool DB
+│   ├── dex/                    Soroban RPC, DEX adapters, pool DB
 │   ├── metrics/                TVL, fee, pricing, and LP math
 │   ├── pool-indexer/           Contract event ingestion and rollups
 │   └── snapshotter/            Periodic pool hydration and snapshots
@@ -175,14 +175,14 @@ lumenlp/
 
 ### Pool catalogue and snapshots
 
-The Snapshotter periodically discovers Aquarius pool addresses through the Aquarius router. It hydrates pool state from Soroban RPC and stores pool metadata and snapshots.
+The Snapshotter periodically discovers pool addresses through the configured venue adapters. It hydrates pool state from Soroban RPC and stores pool metadata and snapshots. Aquarius is the reference implementation; the same state and snapshot pipeline is used for the other enabled venues.
 
 ```text
-Aquarius router
+Venue adapters
       │ discover pool addresses
       ▼
 Snapshotter
-      │ get pool type, tokens, reserves, fee, shares
+      │ get pool type, tokens, reserves, fee, shares or venue-specific state
       ▼
 Price book
       │ native XLM and supported pool paths
@@ -204,7 +204,7 @@ Soroban RPC getEvents
       │
       ▼
 PoolEventScanner
-      │ parse Aquarius event topics and payloads
+      │ parse supported venue event topics and payloads
       ▼
 pool-indexer.db
       │
@@ -625,37 +625,37 @@ per-operation quote limits, a UTC daily quote limit, and an expiry. Events outsi
 guardrail for the testnet vertical slice; Soroban remains the final authority once the policy contract and relayer are
 enabled.
 
-### LumAgg integration boundary
+### DEX aggregator integration boundary
 
-LumAgg is the separate Stellar DEX aggregator used for optional conversion of claimed fee tokens. It is not used to mirror Leader swaps.
+A separately authorized Stellar DEX aggregator can be used for optional conversion of claimed fee tokens. It is not used to mirror Leader swaps.
 
 The planned flow is:
 
 ```text
-Aquarius fee claim
+Supported DEX fee claim
         ▼
 Claimed fee tokens in follower account
         ▼
-User explicitly authorizes LumAgg quote and swap
+User explicitly authorizes an aggregator quote and swap
         ▼
-LumAgg route executes with independent amount and slippage limits
+Aggregator route executes with independent amount and slippage limits
 ```
 
-The Copy LP policy will not automatically grant unrestricted LumAgg or swap-router permissions. This separation prevents a Leader's unrelated swap activity from becoming an automatic follower trade.
+The Copy LP policy will not automatically grant unrestricted aggregator or swap-router permissions. This separation prevents a Leader's unrelated swap activity from becoming an automatic follower trade.
 
 ### Stellar integration deliverables
 
 The grant integration will be delivered in this order:
 
-1. Mainnet Aquarius event and actor attribution hardening.
-2. User-reviewed Aquarius Copy LP operations linked to source events.
+1. Mainnet multi-venue event and actor attribution hardening.
+2. User-reviewed Copy LP operations across validated venues linked to source events.
 3. Soroban Policy implementation and testnet registration / disarm flow.
 4. LumenLP Relayer for policy-approved deposit, withdrawal, and claim operations on testnet.
-5. On-chain monitoring plan and threat model covering relayer, policy, replay, actor attribution, RPC, and Aquarius contract risks.
+5. On-chain monitoring plan and threat model covering relayer, policy, replay, actor attribution, RPC, and supported DEX contract risks.
 6. Limited mainnet launch with conservative limits and public transaction history.
-7. Optional, separately authorized LumAgg fee-token conversion.
+7. Optional, separately authorized fee-token conversion through a Stellar DEX aggregator.
 
-This integration plan is specific to Stellar contracts, Soroban RPC, Aquarius pool behavior, Stellar account authorization, and LumAgg. It is not a generic multi-chain or off-chain analytics integration.
+This integration plan is specific to Stellar contracts, Soroban RPC, Stellar DEX pool behavior, Stellar account authorization, and separately authorized Stellar DEX aggregation. It is not a generic multi-chain or off-chain analytics integration.
 
 ### Trust boundaries and threat model
 
@@ -739,9 +739,9 @@ Soroban contracts cannot independently query arbitrary historical Leader activit
 
 For automatic execution, the system must not trust keeper-supplied token amounts alone. A future on-chain execution design needs a recorder, signed attestation, multisig recorder, or inclusion-proof mechanism. Until that is implemented and tested, the manual user-signed path remains the safe default.
 
-## LumAgg Boundary
+## DEX Aggregator Boundary
 
-LumAgg is a separate product and service used for optional token conversion after a fee claim. It is not part of Leader action mirroring.
+A DEX aggregator is a separate product and service used for optional token conversion after a fee claim. It is not part of Leader action mirroring.
 
 ```text
 Copy LP claim
@@ -750,10 +750,10 @@ Copy LP claim
 Claimed fee tokens
       │
       ▼
-LumAgg quote and swap
+DEX aggregator quote and swap
 ```
 
-Any future automated LumAgg flow must have independent permissions, route validation, slippage limits, and amount caps. A Copy LP policy must not implicitly grant arbitrary swap or router authority.
+Any future automated aggregator flow must have independent permissions, route validation, slippage limits, and amount caps. A Copy LP policy must not implicitly grant arbitrary swap or router authority.
 
 ## Frontend Architecture
 
@@ -827,10 +827,10 @@ in production because that address would refer to the visitor's own machine.
 - Label estimates and proxy metrics explicitly.
 - Preserve indexer and snapshot databases across deploys.
 - Do not store user private keys on the server.
-- Keep Copy LP limited to declared Aquarius LP entrypoints.
+- Keep Copy LP limited to declared entrypoints on production-enabled venues.
 - Never silently downscale a user-selected copy coefficient.
 - Enforce pool allowlists, per-operation caps, daily caps, replay protection, and expiry before automatic execution. Treat slippage and minimum amounts as protocol-call parameters until they are promoted into policy state.
-- Keep LumAgg swaps separate from Leader-event mirroring.
+- Keep DEX aggregator swaps separate from Leader-event mirroring.
 
 ## Planned Evolution
 
@@ -841,7 +841,7 @@ Current
   Pools + Leaders + manual Copy LP drafts
 
 Next
-  Aquarius Copy Engine
+  Multi-venue Copy Engine
       ↓
   Soroban policy + LumenLP relayer
       ↓
@@ -850,9 +850,9 @@ Next
 Later
   CLMM rebalance and fee automation
       ↓
-  Optional LumAgg fee conversion
+  Optional DEX aggregator fee conversion
       ↓
   Reusable policy-triggered LP strategies
 ```
 
-The project should not expand into a generic multi-DEX framework or a SoroGuard clone before the Aquarius Copy LP workflow is reliable, measurable, and understandable to users.
+The project remains focused on Stellar LP discovery and policy-controlled Copy LP. It is not a generic multi-chain framework or an unrestricted trading bot; each additional Stellar venue must pass its adapter, event, operation, and safety validation before being enabled.
