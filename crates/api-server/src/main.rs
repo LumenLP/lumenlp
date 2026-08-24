@@ -70,7 +70,7 @@ async fn main() -> Result<()> {
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
         .filter(|value| *value >= 30)
-        .unwrap_or(300);
+        .unwrap_or(60);
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(fee_refresh_secs));
         loop {

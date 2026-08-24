@@ -40,6 +40,7 @@ use {
         time::{Duration as StdDuration, Instant as StdInstant},
     },
     tokio::task::JoinSet,
+    tracing::info,
 };
 
 #[derive(Clone)]
@@ -94,7 +95,8 @@ const SCORE_TVL_FLOOR: f64 = 10.0;
 const SCORE_TVL_FLOOR_USD: f64 = 0.05;
 const DUST_TVL_FLOOR: f64 = 1e-6;
 const REDIS_TOKEN_META_TTL_SECS: u64 = 3_600;
-const REDIS_LP_PROFILE_TTL_SECS: u64 = 30;
+const REDIS_LP_PROFILE_TTL_SECS: u64 = 60;
+const REDIS_LP_LEADERS_TTL_SECS: u64 = 60;
 
 fn redis_token_meta_key(address: &str) -> String {
     format!("lumenlp:token-meta:v1:{address}")
@@ -102,6 +104,30 @@ fn redis_token_meta_key(address: &str) -> String {
 
 fn redis_lp_profile_key(address: &str) -> String {
     format!("lumenlp:lp-profile:v3:{address}")
+}
+
+fn redis_lp_leaders_key(window_days: i64, limit: usize, sort: &str) -> String {
+    format!("lumenlp:lp-leaders:v2:{window_days}:{limit}:{sort}")
+}
+
+async fn invalidate_lp_leaders_cache(redis: &redis::Client) {
+    // The UI uses a small, bounded set of board variants. Delete them after
+    // the background fee refresh so a successful refresh is visible at once.
+    let keys = [1_i64, 7, 30, 90]
+        .into_iter()
+        .flat_map(|window| {
+            [25_usize, 100, 500]
+                .into_iter()
+                .flat_map(move |limit| {
+                    ["fees", "activity"]
+                        .into_iter()
+                        .map(move |sort| redis_lp_leaders_key(window, limit, sort))
+                })
+        })
+        .collect::<Vec<_>>();
+    if let Ok(mut connection) = redis.get_multiplexed_async_connection().await {
+        let _: redis::RedisResult<usize> = redis::cmd("DEL").arg(keys).query_async(&mut connection).await;
+    }
 }
 // Rollups are generated from bucketed snapshots. A short grace period covers
 // bucket alignment and the indexer's polling interval, but prevents an old
@@ -777,6 +803,10 @@ async fn list_pools(State(state): State<AppState>, Query(query): Query<PoolListQ
             response.headers_mut().insert(
                 CACHE_CONTROL,
                 HeaderValue::from_static("public, max-age=60, s-maxage=60, stale-while-revalidate=120"),
+            );
+            response.headers_mut().insert(
+                HeaderName::from_static("cdn-cache-control"),
+                HeaderValue::from_static("public, max-age=60, stale-while-revalidate=120"),
             );
             response.headers_mut().insert(
                 HeaderName::from_static("x-lumenlp-cache"),
@@ -1475,13 +1505,37 @@ struct LeadersBoardQuery {
     sort: Option<String>,
 }
 
-/// Ranked Stellar LP actors by claimed fees / deposits (Copy scouting board).
+/// Ranked Stellar LP actors by accrued fees / deposits (Copy scouting board).
 async fn lp_leaders(State(state): State<AppState>, Query(q): Query<LeadersBoardQuery>) -> impl IntoResponse {
     let limit = q.limit.unwrap_or(25).clamp(1, 500);
     let window_days = q.window_days.unwrap_or(30).clamp(1, 90);
     let sort = (q.sort.as_deref() == Some("activity"))
         .then_some("activity")
         .unwrap_or("fees");
+    let cache_key = redis_lp_leaders_key(window_days, limit, sort);
+    if let Some(client) = state.redis.clone() {
+        if let Ok(mut connection) = client.get_multiplexed_async_connection().await {
+            let cached: redis::RedisResult<Option<String>> = connection.get(&cache_key).await;
+            if let Ok(Some(serialized)) = cached {
+                if let Ok(value) = serde_json::from_str::<Value>(&serialized) {
+                    let mut response = Json(value).into_response();
+                    response.headers_mut().insert(
+                        HeaderName::from_static("x-lumenlp-cache"),
+                        HeaderValue::from_static("leaders-redis-hit"),
+                    );
+                    response.headers_mut().insert(
+                        CACHE_CONTROL,
+                        HeaderValue::from_static("public, max-age=60, s-maxage=60, stale-while-revalidate=120"),
+                    );
+                    response.headers_mut().insert(
+                        HeaderName::from_static("cdn-cache-control"),
+                        HeaderValue::from_static("public, max-age=60, stale-while-revalidate=120"),
+                    );
+                    return response;
+                }
+            }
+        }
+    }
     let since_ts = Utc::now().timestamp() - window_days * 24 * 3600;
     let mut leaders = {
         let index_db = state.index_db.lock().unwrap();
@@ -1508,24 +1562,26 @@ async fn lp_leaders(State(state): State<AppState>, Query(q): Query<LeadersBoardQ
             .iter()
             .map(|leader| leader.address.clone())
             .collect::<HashSet<_>>();
-        for actor in index_db.actor_fee_snapshot_actors(10_000).unwrap_or_default() {
-            if known.contains(&actor) {
+        let snapshot_totals = index_db.actor_fee_snapshot_totals().unwrap_or_default();
+        for actor in snapshot_totals.keys() {
+            if known.contains(actor) {
                 continue;
             }
-            let Ok((activity, _)) = index_db.actor_liquidity_activity(&actor, since_ts, 200) else {
-                continue;
-            };
+            let snapshot_pool_count = snapshot_totals
+                .get(actor)
+                .map(|snapshot| snapshot.pool_count)
+                .unwrap_or_default();
             leaders.push(crate::index_db::TopLiquidityActor {
-                address: actor,
-                event_count: activity.event_count,
-                deposit_count: activity.deposit_count,
-                withdraw_count: activity.withdraw_count,
-                claim_count: activity.claim_count,
-                deposit_quote_xlm: activity.deposit_quote_xlm,
-                withdraw_quote_xlm: activity.withdraw_quote_xlm,
-                claim_quote_xlm: activity.claim_quote_xlm,
-                distinct_pools: activity.distinct_pools,
-                last_activity_at: activity.last_activity_at,
+                address: actor.clone(),
+                event_count: 0,
+                deposit_count: 0,
+                withdraw_count: 0,
+                claim_count: 0,
+                deposit_quote_xlm: 0.0,
+                withdraw_quote_xlm: 0.0,
+                claim_quote_xlm: 0.0,
+                distinct_pools: snapshot_pool_count,
+                last_activity_at: None,
             });
         }
     }
@@ -1543,15 +1599,7 @@ async fn lp_leaders(State(state): State<AppState>, Query(q): Query<LeadersBoardQ
     let to_usd = |xlm: f64| xlm_usd.and_then(|px| xlm_quote_to_usd(xlm, px));
     let fee_snapshots = {
         let index_db = state.index_db.lock().unwrap();
-        leaders
-            .iter()
-            .filter_map(|leader| {
-                index_db
-                    .actor_fee_snapshot_total(&leader.address)
-                    .ok()
-                    .map(|snapshot| (leader.address.clone(), snapshot))
-            })
-            .collect::<HashMap<_, _>>()
+        index_db.actor_fee_snapshot_totals().unwrap_or_default()
     };
     if sort == "fees" {
         leaders.sort_by(|a, b| {
@@ -1576,6 +1624,13 @@ async fn lp_leaders(State(state): State<AppState>, Query(q): Query<LeadersBoardQ
             let snapshot = fee_snapshots.get(&a.address).cloned().unwrap_or_default();
             let unclaimed_fee = snapshot.observed_at.map(|_| snapshot.unclaimed_quote_xlm);
             let accrued_fee = unclaimed_fee.map(|unclaimed| a.claim_quote_xlm + unclaimed);
+            let fee_status = if snapshot.position_count == 0 {
+                "not_verified"
+            } else if snapshot.observed_at.is_some() {
+                "verified"
+            } else {
+                "unavailable"
+            };
             let fee_capital_ratio = if a.deposit_quote_xlm > 0.0 {
                 Some(accrued_fee.unwrap_or(a.claim_quote_xlm) / a.deposit_quote_xlm)
             } else {
@@ -1597,8 +1652,11 @@ async fn lp_leaders(State(state): State<AppState>, Query(q): Query<LeadersBoardQ
                 "unclaimed_fee_quote_usd": unclaimed_fee.and_then(to_usd),
                 "accrued_fee_quote_xlm": accrued_fee,
                 "accrued_fee_quote_usd": accrued_fee.and_then(to_usd),
+                "fee_status": fee_status,
                 "fee_snapshot_at": snapshot.observed_at,
                 "fee_snapshot_position_count": snapshot.position_count,
+                "position_value_quote_xlm": (snapshot.position_count > 0)
+                    .then_some(snapshot.position_value_quote_xlm),
                 "net_liquidity_quote_xlm": a.deposit_quote_xlm - a.withdraw_quote_xlm,
                 "fee_capital_ratio": fee_capital_ratio,
                 "distinct_pools": a.distinct_pools,
@@ -1606,25 +1664,77 @@ async fn lp_leaders(State(state): State<AppState>, Query(q): Query<LeadersBoardQ
             })
         })
         .collect();
+    let latest_fee_snapshot_at = fee_snapshots.values().filter_map(|snapshot| snapshot.observed_at).max();
+    let verified_fee_actor_count = fee_snapshots
+        .values()
+        .filter(|snapshot| snapshot.observed_at.is_some())
+        .count();
 
-    Json(json!({
+    let response_body = json!({
         "window_days": window_days,
         "since_ts": since_ts,
         "xlm_usd": xlm_usd,
         "leaders": rows,
         "sort": sort,
+        "fee_data": {
+            "latest_snapshot_at": latest_fee_snapshot_at,
+            "verified_actor_count": verified_fee_actor_count,
+            "actor_count": fee_snapshots.len(),
+            "refresh_cadence_seconds": 60,
+        },
         "honesty": "Claimed fees come from indexed claim events. Accrued fees add the latest verified unclaimed position fees when the venue reader supports them; missing venue coverage is left unavailable rather than estimated.",
-    }))
-    .into_response()
+    });
+    if let Some(client) = state.redis.as_ref() {
+        if let Ok(serialized) = serde_json::to_string(&response_body) {
+            if let Ok(mut connection) = client.get_multiplexed_async_connection().await {
+                let _: redis::RedisResult<()> = connection
+                    .set_ex(&cache_key, serialized, REDIS_LP_LEADERS_TTL_SECS)
+                    .await;
+            }
+        }
+    }
+    let mut response = Json(response_body).into_response();
+    response.headers_mut().insert(
+        HeaderName::from_static("x-lumenlp-cache"),
+        HeaderValue::from_static("leaders-origin"),
+    );
+    // Leader data is refreshed on the same minute cadence as fee snapshots.
+    // Cache the query variant at the edge so repeated page loads do not block
+    // on the origin API and its RPC-backed refresh work.
+    response.headers_mut().insert(
+        CACHE_CONTROL,
+        HeaderValue::from_static("public, max-age=60, s-maxage=60, stale-while-revalidate=120"),
+    );
+    response.headers_mut().insert(
+        HeaderName::from_static("cdn-cache-control"),
+        HeaderValue::from_static("public, max-age=60, stale-while-revalidate=120"),
+    );
+    response
 }
 
-/// Refresh a small rotating batch of current position fee snapshots. This is
+/// Refresh a rotating batch of current position fee snapshots. This is
 /// deliberately off the request path: RPC position reads are venue-specific
-/// and must not make the leaders endpoint slow or unreliable.
+/// and must not make the leaders endpoint slow or unreliable. Batch size and
+/// concurrency are configurable so operators can tune RPC pressure.
 pub async fn refresh_leader_fee_snapshots(state: AppState) {
     const ACTOR_LIMIT: usize = 10_000;
-    const BATCH_SIZE: usize = 10;
     const MAX_POOLS_PER_ACTOR: usize = 40;
+    let batch_size = std::env::var("LEADER_FEE_SNAPSHOT_BATCH")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .map(|value| value.clamp(20, 200))
+        .unwrap_or(80);
+    let hot_batch_size = std::env::var("LEADER_FEE_SNAPSHOT_HOT_BATCH")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .map(|value| value.clamp(10, batch_size))
+        .unwrap_or(40)
+        .min(batch_size);
+    let concurrency = std::env::var("LEADER_FEE_SNAPSHOT_CONCURRENCY")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .map(|value| value.clamp(1, 16))
+        .unwrap_or(8);
 
     let actors = {
         let db = state.index_db.lock().unwrap();
@@ -1633,86 +1743,133 @@ pub async fn refresh_leader_fee_snapshots(state: AppState) {
     if actors.is_empty() {
         return;
     }
-    let start = state
-        .leader_fee_scan_cursor
-        .fetch_add(BATCH_SIZE, std::sync::atomic::Ordering::Relaxed)
-        % actors.len();
-    let selected = (0..BATCH_SIZE.min(actors.len()))
-        .map(|offset| actors[(start + offset) % actors.len()].clone())
-        .collect::<Vec<_>>();
+    // Keep the most active actors fresh on every tick, while using the
+    // remaining slots to rotate through the long tail. This avoids a cursor
+    // over a moving activity-sorted list starving the current top of the board.
+    let hot_count = hot_batch_size.min(actors.len());
+    let tail_len = actors.len().saturating_sub(hot_count);
+    let rotating_count = batch_size.saturating_sub(hot_count).min(tail_len);
+    let start = if tail_len == 0 {
+        0
+    } else {
+        state
+            .leader_fee_scan_cursor
+            .fetch_add(rotating_count.max(1), std::sync::atomic::Ordering::Relaxed)
+            % tail_len
+    };
+    let mut selected = actors[..hot_count].to_vec();
+    selected.extend((0..rotating_count).map(|offset| actors[hot_count + (start + offset) % tail_len].clone()));
+    info!(
+        actor_count = actors.len(),
+        batch_size = selected.len(),
+        hot_batch_size = hot_count,
+        rotating_batch_size = rotating_count,
+        concurrency,
+        start,
+        "refreshing leader fee snapshots"
+    );
     let pricing = {
         let db = state.db.lock().unwrap();
         db.pool_states_for_pricing().unwrap_or_default()
     };
 
-    for actor in selected {
-        let mut pools = {
-            let db = state.index_db.lock().unwrap();
-            db.actor_pool_addresses(&actor, 0).unwrap_or_default()
-        };
-        pools.sort();
-        pools.dedup();
-        pools.truncate(MAX_POOLS_PER_ACTOR);
+    let mut pending = selected.into_iter();
+    let mut tasks = JoinSet::new();
+    for _ in 0..concurrency.min(batch_size) {
+        let Some(actor) = pending.next() else { break };
+        tasks.spawn(refresh_one_actor(
+            state.clone(),
+            actor,
+            pricing.clone(),
+            MAX_POOLS_PER_ACTOR,
+        ));
+    }
 
-        // Rebuild this actor's current position set so closed positions do
-        // not leave stale unclaimed fees in the accrued total.
-        {
-            let db = state.index_db.lock().unwrap();
-            let _ = db.clear_actor_fee_snapshots(&actor);
-        }
-
-        let grouped = {
-            let db = state.db.lock().unwrap();
-            let mut grouped: HashMap<String, Vec<String>> = HashMap::new();
-            for pool in pools {
-                let venue = db
-                    .pool_meta(&pool)
-                    .ok()
-                    .flatten()
-                    .map(|(_, _, _, venue)| venue)
-                    .unwrap_or_else(|| "aquarius".into());
-                grouped.entry(venue).or_default().push(pool);
-            }
-            grouped
-        };
-
-        for (venue, venue_pools) in grouped {
-            let fee_readable = support_matrix()
-                .into_iter()
-                .find(|row| {
-                    row.venue_id.as_str() == venue
-                        || (venue.eq_ignore_ascii_case("sushi") && row.venue_id.as_str() == "sushi_v3")
-                        || (venue.eq_ignore_ascii_case("soroswap") && row.venue_id.as_str() == "soroswap_amm")
-                })
-                .is_some_and(|row| row.capabilities.unclaimed_fees);
-            if !fee_readable {
-                continue;
-            }
-            let positions = if venue.eq_ignore_ascii_case("sushi") || venue.eq_ignore_ascii_case("sushi_v3") {
-                load_sushi_positions_for_pools(&state, &actor, &venue_pools, &pricing).await
-            } else {
-                positions_for_venue(state.rpc.as_ref(), &actor, &venue, &venue_pools, &pricing).await
-            };
+    let mut refreshed = 0usize;
+    while let Some(result) = tasks.join_next().await {
+        if let Ok((actor, positions)) = result {
+            // Rebuild this actor's current position set so closed positions do
+            // not leave stale unclaimed fees in the accrued total.
             let observed_at = Utc::now().timestamp();
             let db = state.index_db.lock().unwrap();
+            let _ = db.clear_actor_fee_snapshots(&actor);
             for position in positions {
-                // A position can be readable while its venue does not expose
-                // an independent fee accumulator. Do not turn that unknown
-                // fee into a misleading zero in the leader ranking.
-                if let Some(unclaimed_fee) = position.fees_unclaimed_quote {
-                    let _ = db.upsert_actor_fee_snapshot(
-                        &actor,
-                        &position.pool_address,
-                        &position.venue,
-                        Some(unclaimed_fee),
-                        position.value_quote,
-                        "ok",
-                        observed_at,
-                    );
-                }
+                // Persist the verified position even when this venue does not
+                // expose an independent fee accumulator. The null fee stays
+                // unavailable, but the LP remains discoverable by the board.
+                let status = if position.fees_unclaimed_quote.is_some() {
+                    "ok"
+                } else {
+                    "fee_unavailable"
+                };
+                let _ = db.upsert_actor_fee_snapshot(
+                    &actor,
+                    &position.pool_address,
+                    &position.venue,
+                    position.fees_unclaimed_quote,
+                    position.value_quote,
+                    status,
+                    observed_at,
+                );
             }
+            refreshed += 1;
+        }
+        if let Some(actor) = pending.next() {
+            tasks.spawn(refresh_one_actor(
+                state.clone(),
+                actor,
+                pricing.clone(),
+                MAX_POOLS_PER_ACTOR,
+            ));
         }
     }
+    info!(refreshed, "leader fee snapshot refresh complete");
+    if refreshed > 0 {
+        if let Some(redis) = state.redis.as_ref() {
+            invalidate_lp_leaders_cache(redis).await;
+        }
+    }
+}
+
+async fn refresh_one_actor(
+    state: AppState,
+    actor: String,
+    pricing: Vec<dex::types::SharePoolState>,
+    max_pools: usize,
+) -> (String, Vec<UserPosition>) {
+    let mut pools = {
+        let db = state.index_db.lock().unwrap();
+        db.actor_pool_addresses(&actor, 0).unwrap_or_default()
+    };
+    pools.sort();
+    pools.dedup();
+    pools.truncate(max_pools);
+
+    let grouped = {
+        let db = state.db.lock().unwrap();
+        let mut grouped: HashMap<String, Vec<String>> = HashMap::new();
+        for pool in pools {
+            let venue = db
+                .pool_meta(&pool)
+                .ok()
+                .flatten()
+                .map(|(_, _, _, venue)| venue)
+                .unwrap_or_else(|| "aquarius".into());
+            grouped.entry(venue).or_default().push(pool);
+        }
+        grouped
+    };
+
+    let mut positions = Vec::new();
+    for (venue, venue_pools) in grouped {
+        let mut venue_positions = if venue.eq_ignore_ascii_case("sushi") || venue.eq_ignore_ascii_case("sushi_v3") {
+            load_sushi_positions_for_pools(&state, &actor, &venue_pools, &pricing).await
+        } else {
+            positions_for_venue(state.rpc.as_ref(), &actor, &venue, &venue_pools, &pricing).await
+        };
+        positions.append(&mut venue_positions);
+    }
+    (actor, positions)
 }
 
 async fn load_sushi_positions_for_pools(
@@ -1929,11 +2086,11 @@ async fn lp_profile(State(state): State<AppState>, Query(q): Query<AddressQuery>
                     );
                     response.headers_mut().insert(
                         CACHE_CONTROL,
-                        HeaderValue::from_static("public, max-age=30, s-maxage=30, stale-while-revalidate=60"),
+                        HeaderValue::from_static("public, max-age=60, s-maxage=60, stale-while-revalidate=120"),
                     );
                     response.headers_mut().insert(
                         HeaderName::from_static("cdn-cache-control"),
-                        HeaderValue::from_static("public, max-age=30, stale-while-revalidate=60"),
+                        HeaderValue::from_static("public, max-age=60, stale-while-revalidate=120"),
                     );
                     return response;
                 }
@@ -2251,11 +2408,11 @@ async fn lp_profile(State(state): State<AppState>, Query(q): Query<AddressQuery>
     );
     response.headers_mut().insert(
         CACHE_CONTROL,
-        HeaderValue::from_static("public, max-age=30, s-maxage=30, stale-while-revalidate=60"),
+        HeaderValue::from_static("public, max-age=60, s-maxage=60, stale-while-revalidate=120"),
     );
     response.headers_mut().insert(
         HeaderName::from_static("cdn-cache-control"),
-        HeaderValue::from_static("public, max-age=30, stale-while-revalidate=60"),
+        HeaderValue::from_static("public, max-age=60, stale-while-revalidate=120"),
     );
     response
 }

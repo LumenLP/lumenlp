@@ -50,6 +50,10 @@ function poolTypeLabel(poolType?: string | null) {
   }
 }
 
+function positionStatusLabel(status?: string) {
+  return status === "fee_unavailable" ? "Fee unavailable" : null;
+}
+
 function quoteLabel(usd: number | null | undefined, xlm: number | null | undefined, digits = 1) {
   if (fmtUsd(usd) !== "—") return fmtUsd(usd);
   if (xlm == null || !Number.isFinite(xlm)) return "—";
@@ -116,21 +120,29 @@ function LeaderViewInner() {
       return;
     }
     let cancelled = false;
+    const refreshProfile = () => {
+      void fetchLpProfile(address)
+        .then((data) => {
+          if (!cancelled) {
+            setProfile(data);
+            setError(null);
+          }
+        })
+        .catch((reason) => {
+          if (!cancelled) setError(reason instanceof Error ? reason.message : "Failed to load LP profile");
+        });
+    };
     setError(null);
-    void fetchLpProfile(address)
-      .then((data) => {
-        if (!cancelled) setProfile(data);
-      })
-      .catch((reason) => {
-        if (!cancelled) setError(reason instanceof Error ? reason.message : "Failed to load LP profile");
-      });
+    refreshProfile();
+    const timer = window.setInterval(refreshProfile, 60_000);
     return () => {
       cancelled = true;
+      window.clearInterval(timer);
     };
   }, [address]);
 
   const mix = useMemo(() => (profile ? poolMix(profile.recent_events) : []), [profile]);
-  if (error) {
+  if (error && !profile) {
     return (
       <div className="panel">
         <Link href="/leaders" className="muted">← Back to leaders</Link>
@@ -216,7 +228,7 @@ function LeaderViewInner() {
 
       {mix.length > 0 ? <div className="panel"><div className="panel-head">Pool mix · recent events</div><div className="leaders-pool-mix">{mix.map((row) => <div key={row.pool} className="leaders-pool-mix-row"><div><Link href={`/pools/view?address=${encodeURIComponent(row.pool)}`}>{row.tokenLabels.length ? displayTokenLabels(row.tokenLabels).join(" / ") : shortAddr(row.pool)}</Link><div className="muted">{venueLabel(row.venue ?? undefined, row.poolType ?? undefined)} · {poolTypeLabel(row.poolType)}{row.feeBps != null ? ` · ${row.feeBps} bps` : ""} · {shortAddr(row.pool)}</div></div><span className="muted">{row.count} events</span><span>{row.quote > 0 ? `${fmtNum(row.quote, 1)} XLM` : "—"}</span></div>)}</div></div> : null}
 
-      <div className="panel"><div className="panel-head">Open positions</div>{profile.positions.length === 0 ? <div className="empty">No open positions in scanned pools.</div> : <div className="leaders-positions">{profile.positions.map((position) => <div key={`${position.pool_address}-${position.status}`} className="leaders-position"><div className="leaders-position-head"><div><Link href={`/pools/view?address=${encodeURIComponent(position.pool_address)}`}>{tokenLabel(position)}</Link><div className="muted">{shortAddr(position.pool_address)} · {poolTypeLabel(position.pool_type)} · {position.fee_bps} bps</div></div><span className="badge">{venueLabel(position.venue, position.pool_type)}</span></div><div className="muted">Value {fmtNum(position.value_quote, 2)} XLM{position.fees_unclaimed_quote != null ? ` · fees ${fmtNum(position.fees_unclaimed_quote, 3)}` : " · unclaimed fee unavailable"}{position.il_est != null ? ` · IL ~(${(position.il_est * 100).toFixed(2)}%)` : ""}</div></div>)}</div>}</div>
+      <div className="panel"><div className="panel-head">Open positions</div>{profile.positions.length === 0 ? <div className="empty">No open positions in scanned pools.</div> : <div className="leaders-positions">{profile.positions.map((position) => <div key={`${position.pool_address}-${position.status}`} className="leaders-position"><div className="leaders-position-head"><div><Link href={`/pools/view?address=${encodeURIComponent(position.pool_address)}`}>{tokenLabel(position)}</Link><div className="muted">{shortAddr(position.pool_address)} · {poolTypeLabel(position.pool_type)} · {position.fee_bps} bps</div></div><div className="leaders-position-badges"><span className="badge">{venueLabel(position.venue, position.pool_type)}</span>{positionStatusLabel(position.status) ? <span className="badge">{positionStatusLabel(position.status)}</span> : null}</div></div><div className="muted">Value {fmtNum(position.value_quote, 2)} XLM{position.fees_unclaimed_quote != null ? ` · fees ${fmtNum(position.fees_unclaimed_quote, 3)}` : " · unclaimed fee unavailable"}{position.il_est != null ? ` · IL ~(${(position.il_est * 100).toFixed(2)}%)` : ""}</div></div>)}</div>}</div>
 
       <div className="panel"><div className="panel-head">Recent LP events</div>{profile.recent_events.length === 0 ? <div className="empty">No deposit/withdraw/claim events with actor in the last 30d.</div> : <div className="leaders-events">{profile.recent_events.map((event) => <div key={event.event_id} className="leaders-event"><span className="badge">{event.kind.replace("_liquidity", "").replace("_", " ")}</span><div><Link href={`/pools/view?address=${encodeURIComponent(event.pool_address)}`}>{event.token_labels?.length ? displayTokenLabels(event.token_labels).join(" / ") : shortAddr(event.pool_address)}</Link><div className="muted">{venueLabel(event.venue ?? undefined, event.pool_type ?? undefined)} · {poolTypeLabel(event.pool_type)}{event.fee_bps != null ? ` · ${event.fee_bps} bps` : ""} · {shortAddr(event.pool_address)}</div></div><span className="muted">{event.quote_xlm != null ? `${fmtNum(event.quote_xlm, 2)} XLM · ` : ""}{new Date(event.created_at * 1000).toLocaleString()}</span></div>)}</div>}</div>
     </div>

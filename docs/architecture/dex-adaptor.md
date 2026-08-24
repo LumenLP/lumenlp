@@ -97,11 +97,20 @@ Payload amounts remain venue-specific JSON so CP shares and CL ticks can coexist
 - token order is checked between both query responses;
 - `provide_liquidity` and `withdraw_liquidity` are the supported LP lifecycle event topics;
 - `swap`, `initialize`, and admin topics are not Copy LP position events;
-- no write operation is enabled yet.
+- no Phoenix write operation is enabled in the production adaptor yet.
 
 The mainnet spot-check fixture records a successful factory and pool read. Phoenix discovery, pool hydration, and swap/activity ingestion are enabled alongside Aquarius and Soroswap in the production indexer and snapshotter. Promotion to Copy LP still requires liquidity-event version validation, LP share accounting, and a monitored write rollout. The factory fixture uses the real address; generic pool entries remain synthetic test data.
 
 Repeatable read-only validation is available at `deploy/validate-phoenix.sh`. It checks factory discovery plus `query_config` and `query_pool_info` without signing or submitting a transaction.
+
+Phoenix execution is deliberately split at the ABI boundary. Its XYK pool
+uses optional desired/min token amounts, while its Stable pool uses required
+amounts plus an optional minimum share output. Both share the withdrawal
+signature, but their configuration structs are not identical. The exact
+method argument shapes are captured in
+`crates/dex/fixtures/phoenix-operation-boundary.json`; a future policy adapter
+must select the pool type from validated on-chain configuration and fail
+closed when the type or ABI is unknown.
 
 ## Soroswap first slice
 

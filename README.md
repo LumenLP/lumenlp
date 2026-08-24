@@ -77,9 +77,31 @@ submitting a transaction:
 RPC_URL=https://mainnet.sorobanrpc.com ./deploy/validate-soroswap.sh
 ```
 
+The same read-only check is available on Soroswap Testnet. It verifies that
+the configured Router points at the configured Factory before querying a real
+pair. It requires a funded testnet account or a local Stellar CLI alias:
+
+```sh
+SOURCE_ACCOUNT=alice ./deploy/validate-soroswap-testnet.sh
+```
+
+The checked pair is recorded in
+`crates/dex/fixtures/soroswap-testnet-spot-check.json`. This fixture validates
+the on-chain read boundary only; it does not enable Copy LP execution or sign
+any transaction. A real write smoke test additionally requires the signer for
+the testnet token-admin account that controls the pair assets; that credential
+is intentionally not stored in this repository.
+
 The reader currently covers factory pair discovery and `token_0`, `token_1`,
 and `get_reserves`. LP event indexing and Copy LP operations remain disabled
 until their venue-specific semantics are validated.
+
+To prepare the isolated Soroswap Copy Policy testnet instance for a future
+write smoke test, use `deploy/prepare-soroswap-copy-testnet.sh`. It is
+read-only by default; `RUN_WRITE_SMOKE=1` additionally requires an explicit
+testnet token-admin signer and only mints the two configured test assets to
+the isolated policy contract. It never accepts mainnet configuration and does
+not execute a deposit or withdrawal.
 
 ### Frontend
 

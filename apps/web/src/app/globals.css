@@ -2037,6 +2037,12 @@ th { color: var(--muted); font-weight: 500; }
   gap: 8px;
   align-items: center;
 }
+.leaders-position-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-left: auto;
+}
 .leaders-board-head {
   display: flex;
   justify-content: space-between;

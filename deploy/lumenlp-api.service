@@ -12,6 +12,10 @@ Environment=DATABASE_PATH=/opt/lumenlp/data/lumenlp.db
 Environment=INDEXER_DB_PATH=/opt/lumenlp/data/pool-indexer.db
 EnvironmentFile=-/etc/lumenlp/api.env
 Environment=BIND=0.0.0.0:3301
+Environment=LEADER_FEE_SNAPSHOT_SECS=60
+Environment=LEADER_FEE_SNAPSHOT_BATCH=80
+Environment=LEADER_FEE_SNAPSHOT_HOT_BATCH=40
+Environment=LEADER_FEE_SNAPSHOT_CONCURRENCY=8
 Environment=RUST_LOG=info
 ExecStart=/opt/lumenlp/target/release/api-server
 Restart=on-failure

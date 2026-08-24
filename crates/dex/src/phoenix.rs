@@ -20,7 +20,9 @@ use {
 
 /// Phoenix pool operation boundary. The two pool implementations use
 /// different provide_liquidity signatures, so the pool type must be explicit
-/// in every draft rather than inferred from a token pair.
+/// in every draft rather than inferred from a token pair. The exact ABI is
+/// recorded in `fixtures/phoenix-operation-boundary.json` and is intentionally
+/// not collapsed into the generic Copy Policy entry point yet.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct PhoenixAdaptor;
 

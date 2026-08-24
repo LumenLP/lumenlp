@@ -8,6 +8,7 @@ User=root
 WorkingDirectory=/opt/lumenlp
 Environment=RPC_URL=http://127.0.0.1:8003
 Environment=INDEXER_DB_PATH=/opt/lumenlp/data/pool-indexer.db
+Environment=SNAPSHOT_DATABASE_PATH=/opt/lumenlp/data/lumenlp.db
 Environment=INDEXER_POLL_SECS=30
 Environment=INDEXER_VENUES=aquarius,soroswap,phoenix,sushi,comet
 Environment=RUST_LOG=info

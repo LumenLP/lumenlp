@@ -8,6 +8,9 @@ use {
 
 pub struct IndexDb {
     conn: Connection,
+    // Snapshots are produced by the standalone snapshotter in the primary
+    // database. Keep event/rollup writes isolated while reading that source.
+    snapshot_conn: Option<Connection>,
 }
 
 #[derive(Debug, Clone)]
@@ -29,14 +32,22 @@ pub struct IndexStats {
 }
 
 impl IndexDb {
-    pub fn open(path: &str) -> Result<Self> {
+    pub fn open_with_snapshot_path(path: &str, snapshot_path: Option<&str>) -> Result<Self> {
         if let Some(parent) = std::path::Path::new(path).parent() {
             std::fs::create_dir_all(parent).ok();
         }
         let conn = open_sqlite_with_retry(path)?;
-        let db = Self { conn };
+        let snapshot_conn = snapshot_path
+            .filter(|candidate| *candidate != path)
+            .map(open_sqlite_with_retry)
+            .transpose()?;
+        let db = Self { conn, snapshot_conn };
         db.migrate()?;
         Ok(db)
+    }
+
+    fn snapshot_connection(&self) -> &Connection {
+        self.snapshot_conn.as_ref().unwrap_or(&self.conn)
     }
 
     fn migrate(&self) -> Result<()> {
@@ -311,18 +322,26 @@ impl IndexDb {
     }
 
     pub fn backfill_5m_from_hourly_snapshots(&self) -> Result<usize> {
-        let mut stmt = self.conn.prepare(
+        // Re-read the current bucket so a snapshot written during the same
+        // five-minute interval replaces its earlier value, but avoid scanning
+        // the full primary snapshot history on every 30-second indexer poll.
+        let latest_bucket = self
+            .conn
+            .query_row("SELECT MAX(bucket_ts) FROM pool_snapshots_5m", [], |row| {
+                row.get::<_, Option<i64>>(0)
+            })?;
+        let since = latest_bucket.map(bucket_to_rfc3339);
+        let source = self.snapshot_connection();
+        let mut stmt = source.prepare(
             r#"
-            SELECT pool_address, ts, tvl, reserves_json, fee_bps
-            FROM (
-              SELECT s.pool_address, s.ts, s.tvl, s.reserves_json, p.fee_bps
-              FROM pool_snapshots s
-              LEFT JOIN pools p ON p.address = s.pool_address
-            )
-            ORDER BY pool_address ASC, ts ASC
+            SELECT s.pool_address, s.ts, s.tvl, s.reserves_json, p.fee_bps
+            FROM pool_snapshots s
+            LEFT JOIN pools p ON p.address = s.pool_address
+            WHERE ?1 IS NULL OR s.ts >= ?1
+            ORDER BY s.pool_address ASC, s.ts ASC
             "#,
         )?;
-        let rows = stmt.query_map([], |row| {
+        let rows = stmt.query_map(params![since], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
@@ -575,7 +594,7 @@ fn open_sqlite_with_retry(path: &str) -> Result<Connection> {
     for attempt in 1..=ATTEMPTS {
         match Connection::open(path).with_context(|| format!("open sqlite {path}")) {
             Ok(conn) => {
-                conn.busy_timeout(std::time::Duration::from_secs(15))?;
+                conn.busy_timeout(std::time::Duration::from_secs(60))?;
                 match conn.execute_batch(
                     r#"
                     PRAGMA journal_mode=WAL;

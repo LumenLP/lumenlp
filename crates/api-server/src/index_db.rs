@@ -144,6 +144,7 @@ pub struct ActorFeeSnapshotTotal {
     pub unclaimed_quote_xlm: f64,
     pub position_value_quote_xlm: f64,
     pub position_count: usize,
+    pub pool_count: usize,
     pub observed_at: Option<i64>,
 }
 
@@ -884,33 +885,13 @@ impl IndexDb {
         let limit = limit.max(1).min(10_000) as i64;
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT DISTINCT json_extract(body_json, '$.derived.actor') AS actor
+            SELECT json_extract(body_json, '$.derived.actor') AS actor,
+                   MAX(created_at) AS last_activity_at
             FROM pool_events
             WHERE kind IN ('deposit_liquidity', 'withdraw_liquidity', 'claim_fees', 'claim_protocol_fee')
               AND json_extract(body_json, '$.derived.actor') GLOB 'G*'
-            ORDER BY actor ASC
-            LIMIT ?1
-            "#,
-        )?;
-        let rows = stmt.query_map(params![limit], |row| row.get::<_, String>(0))?;
-        let mut out = Vec::new();
-        for row in rows {
-            out.push(row?);
-        }
-        Ok(out)
-    }
-
-    /// Actors with a current on-chain fee snapshot. These actors may have no
-    /// liquidity event inside the selected leaderboard window, but can still
-    /// have an open position and accruing unclaimed fees.
-    pub fn actor_fee_snapshot_actors(&self, limit: usize) -> Result<Vec<String>> {
-        let limit = limit.max(1).min(10_000) as i64;
-        let mut stmt = self.conn.prepare(
-            r#"
-            SELECT DISTINCT actor
-            FROM actor_fee_snapshots
-            WHERE actor GLOB 'G*' AND status = 'ok'
-            ORDER BY actor ASC
+            GROUP BY actor
+            ORDER BY last_activity_at DESC, actor ASC
             LIMIT ?1
             "#,
         )?;
@@ -963,29 +944,39 @@ impl IndexDb {
         Ok(())
     }
 
-    pub fn actor_fee_snapshot_total(&self, actor: &str) -> Result<ActorFeeSnapshotTotal> {
-        self.conn
-            .query_row(
-                r#"
-                SELECT
-                  COALESCE(SUM(unclaimed_quote_xlm), 0),
-                  COALESCE(SUM(position_value_quote_xlm), 0),
-                  COUNT(CASE WHEN unclaimed_quote_xlm IS NOT NULL THEN 1 END),
-                  MAX(CASE WHEN unclaimed_quote_xlm IS NOT NULL THEN observed_at END)
-                FROM actor_fee_snapshots
-                WHERE actor = ?1 AND status = 'ok'
-                "#,
-                params![actor],
-                |row| {
-                    Ok(ActorFeeSnapshotTotal {
-                        unclaimed_quote_xlm: row.get(0)?,
-                        position_value_quote_xlm: row.get(1)?,
-                        position_count: row.get::<_, i64>(2)?.max(0) as usize,
-                        observed_at: row.get(3)?,
-                    })
+    pub fn actor_fee_snapshot_totals(&self) -> Result<HashMap<String, ActorFeeSnapshotTotal>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT
+              actor,
+              COALESCE(SUM(unclaimed_quote_xlm), 0),
+              COALESCE(SUM(position_value_quote_xlm), 0),
+              COUNT(*),
+              COUNT(DISTINCT pool_address),
+              MAX(CASE WHEN unclaimed_quote_xlm IS NOT NULL THEN observed_at END)
+            FROM actor_fee_snapshots
+            WHERE actor GLOB 'G*' AND status IN ('ok', 'fee_unavailable')
+            GROUP BY actor
+            "#,
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                ActorFeeSnapshotTotal {
+                    unclaimed_quote_xlm: row.get(1)?,
+                    position_value_quote_xlm: row.get(2)?,
+                    position_count: row.get::<_, i64>(3)?.max(0) as usize,
+                    pool_count: row.get::<_, i64>(4)?.max(0) as usize,
+                    observed_at: row.get(5)?,
                 },
-            )
-            .map_err(Into::into)
+            ))
+        })?;
+        let mut totals = HashMap::new();
+        for row in rows {
+            let (actor, total) = row?;
+            totals.insert(actor, total);
+        }
+        Ok(totals)
     }
 
     /// Return Sushi V3 tick ranges observed for an actor. Sushi pools expose
@@ -2011,9 +2002,10 @@ mod tests {
         db.upsert_actor_fee_snapshot("GLEADER", "CKNOWN", "aquarius", Some(2.5), Some(50.0), "ok", 20)
             .unwrap();
 
-        let total = db.actor_fee_snapshot_total("GLEADER").unwrap();
+        let total = db.actor_fee_snapshot_totals().unwrap().remove("GLEADER").unwrap();
         assert_eq!(total.unclaimed_quote_xlm, 2.5);
-        assert_eq!(total.position_count, 1);
+        assert_eq!(total.position_count, 2);
+        assert_eq!(total.pool_count, 2);
         assert_eq!(total.observed_at, Some(20));
     }
 

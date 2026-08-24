@@ -45,7 +45,9 @@ async fn share_positions(
     let book = crate::aquarius::pricing::price_book_from_pools(pricing);
     let book = Arc::new(book);
     let mut out = Vec::new();
-    for batch in pools.chunks(8) {
+    // These pools are already narrowed by indexed actor activity; use a wider
+    // batch to keep profile cold reads responsive across multiple venues.
+    for batch in pools.chunks(16) {
         let mut tasks = JoinSet::new();
         for pool in batch {
             let rpc = rpc.clone();
@@ -106,7 +108,11 @@ async fn load_share_position(
         il_est: None,
         pnl: None,
         fees_unclaimed_quote: None,
-        status: "ok".into(),
+        // The share balance and pool value are verified, but these venues do
+        // not expose a fee accumulator through the current read boundary.
+        // Keep that limitation explicit instead of making null fees look like
+        // a successfully measured zero.
+        status: "fee_unavailable".into(),
         shares: Some(shares),
         cl_ranges: None,
         note: Some("LP share balance verified against the venue pool; il/pnl=n/a without cost basis".into()),

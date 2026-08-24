@@ -1,0 +1,15 @@
+{
+  "venue": "soroswap_amm",
+  "network": "testnet",
+  "checked_at": "2026-08-24",
+  "factory_address": "CDP3HMUH6SMS3S7NPGNDJLULCOXXEPSHY4JKUKMBNQMATHDHWXRRJTBY",
+  "router_address": "CCJUD55AG6W5HAI5LRVNKAE5WDP5XGZBUDS5WNTIVDU7O264UZZE7BRD",
+  "pair_count": 225,
+  "pair_index": 0,
+  "pair_address": "CDSQONFE5BS732OYYJINI2L7W4567XRBLJWDD7GPVQZLXLPC4CGA55ZO",
+  "token_0": "CB3TLW74NBIOT3BUWOZ3TUM6RFDF6A4GVIRUQRQZABG5KPOUL4JJOV2F",
+  "token_1": "CCZGLAUBDKJSQK72QOZHVU7CUWKW45OZWYWCLL27AEK74U2OIBK6LXF2",
+  "reserves": ["1232150007934", "2069771239621"],
+  "fee_bps": 30,
+  "source": "Soroswap testnet Soroban RPC read-only contract invocation"
+}

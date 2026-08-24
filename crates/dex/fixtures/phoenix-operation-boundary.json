@@ -1,0 +1,66 @@
+{
+  "venue": "phoenix",
+  "operations": {
+    "constant_product": {
+      "provide_liquidity": {
+        "method": "provide_liquidity",
+        "args": [
+          "depositor: Address",
+          "desired_a: Option<i128>",
+          "min_a: Option<i128>",
+          "desired_b: Option<i128>",
+          "min_b: Option<i128>",
+          "custom_slippage_bps: Option<i64>",
+          "deadline: Option<u64>",
+          "auto_stake: bool"
+        ],
+        "returns": "void"
+      },
+      "withdraw_liquidity": {
+        "method": "withdraw_liquidity",
+        "args": [
+          "recipient: Address",
+          "share_amount: i128",
+          "min_a: i128",
+          "min_b: i128",
+          "deadline: Option<u64>",
+          "auto_unstake: Option<AutoUnstakeInfo>"
+        ],
+        "returns": "(i128, i128)"
+      }
+    },
+    "stable": {
+      "provide_liquidity": {
+        "method": "provide_liquidity",
+        "args": [
+          "depositor: Address",
+          "desired_a: i128",
+          "desired_b: i128",
+          "custom_slippage_bps: Option<i64>",
+          "deadline: Option<u64>",
+          "min_shares_to_receive: Option<u128>",
+          "auto_stake: bool"
+        ],
+        "returns": "void"
+      },
+      "withdraw_liquidity": {
+        "method": "withdraw_liquidity",
+        "args": [
+          "recipient: Address",
+          "share_amount: i128",
+          "min_a: i128",
+          "min_b: i128",
+          "deadline: Option<u64>",
+          "auto_unstake: Option<AutoUnstakeInfo>"
+        ],
+        "returns": "(i128, i128)"
+      }
+    }
+  },
+  "safety": {
+    "pool_type_required": true,
+    "unsupported_pool_type": "fail_closed",
+    "copy_execution": "not_enabled"
+  },
+  "source": "thirdparty/phoenix-contracts/contracts/pool and pool_stable"
+}

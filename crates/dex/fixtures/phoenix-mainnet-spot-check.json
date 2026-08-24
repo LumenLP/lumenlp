@@ -10,10 +10,10 @@
     "share_token": "CBMZ76PQDAKGHWQ22CITGTD4A6YD6XQ5SVNGBG75VAT3BB2KZE36HASJ"
   },
   "query_pool_info": {
-    "asset_a_amount": "78640049090",
-    "asset_b_amount": "12386668745",
-    "asset_lp_share_amount": "31156162526"
+    "asset_a_amount": "21353587507",
+    "asset_b_amount": "4394758201",
+    "asset_lp_share_amount": "9662222984"
   },
   "captured_via": "stellar contract invoke --send no",
-  "captured_at": "2026-08-17"
+  "captured_at": "2026-08-24"
 }

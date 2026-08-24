@@ -145,8 +145,10 @@ export type LeaderBoardRow = {
   unclaimed_fee_quote_usd?: number | null;
   accrued_fee_quote_xlm?: number | null;
   accrued_fee_quote_usd?: number | null;
+  fee_status?: "verified" | "unavailable" | "not_verified" | string;
   fee_snapshot_at?: number | null;
   fee_snapshot_position_count?: number;
+  position_value_quote_xlm?: number | null;
   net_liquidity_quote_xlm: number;
   fee_capital_ratio?: number | null;
   distinct_pools: number;
@@ -159,6 +161,12 @@ export type LeadersBoardResponse = {
   xlm_usd?: number | null;
   leaders: LeaderBoardRow[];
   sort?: string;
+  fee_data?: {
+    latest_snapshot_at?: number | null;
+    verified_actor_count?: number;
+    actor_count?: number;
+    refresh_cadence_seconds?: number;
+  };
   honesty?: string;
 };
 

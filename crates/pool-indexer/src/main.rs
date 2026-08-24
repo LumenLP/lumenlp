@@ -26,13 +26,14 @@ async fn main() -> Result<()> {
 
     let rpc_url = std::env::var("RPC_URL").unwrap_or_else(|_| "http://127.0.0.1:8003".into());
     let db_path = std::env::var("INDEXER_DB_PATH").unwrap_or_else(|_| "./data/pool-indexer.db".into());
+    let snapshot_db_path = std::env::var("SNAPSHOT_DATABASE_PATH").ok();
     let poll_secs: u64 = std::env::var("INDEXER_POLL_SECS")
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(30);
 
     let rpc = SorobanRpc::new(&rpc_url, MAINNET_PASSPHRASE);
-    let db = IndexDb::open(&db_path)?;
+    let db = IndexDb::open_with_snapshot_path(&db_path, snapshot_db_path.as_deref())?;
 
     match cmd {
         "run" => run(&rpc, &db, poll_secs).await,

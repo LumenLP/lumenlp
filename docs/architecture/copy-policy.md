@@ -32,16 +32,27 @@ change the copy size, or reuse an event by changing downstream call arguments.
 The contract intentionally does not dispatch arbitrary calls to a DEX. A venue
 must first have a reviewed adapter contract interface, deterministic fixtures,
 capability reporting, and fail-closed behavior for unsupported operations.
-Aquarius is the current contract reference path; Phoenix, Sushi V3, Soroswap
-AMM, and Comet remain separate adapter-validation work and are not implicitly
+Aquarius is the current contract reference path. Soroswap AMM and Phoenix XYK
+have isolated, promotion-gated policy boundaries; Phoenix Stable, Sushi V3,
+and Comet remain separate adapter-validation work and are not implicitly
 enabled by the policy contract.
 
 The `execute_standard_op` entry point is the venue-neutral boundary for future
-adapters. It currently routes only the `aquarius` venue and rejects every
-other venue before loading authorization state, consuming quota, or writing a
-replay marker. A future venue must be added through an explicit adapter branch
-with its own contract fixtures and capability-gated tests; it cannot inherit
-Aquarius call semantics by passing a different venue string.
+adapters. It now contains a separately guarded Soroswap AMM branch, but that
+branch requires an owner-configured Router address, validates the pair token
+and amount boundary, and remains testnet/promotion gated. The separate
+`phoenix_xyk` branch invokes only the explicit Phoenix XYK pool ABI; the
+generic `phoenix` identifier, Phoenix Stable, Sushi V3, and Comet remain
+rejected. No venue inherits Aquarius call semantics by passing a different
+venue string, and unsupported operations remain rejected before authorization
+consumes quota or writes a replay marker.
+
+The non-Aquarius branches also construct explicit Soroban invoker
+authorizations for the policy contract's token and LP-share transfers. The
+venue call cannot pull follower assets unless those exact token contracts,
+source, destination, and scaled amounts are present in the authorization tree;
+a downstream failure therefore rolls back the policy budget, replay marker,
+and transfer side effects atomically.
 
 ## Build
 
@@ -51,13 +62,13 @@ stellar contract build --package lumenlp-copy-policy --out-dir target/contracts
 
 The current local build artifact is
 `target/wasm32v1-none/release/lumenlp_copy_policy.wasm`. It was built on
-2026-08-22 with hash:
+2026-08-24 with hash:
 
-`dcfd401e75f1a71b6a30a9117f31dd1c2f529fbc459631487bd4d4388a909f9e`
+`4c48263115c925f9806915bf2b9f26d5980a14c8a1ec66ff4e4c43ad9aee4d19`
 
-The deployed v3 testnet instance below is the previous promotion-gated build;
-the new generic entry point remains local until its testnet deployment and
-smoke tests are completed.
+The deployed v3 testnet instance below is the previous promotion-gated build.
+The Soroswap-gated build is deployed separately and remains isolated from
+production users and mainnet funds.
 
 To deploy a separate testnet instance without replacing this contract, use
 `deploy/deploy-copy-policy-testnet.sh` with `STELLAR_TESTNET_SOURCE` and
@@ -74,6 +85,70 @@ The first testnet deployment completed on 2026-08-18:
 - Deployment transaction: [b47ac3822186fdf7c15593c6109b58cc01db16d8b89b9511166eba25b7efdb6f](https://stellar.expert/explorer/testnet/tx/b47ac3822186fdf7c15593c6109b58cc01db16d8b89b9511166eba25b7efdb6f)
 - Lab view: [testnet contract](https://lab.stellar.org/r/testnet/contract/CCFF6EGDGRXQYXMYTW6KZHIGGVG6A7IPJTQUB2MHTCDXVSVHHMEXHHBI)
 - Initialization transaction: [35de3ae514ee8f31736f2617dbe744f3a6265745d3edfb5ada61f28193c0f4ee](https://stellar.expert/explorer/testnet/tx/35de3ae514ee8f31736f2617dbe744f3a6265745d3edfb5ada61f28193c0f4ee)
+
+The isolated Soroswap routing instance was deployed and configured on
+2026-08-24:
+
+- Contract: `CBHMOPHLGLWVDW7EB4OGVP4FCWE6NDGJIPIN4SIUJ5BJB4R4PKLFB4TU`
+- WASM upload transaction: [d2f05b344bae967caaf11beb11ab057e0f768258830cca130b0c65d675250a0b](https://stellar.expert/explorer/testnet/tx/d2f05b344bae967caaf11beb11ab057e0f768258830cca130b0c65d675250a0b)
+- Deployment transaction: [09847de77a83aa8f1d84854a2e8a4e4b361e5bda9118891f7ed2f209299053f9](https://stellar.expert/explorer/testnet/tx/09847de77a83aa8f1d84854a2e8a4e4b361e5bda9118891f7ed2f209299053f9)
+- Initialization transaction: [9436448a1dbf4a6a0db36b38bf50f0b3a4b88806697558bce4e03ac9755fbe36](https://stellar.expert/explorer/testnet/tx/9436448a1dbf4a6a0db36b38bf50f0b3a4b88806697558bce4e03ac9755fbe36)
+- Soroswap Router allowlist transaction: [8e141616400408c82da9a5f1885f3a80a0111b0976930a82dd1d0c65a3e3f951](https://stellar.expert/explorer/testnet/tx/8e141616400408c82da9a5f1885f3a80a0111b0976930a82dd1d0c65a3e3f951)
+- Soroswap Testnet Factory: `CDP3HMUH6SMS3S7NPGNDJLULCOXXEPSHY4JKUKMBNQMATHDHWXRRJTBY`
+- Soroswap Testnet Router: `CCJUD55AG6W5HAI5LRVNKAE5WDP5XGZBUDS5WNTIVDU7O264UZZE7BRD`
+- Read-only validation script: `deploy/validate-soroswap-testnet.sh`
+- Asset preflight/provisioning script: `deploy/prepare-soroswap-copy-testnet.sh`
+
+The testnet Router/Factory relationship and a real pair state read were
+validated without signing a transaction. The policy instance has not been
+connected to production relayers and no Copy LP deposit or withdrawal was
+executed through it.
+
+The provisioning helper is intentionally separate from execution. Its default
+mode only checks the Router/Factory relationship and the policy's configured
+Router. Its explicit write mode requires a caller-supplied testnet token-admin
+signer and mints assets only to the isolated policy contract; the signer is
+never stored in the repository and the helper does not invoke a DEX operation.
+
+The authorization-tree build was deployed as a new, isolated testnet
+instance on 2026-08-24. It is configured only for authorization-boundary
+testing:
+
+- Contract: `CBWRBKWB5FMVC4QX4CD3MFYE3APJKL2EZTFHF5RI5XROZ4ZOFHV3V2KV`
+- Deployment transaction: [a4b91fa9d3a62529680dab0a0a4061272161add26b28449a3d235985999e9509](https://stellar.expert/explorer/testnet/tx/a4b91fa9d3a62529680dab0a0a4061272161add26b28449a3d235985999e9509)
+- Lab view: [testnet contract](https://lab.stellar.org/r/testnet/contract/CBWRBKWB5FMVC4QX4CD3MFYE3APJKL2EZTFHF5RI5XROZ4ZOFHV3V2KV)
+- WASM hash: `4c48263115c925f9806915bf2b9f26d5980a14c8a1ec66ff4e4c43ad9aee4d19`
+- Initialization transaction: [168ca8a74e43b8e82cde8582f106735b7252d1a7f740ad5116500b709d3b33a5](https://stellar.expert/explorer/testnet/tx/168ca8a74e43b8e82cde8582f106735b7252d1a7f740ad5116500b709d3b33a5)
+- Soroswap Router allowlist transaction: [f446f44fcd0a51f104ff49528ac8a9976e1e8dbf5cd24b7f905ab9dd71657b22](https://stellar.expert/explorer/testnet/tx/f446f44fcd0a51f104ff49528ac8a9976e1e8dbf5cd24b7f905ab9dd71657b22)
+- Configured Router: `CCJUD55AG6W5HAI5LRVNKAE5WDP5XGZBUDS5WNTIVDU7O264UZZE7BRD`
+
+The instance is reserved for authorization-tree and downstream-failure
+smoke tests. It has no funded assets, is not connected to production users or
+mainnet funds, and its isolated session below does not call a DEX.
+
+### No-funds policy smoke test
+
+On 2026-08-24, the isolated instance was used to validate the complete
+authorization path without provisioning tokens or executing a liquidity
+operation:
+
+- Event recorder configured: [fd3b42d684d696fcf61ffb4d52a87e25c41cad0adfd71721926d6bfc5fa17ed5](https://stellar.expert/explorer/testnet/tx/fd3b42d684d696fcf61ffb4d52a87e25c41cad0adfd71721926d6bfc5fa17ed5)
+- Session `42` registered with one allowlisted Soroswap pair, quote limit `10`, and expiry `2000000000`: [cf757f184bffd381c4039bf477a0bdd41d4aba10c23611ad54d4cbb794fcde0b](https://stellar.expert/explorer/testnet/tx/cf757f184bffd381c4039bf477a0bdd41d4aba10c23611ad54d4cbb794fcde0b)
+- Leader deposit event recorded with source id `0x42`: [c58c7a6babd69b7605ab7c427befb168174e7c489446107aaed9a64960f88194](https://stellar.expert/explorer/testnet/tx/c58c7a6babd69b7605ab7c427befb168174e7c489446107aaed9a64960f88194)
+- Relayer consumed the event and emitted the policy `copy` event: [28588bb4bbe0367f01d50ec63a05b1cbbc963f57b732c2cf6a96c0df7f557482](https://stellar.expert/explorer/testnet/tx/28588bb4bbe0367f01d50ec63a05b1cbbc963f57b732c2cf6a96c0df7f557482)
+
+Re-submitting the same source id was rejected during simulation with the
+contract replay error. This confirms that the allowlist, coefficient-bound
+quote, relayer authorization, and replay marker are enforced before any
+future DEX adapter call. No token balance changed in this test.
+
+The local policy build also contains explicit `phoenix_xyk` and
+`phoenix_stable` execution boundaries. They bind deposits and withdrawals to
+the same recorded event, coefficient, pool allowlist, replay, and quota checks,
+then invoke only the matching Phoenix pool ABI with the policy contract as
+caller. These branches remain promotion-gated and are not connected to
+production relayers. The generic `phoenix` identifier remains rejected so the
+caller must declare which ABI was validated.
 
 The v2 authorization build was deployed separately so the original testnet
 instance remains available for comparison:

@@ -29,7 +29,9 @@ pub async fn positions_for_address(
 ) -> Vec<UserPosition> {
     let book = Arc::new(price_book_from_pools(pricing_pools));
     let mut out = Vec::new();
-    for batch in pool_addresses.chunks(8) {
+    // Profile requests are already narrowed to actor-touched pools. A larger
+    // batch avoids serial round-trip gaps without probing the full catalogue.
+    for batch in pool_addresses.chunks(16) {
         let mut tasks = JoinSet::new();
         for addr in batch {
             let rpc = rpc.clone();

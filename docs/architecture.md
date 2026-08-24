@@ -435,8 +435,13 @@ The contract exposes these public methods:
 | `session(session_id)` | read | Inspect the stored session state. |
 | `record_leader_event(...)` | recorder auth | Store an idempotent canonical source event for later execution. |
 | `leader_event(source_event_id)` | read | Inspect a recorded source event. |
+| `set_venue_router(venue, router)` | owner auth | Allowlist the Router contract for a supported venue; relayers cannot set it. |
+| `venue_router(venue)` | read | Inspect the configured venue Router or return not configured. |
 | `execute_copy_op(...)` | relayer auth | Validate and record a policy-approved intent without calling a DEX. |
 | `execute_aquarius_standard_op(...)` | relayer auth | Validate the intent and call an Aquarius standard pool. |
+| `execute_soroswap_standard_op(...)` | relayer auth | Validate a Soroswap AMM deposit or withdrawal and call only the configured Router. |
+| `execute_phoenix_xyk_standard_op(...)` | relayer auth | Validate a Phoenix XYK deposit or withdrawal against the explicit XYK pool ABI; Stable pools are not accepted by this entry point. |
+| `execute_phoenix_stable_op(...)` | relayer auth | Validate a Phoenix Stable deposit or withdrawal against the Stable-specific amount and minimum-share ABI. |
 
 The `Session` state contains:
 

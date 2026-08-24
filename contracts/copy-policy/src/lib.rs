@@ -32,6 +32,7 @@ pub enum Error {
     EventNotFound = 16,
     EventMismatch = 17,
     InvalidEvent = 18,
+    RouterNotConfigured = 19,
 }
 
 #[contracttype]
@@ -62,6 +63,42 @@ pub struct LeaderEvent {
 }
 
 #[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PhoenixAsset {
+    pub address: Address,
+    pub amount: i128,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PhoenixPoolInfo {
+    pub asset_a: PhoenixAsset,
+    pub asset_b: PhoenixAsset,
+    pub asset_lp_share: PhoenixAsset,
+}
+
+fn add_transfer_auth(
+    env: &Env,
+    entries: &mut Vec<InvokerContractAuthEntry>,
+    token: Address,
+    from: Address,
+    to: Address,
+    amount: i128,
+) {
+    if amount <= 0 {
+        return;
+    }
+    entries.push_back(InvokerContractAuthEntry::Contract(SubContractInvocation {
+        context: ContractContext {
+            contract: token,
+            fn_name: symbol_short!("transfer"),
+            args: Vec::from_array(env, [from.into_val(env), to.into_val(env), amount.into_val(env)]),
+        },
+        sub_invocations: Vec::new(env),
+    }));
+}
+
+#[contracttype]
 #[derive(Clone)]
 enum DataKey {
     Owner,
@@ -70,6 +107,7 @@ enum DataKey {
     Session(u32),
     Replay(u32, BytesN<32>),
     LeaderEvent(BytesN<32>),
+    VenueRouter(Symbol),
 }
 
 #[contract]
@@ -96,6 +134,24 @@ impl CopyPolicy {
         Self::owner(&env)?.require_auth();
         env.storage().instance().set(&DataKey::EventRecorder, &recorder);
         Ok(())
+    }
+
+    /// Configure the only Router contract that the policy may call for a
+    /// supported venue. Router addresses are never accepted from the relayer.
+    pub fn set_venue_router(env: Env, venue: Symbol, router: Address) -> Result<(), Error> {
+        Self::owner(&env)?.require_auth();
+        if venue != Symbol::new(&env, "soroswap") && venue != Symbol::new(&env, "soroswap_amm") {
+            return Err(Error::OperationNotAllowed);
+        }
+        env.storage().instance().set(&DataKey::VenueRouter(venue), &router);
+        Ok(())
+    }
+
+    pub fn venue_router(env: Env, venue: Symbol) -> Result<Address, Error> {
+        env.storage()
+            .instance()
+            .get(&DataKey::VenueRouter(venue))
+            .ok_or(Error::RouterNotConfigured)
     }
 
     /// Store one canonical Leader liquidity event. Re-submitting the same
@@ -290,8 +346,8 @@ impl CopyPolicy {
         Ok(())
     }
 
-    /// Generic venue boundary. The policy keeps the dispatch explicit: until a
-    /// venue-specific adapter is reviewed, only Aquarius is routable here.
+    /// Generic venue boundary. The dispatch stays explicit so a venue cannot
+    /// smuggle an arbitrary Router address or operation through the relayer.
     /// Unsupported venues are rejected before authorization consumes quota or
     /// creates a replay marker.
     pub fn execute_standard_op(
@@ -308,6 +364,48 @@ impl CopyPolicy {
         min_amounts: Vec<u128>,
         claim_token: Address,
     ) -> Result<(), Error> {
+        if venue == Symbol::new(&env, "phoenix_xyk") {
+            return Self::execute_phoenix_xyk_standard_op(
+                env,
+                session_id,
+                source_event_id,
+                pool,
+                kind,
+                quote,
+                desired_amounts,
+                share_amount,
+                min_amounts,
+            );
+        }
+        if venue == Symbol::new(&env, "phoenix_stable") {
+            return Self::execute_phoenix_stable_op(
+                env,
+                session_id,
+                source_event_id,
+                pool,
+                kind,
+                quote,
+                desired_amounts,
+                min_shares,
+                share_amount,
+                min_amounts,
+            );
+        }
+        if venue == Symbol::new(&env, "soroswap") || venue == Symbol::new(&env, "soroswap_amm") {
+            return Self::execute_soroswap_standard_op(
+                env,
+                venue,
+                session_id,
+                source_event_id,
+                pool,
+                kind,
+                quote,
+                desired_amounts,
+                min_shares,
+                share_amount,
+                min_amounts,
+            );
+        }
         if venue != symbol_short!("aquarius") {
             return Err(Error::OperationNotAllowed);
         }
@@ -324,6 +422,389 @@ impl CopyPolicy {
             min_amounts,
             claim_token,
         )
+    }
+
+    /// Execute a Soroswap AMM operation through an owner-configured Router.
+    /// Soroswap pairs use the pair itself as the LP token; the Router keeps
+    /// token transfers and minimum-output checks in the venue boundary.
+    pub fn execute_soroswap_standard_op(
+        env: Env,
+        venue: Symbol,
+        session_id: u32,
+        source_event_id: BytesN<32>,
+        pool: Address,
+        kind: Symbol,
+        quote: i128,
+        desired_amounts: Vec<u128>,
+        min_shares: u128,
+        share_amount: u128,
+        min_amounts: Vec<u128>,
+    ) -> Result<(), Error> {
+        if venue != Symbol::new(&env, "soroswap") && venue != Symbol::new(&env, "soroswap_amm") {
+            return Err(Error::OperationNotAllowed);
+        }
+        if kind != symbol_short!("deposit") && kind != symbol_short!("withdraw") {
+            return Err(Error::OperationNotAllowed);
+        }
+        if desired_amounts.len() != 2 || min_amounts.len() != 2 {
+            return Err(Error::InvalidEvent);
+        }
+        let event = Self::load_leader_event(&env, &source_event_id)?;
+        let session = Self::load_session(&env, session_id)?;
+        if event.pool != pool || event.kind != kind || event.leader != session.leader {
+            return Err(Error::EventMismatch);
+        }
+        if scale_i128(event.quote, session.coefficient_ppm)? != quote {
+            return Err(Error::EventMismatch);
+        }
+        if kind == symbol_short!("deposit")
+            && scale_amounts(&env, &event.amounts, session.coefficient_ppm) != desired_amounts
+        {
+            return Err(Error::EventMismatch);
+        }
+        if kind == symbol_short!("withdraw") {
+            let expected_shares = event
+                .amounts
+                .get(0)
+                .map(|amount| scale_amount(&env, amount, session.coefficient_ppm))
+                .unwrap_or(0);
+            if expected_shares != share_amount {
+                return Err(Error::EventMismatch);
+            }
+        }
+        let router = Self::venue_router(env.clone(), venue)?;
+        Self::authorize_copy_op(&env, session_id, &source_event_id, &pool, &kind, quote)?;
+
+        let token_a: Address = env.invoke_contract(&pool, &Symbol::new(&env, "token_0"), Vec::new(&env));
+        let token_b: Address = env.invoke_contract(&pool, &Symbol::new(&env, "token_1"), Vec::new(&env));
+        let user = env.current_contract_address();
+        let deadline = env.ledger().timestamp().saturating_add(300);
+        if kind == symbol_short!("deposit") {
+            let amount_a = to_i128(desired_amounts.get(0).unwrap())?;
+            let amount_b = to_i128(desired_amounts.get(1).unwrap())?;
+            let min_a = to_i128(min_amounts.get(0).unwrap())?;
+            let min_b = to_i128(min_amounts.get(1).unwrap())?;
+            let mut auth_entries = Vec::new(&env);
+            add_transfer_auth(
+                &env,
+                &mut auth_entries,
+                token_a.clone(),
+                user.clone(),
+                pool.clone(),
+                amount_a,
+            );
+            add_transfer_auth(
+                &env,
+                &mut auth_entries,
+                token_b.clone(),
+                user.clone(),
+                pool.clone(),
+                amount_b,
+            );
+            env.authorize_as_current_contract(auth_entries);
+            let minted: Result<(i128, i128, i128), soroban_sdk::Error> = env.invoke_contract(
+                &router,
+                &Symbol::new(&env, "add_liquidity"),
+                Vec::from_array(
+                    &env,
+                    [
+                        token_a.into_val(&env),
+                        token_b.into_val(&env),
+                        amount_a.into_val(&env),
+                        amount_b.into_val(&env),
+                        min_a.into_val(&env),
+                        min_b.into_val(&env),
+                        user.into_val(&env),
+                        deadline.into_val(&env),
+                    ],
+                ),
+            );
+            let (_, _, liquidity) = minted.map_err(|_| Error::OperationNotAllowed)?;
+            if liquidity < to_i128(min_shares)? {
+                return Err(Error::OperationNotAllowed);
+            }
+        } else {
+            let liquidity = to_i128(share_amount)?;
+            let min_a = to_i128(min_amounts.get(0).unwrap())?;
+            let min_b = to_i128(min_amounts.get(1).unwrap())?;
+            let mut auth_entries = Vec::new(&env);
+            // Soroswap pairs are also the LP share token contracts.
+            add_transfer_auth(
+                &env,
+                &mut auth_entries,
+                pool.clone(),
+                user.clone(),
+                pool.clone(),
+                liquidity,
+            );
+            env.authorize_as_current_contract(auth_entries);
+            let withdrawn: Result<(i128, i128), soroban_sdk::Error> = env.invoke_contract(
+                &router,
+                &Symbol::new(&env, "remove_liquidity"),
+                Vec::from_array(
+                    &env,
+                    [
+                        token_a.into_val(&env),
+                        token_b.into_val(&env),
+                        liquidity.into_val(&env),
+                        min_a.into_val(&env),
+                        min_b.into_val(&env),
+                        user.into_val(&env),
+                        deadline.into_val(&env),
+                    ],
+                ),
+            );
+            withdrawn.map_err(|_| Error::OperationNotAllowed)?;
+        }
+        env.events().publish(
+            (symbol_short!("copy"), session_id),
+            (source_event_id, pool, kind, quote),
+        );
+        Ok(())
+    }
+
+    /// Execute the Phoenix XYK pool ABI. Phoenix Stable has a different
+    /// provide_liquidity signature and must use a separate adapter path.
+    pub fn execute_phoenix_xyk_standard_op(
+        env: Env,
+        session_id: u32,
+        source_event_id: BytesN<32>,
+        pool: Address,
+        kind: Symbol,
+        quote: i128,
+        desired_amounts: Vec<u128>,
+        share_amount: u128,
+        min_amounts: Vec<u128>,
+    ) -> Result<(), Error> {
+        if kind != symbol_short!("deposit") && kind != symbol_short!("withdraw") {
+            return Err(Error::OperationNotAllowed);
+        }
+        if min_amounts.len() != 2 || (kind == symbol_short!("deposit") && desired_amounts.len() != 2) {
+            return Err(Error::InvalidEvent);
+        }
+        let event = Self::load_leader_event(&env, &source_event_id)?;
+        let session = Self::load_session(&env, session_id)?;
+        if event.pool != pool || event.kind != kind || event.leader != session.leader {
+            return Err(Error::EventMismatch);
+        }
+        if scale_i128(event.quote, session.coefficient_ppm)? != quote {
+            return Err(Error::EventMismatch);
+        }
+        if kind == symbol_short!("deposit") {
+            if scale_amounts(&env, &event.amounts, session.coefficient_ppm) != desired_amounts {
+                return Err(Error::EventMismatch);
+            }
+            if min_amounts.get(0).unwrap() > desired_amounts.get(0).unwrap()
+                || min_amounts.get(1).unwrap() > desired_amounts.get(1).unwrap()
+            {
+                return Err(Error::InvalidLimit);
+            }
+        } else {
+            let expected_shares = event
+                .amounts
+                .get(0)
+                .map(|amount| scale_amount(&env, amount, session.coefficient_ppm))
+                .unwrap_or(0);
+            if expected_shares != share_amount {
+                return Err(Error::EventMismatch);
+            }
+        }
+        Self::authorize_copy_op(&env, session_id, &source_event_id, &pool, &kind, quote)?;
+
+        let user = env.current_contract_address();
+        let deadline = env.ledger().timestamp().saturating_add(300);
+        let pool_info: PhoenixPoolInfo =
+            env.invoke_contract(&pool, &Symbol::new(&env, "query_pool_info"), Vec::new(&env));
+        if kind == symbol_short!("deposit") {
+            let mut auth_entries = Vec::new(&env);
+            add_transfer_auth(
+                &env,
+                &mut auth_entries,
+                pool_info.asset_a.address.clone(),
+                user.clone(),
+                pool.clone(),
+                to_i128(desired_amounts.get(0).unwrap())?,
+            );
+            add_transfer_auth(
+                &env,
+                &mut auth_entries,
+                pool_info.asset_b.address.clone(),
+                user.clone(),
+                pool.clone(),
+                to_i128(desired_amounts.get(1).unwrap())?,
+            );
+            env.authorize_as_current_contract(auth_entries);
+            let desired_a = to_i128(desired_amounts.get(0).unwrap())?;
+            let desired_b = to_i128(desired_amounts.get(1).unwrap())?;
+            let min_a = to_i128(min_amounts.get(0).unwrap())?;
+            let min_b = to_i128(min_amounts.get(1).unwrap())?;
+            let _: () = env.invoke_contract(
+                &pool,
+                &Symbol::new(&env, "provide_liquidity"),
+                Vec::from_array(
+                    &env,
+                    [
+                        user.into_val(&env),
+                        Option::<i128>::Some(desired_a).into_val(&env),
+                        Option::<i128>::Some(min_a).into_val(&env),
+                        Option::<i128>::Some(desired_b).into_val(&env),
+                        Option::<i128>::Some(min_b).into_val(&env),
+                        Option::<i64>::None.into_val(&env),
+                        Option::<u64>::Some(deadline).into_val(&env),
+                        false.into_val(&env),
+                    ],
+                ),
+            );
+        } else {
+            let mut auth_entries = Vec::new(&env);
+            add_transfer_auth(
+                &env,
+                &mut auth_entries,
+                pool_info.asset_lp_share.address,
+                user.clone(),
+                pool.clone(),
+                to_i128(share_amount)?,
+            );
+            env.authorize_as_current_contract(auth_entries);
+            let _: (i128, i128) = env.invoke_contract(
+                &pool,
+                &Symbol::new(&env, "withdraw_liquidity"),
+                Vec::from_array(
+                    &env,
+                    [
+                        user.into_val(&env),
+                        to_i128(share_amount)?.into_val(&env),
+                        to_i128(min_amounts.get(0).unwrap())?.into_val(&env),
+                        to_i128(min_amounts.get(1).unwrap())?.into_val(&env),
+                        Option::<u64>::Some(deadline).into_val(&env),
+                        Option::<u64>::None.into_val(&env),
+                    ],
+                ),
+            );
+        }
+        env.events().publish(
+            (symbol_short!("copy"), session_id),
+            (source_event_id, pool, kind, quote),
+        );
+        Ok(())
+    }
+
+    /// Execute the Phoenix Stable pool ABI. This is separate from the XYK
+    /// entry point because Stable takes required token amounts and an optional
+    /// minimum share output instead of per-token minimum amounts.
+    pub fn execute_phoenix_stable_op(
+        env: Env,
+        session_id: u32,
+        source_event_id: BytesN<32>,
+        pool: Address,
+        kind: Symbol,
+        quote: i128,
+        desired_amounts: Vec<u128>,
+        min_shares: u128,
+        share_amount: u128,
+        min_amounts: Vec<u128>,
+    ) -> Result<(), Error> {
+        if kind != symbol_short!("deposit") && kind != symbol_short!("withdraw") {
+            return Err(Error::OperationNotAllowed);
+        }
+        if desired_amounts.len() != 2 || min_amounts.len() != 2 {
+            return Err(Error::InvalidEvent);
+        }
+        let event = Self::load_leader_event(&env, &source_event_id)?;
+        let session = Self::load_session(&env, session_id)?;
+        if event.pool != pool || event.kind != kind || event.leader != session.leader {
+            return Err(Error::EventMismatch);
+        }
+        if scale_i128(event.quote, session.coefficient_ppm)? != quote {
+            return Err(Error::EventMismatch);
+        }
+        if kind == symbol_short!("deposit") {
+            if scale_amounts(&env, &event.amounts, session.coefficient_ppm) != desired_amounts {
+                return Err(Error::EventMismatch);
+            }
+        } else {
+            let expected_shares = event
+                .amounts
+                .get(0)
+                .map(|amount| scale_amount(&env, amount, session.coefficient_ppm))
+                .unwrap_or(0);
+            if expected_shares != share_amount {
+                return Err(Error::EventMismatch);
+            }
+        }
+        Self::authorize_copy_op(&env, session_id, &source_event_id, &pool, &kind, quote)?;
+
+        let user = env.current_contract_address();
+        let deadline = env.ledger().timestamp().saturating_add(300);
+        let pool_info: PhoenixPoolInfo =
+            env.invoke_contract(&pool, &Symbol::new(&env, "query_pool_info"), Vec::new(&env));
+        if kind == symbol_short!("deposit") {
+            let mut auth_entries = Vec::new(&env);
+            add_transfer_auth(
+                &env,
+                &mut auth_entries,
+                pool_info.asset_a.address.clone(),
+                user.clone(),
+                pool.clone(),
+                to_i128(desired_amounts.get(0).unwrap())?,
+            );
+            add_transfer_auth(
+                &env,
+                &mut auth_entries,
+                pool_info.asset_b.address.clone(),
+                user.clone(),
+                pool.clone(),
+                to_i128(desired_amounts.get(1).unwrap())?,
+            );
+            env.authorize_as_current_contract(auth_entries);
+            let _: () = env.invoke_contract(
+                &pool,
+                &Symbol::new(&env, "provide_liquidity"),
+                Vec::from_array(
+                    &env,
+                    [
+                        user.into_val(&env),
+                        to_i128(desired_amounts.get(0).unwrap())?.into_val(&env),
+                        to_i128(desired_amounts.get(1).unwrap())?.into_val(&env),
+                        Option::<i64>::None.into_val(&env),
+                        Option::<u64>::Some(deadline).into_val(&env),
+                        Option::<u128>::Some(min_shares).into_val(&env),
+                        false.into_val(&env),
+                    ],
+                ),
+            );
+        } else {
+            let mut auth_entries = Vec::new(&env);
+            add_transfer_auth(
+                &env,
+                &mut auth_entries,
+                pool_info.asset_lp_share.address,
+                user.clone(),
+                pool.clone(),
+                to_i128(share_amount)?,
+            );
+            env.authorize_as_current_contract(auth_entries);
+            let _: (i128, i128) = env.invoke_contract(
+                &pool,
+                &Symbol::new(&env, "withdraw_liquidity"),
+                Vec::from_array(
+                    &env,
+                    [
+                        user.into_val(&env),
+                        to_i128(share_amount)?.into_val(&env),
+                        to_i128(min_amounts.get(0).unwrap())?.into_val(&env),
+                        to_i128(min_amounts.get(1).unwrap())?.into_val(&env),
+                        Option::<u64>::Some(deadline).into_val(&env),
+                        Option::<u64>::None.into_val(&env),
+                    ],
+                ),
+            );
+        }
+        env.events().publish(
+            (symbol_short!("copy"), session_id),
+            (source_event_id, pool, kind, quote),
+        );
+        Ok(())
     }
 
     /// Authorize and invoke one Aquarius standard-pool operation. The policy
@@ -625,6 +1106,10 @@ fn scale_amount(env: &Env, amount: u128, coefficient_ppm: u32) -> u128 {
         .unwrap()
 }
 
+fn to_i128(amount: u128) -> Result<i128, Error> {
+    i128::try_from(amount).map_err(|_| Error::InvalidLimit)
+}
+
 fn proportional_floor(env: &Env, reserve: u128, shares: u128, total_shares: u128) -> u128 {
     U256::from_u128(env, reserve)
         .mul(&U256::from_u128(env, shares))
@@ -644,7 +1129,20 @@ mod test {
     struct MockPool;
 
     #[contract]
+    struct MockStablePool;
+
+    #[contract]
     struct MockToken;
+
+    #[contract]
+    struct MockSoroswapRouter;
+
+    #[contracterror]
+    #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+    #[repr(u32)]
+    enum MockRouterError {
+        Failed = 1,
+    }
 
     #[contractimpl]
     impl MockToken {
@@ -666,6 +1164,14 @@ mod test {
 
     #[contractimpl]
     impl MockPool {
+        pub fn token_0(env: Env) -> Address {
+            Address::generate(&env)
+        }
+
+        pub fn token_1(env: Env) -> Address {
+            Address::generate(&env)
+        }
+
         pub fn get_tokens(env: Env) -> Vec<Address> {
             Vec::new(&env)
         }
@@ -682,6 +1188,23 @@ mod test {
             Address::generate(&env)
         }
 
+        pub fn query_pool_info(env: Env) -> PhoenixPoolInfo {
+            PhoenixPoolInfo {
+                asset_a: PhoenixAsset {
+                    address: Address::generate(&env),
+                    amount: 1_000_000,
+                },
+                asset_b: PhoenixAsset {
+                    address: Address::generate(&env),
+                    amount: 1_000_000,
+                },
+                asset_lp_share: PhoenixAsset {
+                    address: Address::generate(&env),
+                    amount: 1_000_000,
+                },
+            }
+        }
+
         pub fn deposit(env: Env, user: Address, desired_amounts: Vec<u128>, _min_shares: u128) -> (Vec<u128>, u128) {
             if env.storage().instance().get(&symbol_short!("fail")).unwrap_or(false) {
                 panic!("configured mock pool failure");
@@ -690,9 +1213,36 @@ mod test {
             (desired_amounts, 1)
         }
 
+        pub fn provide_liquidity(
+            env: Env,
+            user: Address,
+            _desired_a: Option<i128>,
+            _min_a: Option<i128>,
+            _desired_b: Option<i128>,
+            _min_b: Option<i128>,
+            _slippage: Option<i64>,
+            _deadline: Option<u64>,
+            _auto_stake: bool,
+        ) {
+            env.storage().instance().set(&symbol_short!("user"), &user);
+        }
+
         pub fn withdraw(env: Env, user: Address, share_amount: u128, _min_amounts: Vec<u128>) -> Vec<u128> {
             env.storage().instance().set(&symbol_short!("user"), &user);
             Vec::from_array(&env, [share_amount])
+        }
+
+        pub fn withdraw_liquidity(
+            env: Env,
+            user: Address,
+            share_amount: i128,
+            _min_a: i128,
+            _min_b: i128,
+            _deadline: Option<u64>,
+            _auto_unstake: Option<u64>,
+        ) -> (i128, i128) {
+            env.storage().instance().set(&symbol_short!("user"), &user);
+            (share_amount, share_amount)
         }
 
         pub fn claim(env: Env, user: Address) -> u128 {
@@ -736,6 +1286,88 @@ mod test {
 
         pub fn last_claim_amount(env: Env) -> u128 {
             env.storage().instance().get(&symbol_short!("claimed")).unwrap_or(0)
+        }
+    }
+
+    #[contractimpl]
+    impl MockStablePool {
+        pub fn query_pool_info(env: Env) -> PhoenixPoolInfo {
+            PhoenixPoolInfo {
+                asset_a: PhoenixAsset {
+                    address: Address::generate(&env),
+                    amount: 1_000_000,
+                },
+                asset_b: PhoenixAsset {
+                    address: Address::generate(&env),
+                    amount: 1_000_000,
+                },
+                asset_lp_share: PhoenixAsset {
+                    address: Address::generate(&env),
+                    amount: 1_000_000,
+                },
+            }
+        }
+
+        pub fn provide_liquidity(
+            env: Env,
+            user: Address,
+            _desired_a: i128,
+            _desired_b: i128,
+            _slippage: Option<i64>,
+            _deadline: Option<u64>,
+            _min_shares: Option<u128>,
+            _auto_stake: bool,
+        ) {
+            env.storage().instance().set(&symbol_short!("user"), &user);
+        }
+
+        pub fn withdraw_liquidity(
+            env: Env,
+            user: Address,
+            share_amount: i128,
+            _min_a: i128,
+            _min_b: i128,
+            _deadline: Option<u64>,
+            _auto_unstake: Option<u64>,
+        ) -> (i128, i128) {
+            env.storage().instance().set(&symbol_short!("user"), &user);
+            (share_amount, share_amount)
+        }
+
+        pub fn last_user(env: Env) -> Address {
+            env.storage().instance().get(&symbol_short!("user")).unwrap()
+        }
+    }
+
+    #[contractimpl]
+    impl MockSoroswapRouter {
+        pub fn add_liquidity(
+            _env: Env,
+            _token_a: Address,
+            _token_b: Address,
+            amount_a_desired: i128,
+            amount_b_desired: i128,
+            _amount_a_min: i128,
+            _amount_b_min: i128,
+            to: Address,
+            _deadline: u64,
+        ) -> Result<(i128, i128, i128), MockRouterError> {
+            to.require_auth();
+            Ok((amount_a_desired, amount_b_desired, 123))
+        }
+
+        pub fn remove_liquidity(
+            _env: Env,
+            _token_a: Address,
+            _token_b: Address,
+            liquidity: i128,
+            _amount_a_min: i128,
+            _amount_b_min: i128,
+            to: Address,
+            _deadline: u64,
+        ) -> Result<(i128, i128), MockRouterError> {
+            to.require_auth();
+            Ok((liquidity, liquidity))
         }
     }
 
@@ -1145,6 +1777,280 @@ mod test {
             MockTokenClient::new(&env, &token).last_transfer(),
             (pool_address, policy, 7)
         );
+    }
+
+    #[test]
+    fn soroswap_route_requires_owner_configured_router_and_keeps_budget_intact() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let policy = env.register(CopyPolicy, ());
+        let pool = env.register(MockPool, ());
+        let owner = Address::generate(&env);
+        let relayer = Address::generate(&env);
+        let recorder = Address::generate(&env);
+        let leader = Address::generate(&env);
+        let client = CopyPolicyClient::new(&env, &policy);
+
+        client.initialize(&owner, &relayer);
+        client.set_event_recorder(&recorder);
+        client.register_session(
+            &31,
+            &leader,
+            &Vec::from_array(&env, [pool.clone()]),
+            &true,
+            &100,
+            &100,
+            &100_000,
+        );
+        let event_id = BytesN::from_array(&env, &[31; 32]);
+        client.record_leader_event(
+            &event_id,
+            &leader,
+            &pool,
+            &symbol_short!("deposit"),
+            &Vec::from_array(&env, [10u128, 20u128]),
+            &10,
+            &1,
+        );
+
+        let venue = Symbol::new(&env, "soroswap_amm");
+        assert!(client
+            .try_execute_standard_op(
+                &venue,
+                &31,
+                &event_id,
+                &pool,
+                &symbol_short!("deposit"),
+                &10,
+                &Vec::from_array(&env, [10u128, 20u128]),
+                &0,
+                &0,
+                &Vec::from_array(&env, [0u128, 0u128]),
+                &Address::generate(&env),
+            )
+            .is_err());
+        assert_eq!(client.session(&31).daily_used_quote, 0);
+        assert!(client.try_venue_router(&venue).is_err());
+
+        assert!(client
+            .try_set_venue_router(&Symbol::new(&env, "phoenix"), &Address::generate(&env))
+            .is_err());
+        let router = Address::generate(&env);
+        client.set_venue_router(&venue, &router);
+        assert_eq!(client.venue_router(&venue), router);
+    }
+
+    #[test]
+    fn soroswap_route_executes_deposit_and_withdraw_through_allowlisted_router() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let policy = env.register(CopyPolicy, ());
+        let pool = env.register(MockPool, ());
+        let router = env.register(MockSoroswapRouter, ());
+        let owner = Address::generate(&env);
+        let relayer = Address::generate(&env);
+        let recorder = Address::generate(&env);
+        let leader = Address::generate(&env);
+        let client = CopyPolicyClient::new(&env, &policy);
+        let venue = Symbol::new(&env, "soroswap_amm");
+
+        client.initialize(&owner, &relayer);
+        client.set_event_recorder(&recorder);
+        client.set_venue_router(&venue, &router);
+        client.register_session(
+            &32,
+            &leader,
+            &Vec::from_array(&env, [pool.clone()]),
+            &true,
+            &100,
+            &100,
+            &100_000,
+        );
+
+        let deposit_id = BytesN::from_array(&env, &[32; 32]);
+        client.record_leader_event(
+            &deposit_id,
+            &leader,
+            &pool,
+            &symbol_short!("deposit"),
+            &Vec::from_array(&env, [10u128, 20u128]),
+            &10,
+            &1,
+        );
+        client.execute_standard_op(
+            &venue,
+            &32,
+            &deposit_id,
+            &pool,
+            &symbol_short!("deposit"),
+            &10,
+            &Vec::from_array(&env, [10u128, 20u128]),
+            &100,
+            &0,
+            &Vec::from_array(&env, [9u128, 19u128]),
+            &Address::generate(&env),
+        );
+        assert_eq!(client.session(&32).daily_used_quote, 10);
+
+        let withdraw_id = BytesN::from_array(&env, &[33; 32]);
+        client.record_leader_event(
+            &withdraw_id,
+            &leader,
+            &pool,
+            &symbol_short!("withdraw"),
+            &Vec::from_array(&env, [4u128]),
+            &5,
+            &2,
+        );
+        client.execute_standard_op(
+            &venue,
+            &32,
+            &withdraw_id,
+            &pool,
+            &symbol_short!("withdraw"),
+            &5,
+            &Vec::from_array(&env, [0u128, 0u128]),
+            &0,
+            &4,
+            &Vec::from_array(&env, [3u128, 3u128]),
+            &Address::generate(&env),
+        );
+        assert_eq!(client.session(&32).daily_used_quote, 15);
+    }
+
+    #[test]
+    fn phoenix_xyk_route_uses_explicit_pool_abi_and_rejects_generic_phoenix() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let policy = env.register(CopyPolicy, ());
+        let pool = env.register(MockPool, ());
+        let owner = Address::generate(&env);
+        let relayer = Address::generate(&env);
+        let recorder = Address::generate(&env);
+        let leader = Address::generate(&env);
+        let client = CopyPolicyClient::new(&env, &policy);
+        client.initialize(&owner, &relayer);
+        client.set_event_recorder(&recorder);
+        client.register_session(
+            &41,
+            &leader,
+            &Vec::from_array(&env, [pool.clone()]),
+            &true,
+            &100,
+            &100,
+            &100_000,
+        );
+
+        let deposit_id = BytesN::from_array(&env, &[41; 32]);
+        client.record_leader_event(
+            &deposit_id,
+            &leader,
+            &pool,
+            &symbol_short!("deposit"),
+            &Vec::from_array(&env, [100u128, 200u128]),
+            &10,
+            &1,
+        );
+        assert!(client
+            .try_execute_standard_op(
+                &Symbol::new(&env, "phoenix"),
+                &41,
+                &deposit_id,
+                &pool,
+                &symbol_short!("deposit"),
+                &10,
+                &Vec::from_array(&env, [100u128, 200u128]),
+                &0,
+                &0,
+                &Vec::from_array(&env, [99u128, 199u128]),
+                &Address::generate(&env),
+            )
+            .is_err());
+        client.execute_standard_op(
+            &Symbol::new(&env, "phoenix_xyk"),
+            &41,
+            &deposit_id,
+            &pool,
+            &symbol_short!("deposit"),
+            &10,
+            &Vec::from_array(&env, [100u128, 200u128]),
+            &0,
+            &0,
+            &Vec::from_array(&env, [99u128, 199u128]),
+            &Address::generate(&env),
+        );
+        assert_eq!(MockPoolClient::new(&env, &pool).last_user(), policy);
+
+        let withdraw_id = BytesN::from_array(&env, &[42; 32]);
+        client.record_leader_event(
+            &withdraw_id,
+            &leader,
+            &pool,
+            &symbol_short!("withdraw"),
+            &Vec::from_array(&env, [40u128]),
+            &5,
+            &2,
+        );
+        client.execute_phoenix_xyk_standard_op(
+            &41,
+            &withdraw_id,
+            &pool,
+            &symbol_short!("withdraw"),
+            &5,
+            &Vec::new(&env),
+            &40,
+            &Vec::from_array(&env, [1u128, 1u128]),
+        );
+        assert_eq!(client.session(&41).daily_used_quote, 15);
+    }
+
+    #[test]
+    fn phoenix_stable_route_uses_required_amount_abi() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let policy = env.register(CopyPolicy, ());
+        let pool = env.register(MockStablePool, ());
+        let owner = Address::generate(&env);
+        let relayer = Address::generate(&env);
+        let recorder = Address::generate(&env);
+        let leader = Address::generate(&env);
+        let client = CopyPolicyClient::new(&env, &policy);
+        client.initialize(&owner, &relayer);
+        client.set_event_recorder(&recorder);
+        client.register_session(
+            &43,
+            &leader,
+            &Vec::from_array(&env, [pool.clone()]),
+            &true,
+            &100,
+            &100,
+            &100_000,
+        );
+
+        let event_id = BytesN::from_array(&env, &[43; 32]);
+        client.record_leader_event(
+            &event_id,
+            &leader,
+            &pool,
+            &symbol_short!("deposit"),
+            &Vec::from_array(&env, [100u128, 200u128]),
+            &10,
+            &1,
+        );
+        client.execute_standard_op(
+            &Symbol::new(&env, "phoenix_stable"),
+            &43,
+            &event_id,
+            &pool,
+            &symbol_short!("deposit"),
+            &10,
+            &Vec::from_array(&env, [100u128, 200u128]),
+            &90,
+            &0,
+            &Vec::from_array(&env, [0u128, 0u128]),
+            &Address::generate(&env),
+        );
+        assert_eq!(MockStablePoolClient::new(&env, &pool).last_user(), policy);
     }
 
     #[test]

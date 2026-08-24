@@ -18,6 +18,7 @@ use {
         SorobanRpc, MAINNET_PASSPHRASE,
     },
     metrics::{fee_apr_24h, tvl_from_reserves},
+    tokio::task::JoinSet,
     tracing::{info, warn},
 };
 
@@ -64,25 +65,43 @@ async fn main() -> Result<()> {
     pools.dedup_by(|a, b| a.1 == b.1);
     info!(discovered = pools.len(), "hydrating pools");
 
+    // RPC reads are independent; keep SQLite writes below serial while
+    // hydrating pools concurrently so one slow venue does not stall the full
+    // minute-level snapshot cycle.
+    let total = pools.len();
+    let mut hydrate_tasks = JoinSet::new();
+    for (venue, addr) in pools {
+        let rpc = rpc.clone();
+        hydrate_tasks.spawn(async move {
+            let state = match venue.as_str() {
+                "aquarius" => hydrate_pool(&rpc, &addr).await,
+                "soroswap" | "soroswap_amm" => hydrate_soroswap_pool(&rpc, &addr).await,
+                "phoenix" => hydrate_phoenix_pool(&rpc, &addr).await,
+                "sushi" | "sushi_v3" => hydrate_sushi_pool(&rpc, &addr).await,
+                "comet" => hydrate_comet_pool(&rpc, &addr).await,
+                _ => unreachable!("validated venue during discovery"),
+            };
+            (venue, addr, state)
+        });
+    }
+
     let mut hydrated = Vec::new();
-    for (i, (venue, addr)) in pools.iter().enumerate() {
-        let state = match venue.as_str() {
-            "aquarius" => hydrate_pool(&rpc, addr).await,
-            "soroswap" | "soroswap_amm" => hydrate_soroswap_pool(&rpc, addr).await,
-            "phoenix" => hydrate_phoenix_pool(&rpc, addr).await,
-            "sushi" | "sushi_v3" => hydrate_sushi_pool(&rpc, addr).await,
-            "comet" => hydrate_comet_pool(&rpc, addr).await,
-            _ => unreachable!("validated venue during discovery"),
+    let mut done = 0usize;
+    while let Some(result) = hydrate_tasks.join_next().await {
+        done += 1;
+        let Ok((venue, addr, state)) = result else {
+            warn!(done, total, "pool hydrate task failed");
+            continue;
         };
         match state {
             Ok(state) => {
-                db.upsert_pool_with_venue(&state, venue)?;
+                db.upsert_pool_with_venue(&state, &venue)?;
                 hydrated.push(state);
             }
             Err(e) => warn!(pool = %addr, error = %e, "hydrate failed"),
         }
-        if (i + 1) % 20 == 0 {
-            info!(done = i + 1, total = pools.len(), "hydrate progress");
+        if done % 20 == 0 || done == total {
+            info!(done, total, "hydrate progress");
         }
     }
 

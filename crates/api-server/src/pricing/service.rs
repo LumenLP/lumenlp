@@ -1,6 +1,6 @@
 use {
     crate::pricing::{
-        asset_id::{resolve_freighter_asset_id, FreighterAssetId, NATIVE_SAC_MAINNET},
+        asset_id::{resolve_freighter_asset_id, FreighterAssetId},
         value::{coverage_for, QuoteCoverage, UsdPriceMap},
     },
     serde::Deserialize,
@@ -246,6 +246,7 @@ fn parse_freighter_prices(env: &FreighterEnvelope) -> HashMap<String, f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pricing::asset_id::NATIVE_SAC_MAINNET;
 
     #[test]
     fn parse_freighter_fixture() {
