@@ -388,7 +388,7 @@ button:hover { border-color: var(--accent); }
 .detail-title-row {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 12px;
   margin: 8px 0 10px;
 }
 .detail-subtitle {

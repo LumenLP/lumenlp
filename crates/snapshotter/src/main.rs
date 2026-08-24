@@ -114,8 +114,12 @@ async fn main() -> Result<()> {
 
     for state in &take {
         let Some(prices) = book.required(&state.tokens) else {
-            warn!(pool = %state.address, "skip snapshot — incomplete XLM prices");
-            // Still store with TVL=0 so pool stays catalogued for positions scan.
+            warn!(
+                pool = %state.address,
+                "snapshot stored with missing_price — reserves retained, TVL and volume unavailable"
+            );
+            // Preserve the pool and raw reserves so it remains visible for
+            // metadata, positions, and later price-path recovery.
             db.insert_snapshot(&state.address, 0.0, 0.0, 0.0, &state.reserves)?;
             continue;
         };

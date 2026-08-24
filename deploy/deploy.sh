@@ -57,11 +57,11 @@ if [ -n "\${REDIS_PASSWORD}" ]; then
   chmod 600 /etc/lumenlp/api.env
 fi
 ln -sfn /etc/nginx/sites-available/lumenlp /etc/nginx/sites-enabled/lumenlp
-# The old lpagent site can still match api.lumenlp.xyz and override this vhost.
-# Keep its available config for rollback, but remove only the enabled symlink.
+# Remove the legacy pre-LumenLP site from the active Nginx configuration. Keep
+# its available config untouched so an operator can still inspect or roll back.
 rm -f /etc/nginx/sites-enabled/lpagent
 
-# Stop VPS-hosted web if previously enabled
+# Stop legacy VPS-hosted web if it was enabled by an older deployment.
 systemctl disable --now lpagent-web.service 2>/dev/null || true
 rm -f /etc/systemd/system/lpagent-web.service
 ufw delete allow 3300/tcp 2>/dev/null || true

@@ -15,6 +15,7 @@ use {
     anyhow::{anyhow, bail, Result},
     serde_json::Value,
     stellar_xdr::curr as xdr,
+    tokio::task::JoinSet,
 };
 
 pub const FACTORY_ALL_PAIRS_LENGTH_METHOD: &str = "all_pairs_length";
@@ -136,11 +137,35 @@ pub async fn discover_pool_addresses(rpc: &SorobanRpc, factory_address: &str) ->
             .await?,
     )?;
     let mut pools = Vec::with_capacity(length as usize);
-    for index in 0..length {
-        let value = rpc
-            .simulate_call(factory_address, FACTORY_ALL_PAIRS_METHOD, vec![xdr::ScVal::U32(index)])
-            .await?;
-        pools.push(scval_to_address(&value)?);
+    let mut next_index = 0u32;
+    let mut tasks: JoinSet<Result<String>> = JoinSet::new();
+    const CONCURRENCY: usize = 16;
+
+    for _ in 0..CONCURRENCY.min(length as usize) {
+        let rpc = rpc.clone();
+        let factory = factory_address.to_owned();
+        tasks.spawn(async move {
+            let value = rpc
+                .simulate_call(&factory, FACTORY_ALL_PAIRS_METHOD, vec![xdr::ScVal::U32(next_index)])
+                .await?;
+            Ok(scval_to_address(&value)?)
+        });
+        next_index += 1;
+    }
+    while let Some(result) = tasks.join_next().await {
+        pools.push(result??);
+        if next_index < length {
+            let rpc = rpc.clone();
+            let factory = factory_address.to_owned();
+            let index = next_index;
+            tasks.spawn(async move {
+                let value = rpc
+                    .simulate_call(&factory, FACTORY_ALL_PAIRS_METHOD, vec![xdr::ScVal::U32(index)])
+                    .await?;
+                Ok(scval_to_address(&value)?)
+            });
+            next_index += 1;
+        }
     }
     pools.sort_unstable();
     pools.dedup();

@@ -682,6 +682,7 @@ async fn indexer_status(State(state): State<AppState>) -> impl IntoResponse {
 struct PoolListQuery {
     page: Option<usize>,
     limit: Option<usize>,
+    q: Option<String>,
     /// `dex` is the public UI spelling; `venue` is retained for API clients.
     dex: Option<String>,
     venue: Option<String>,
@@ -707,6 +708,15 @@ fn paginate_pool_body(mut body: Value, query: &PoolListQuery) -> Value {
         }
         .to_string()
     });
+    if let Some(query_text) = query
+        .q
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let query_text = query_text.to_ascii_lowercase();
+        pools.retain(|pool| pool_matches_query(pool, &query_text));
+    }
     if let Some(requested_venue) = requested_venue {
         pools.retain(|pool| {
             let Some(venue) = pool.get("venue").and_then(Value::as_str) else {
@@ -720,7 +730,9 @@ fn paginate_pool_body(mut body: Value, query: &PoolListQuery) -> Value {
         });
     }
     let total = pools.len();
-    let limit = query.limit.unwrap_or(total.max(1)).clamp(1, 100);
+    // Keep the normal UI request to a single page while allowing clients to
+    // fetch the full catalogue without opening one request per 100 pools.
+    let limit = query.limit.unwrap_or(total.max(1)).clamp(1, 500);
     let page = query.page.unwrap_or(1).max(1);
     let start = page.saturating_sub(1).saturating_mul(limit).min(total);
     let end = start.saturating_add(limit).min(total);
@@ -733,6 +745,33 @@ fn paginate_pool_body(mut body: Value, query: &PoolListQuery) -> Value {
         "pages": total.div_ceil(limit),
     });
     body
+}
+
+fn pool_matches_query(pool: &Value, query: &str) -> bool {
+    let mut haystack = String::new();
+    for key in ["address", "venue", "pool_type"] {
+        if let Some(value) = pool.get(key).and_then(Value::as_str) {
+            haystack.push_str(value);
+            haystack.push('\n');
+        }
+    }
+    if let Some(tokens) = pool.get("tokens").and_then(Value::as_array) {
+        for token in tokens.iter().filter_map(Value::as_str) {
+            haystack.push_str(token);
+            haystack.push('\n');
+        }
+    }
+    if let Some(metadata) = pool.get("token_meta").and_then(Value::as_array) {
+        for item in metadata {
+            for key in ["address", "symbol", "name", "issuer", "domain"] {
+                if let Some(value) = item.get(key).and_then(Value::as_str) {
+                    haystack.push_str(value);
+                    haystack.push('\n');
+                }
+            }
+        }
+    }
+    haystack.to_ascii_lowercase().contains(query)
 }
 
 async fn list_pools(State(state): State<AppState>, Query(query): Query<PoolListQuery>) -> impl IntoResponse {
@@ -1601,17 +1640,17 @@ async fn lp_leaders(State(state): State<AppState>, Query(q): Query<LeadersBoardQ
         let index_db = state.index_db.lock().unwrap();
         index_db.actor_fee_snapshot_totals().unwrap_or_default()
     };
+    let unclaimed_fee_deltas = {
+        let index_db = state.index_db.lock().unwrap();
+        index_db
+            .actor_fee_snapshot_deltas(since_ts)
+            .unwrap_or_default()
+    };
     if sort == "fees" {
         leaders.sort_by(|a, b| {
             let total = |leader: &crate::index_db::TopLiquidityActor| {
-                fee_snapshots
-                    .get(&leader.address)
-                    .and_then(|snapshot| {
-                        snapshot
-                            .observed_at
-                            .map(|_| leader.claim_quote_xlm + snapshot.unclaimed_quote_xlm)
-                    })
-                    .unwrap_or(leader.claim_quote_xlm)
+                leader.claim_quote_xlm
+                    + unclaimed_fee_deltas.get(&leader.address).copied().unwrap_or(0.0)
             };
             total(b).partial_cmp(&total(a)).unwrap_or(std::cmp::Ordering::Equal)
         });
@@ -1623,7 +1662,8 @@ async fn lp_leaders(State(state): State<AppState>, Query(q): Query<LeadersBoardQ
         .map(|a| {
             let snapshot = fee_snapshots.get(&a.address).cloned().unwrap_or_default();
             let unclaimed_fee = snapshot.observed_at.map(|_| snapshot.unclaimed_quote_xlm);
-            let accrued_fee = unclaimed_fee.map(|unclaimed| a.claim_quote_xlm + unclaimed);
+            let unclaimed_fee_delta = unclaimed_fee_deltas.get(&a.address).copied();
+            let accrued_fee = unclaimed_fee_delta.map(|delta| a.claim_quote_xlm + delta);
             let fee_status = if snapshot.position_count == 0 {
                 "not_verified"
             } else if snapshot.observed_at.is_some() {
@@ -1650,6 +1690,8 @@ async fn lp_leaders(State(state): State<AppState>, Query(q): Query<LeadersBoardQ
                 "claim_quote_usd": to_usd(a.claim_quote_xlm),
                 "unclaimed_fee_quote_xlm": unclaimed_fee,
                 "unclaimed_fee_quote_usd": unclaimed_fee.and_then(to_usd),
+                "unclaimed_fee_delta_quote_xlm": unclaimed_fee_delta,
+                "unclaimed_fee_delta_quote_usd": unclaimed_fee_delta.and_then(to_usd),
                 "accrued_fee_quote_xlm": accrued_fee,
                 "accrued_fee_quote_usd": accrued_fee.and_then(to_usd),
                 "fee_status": fee_status,
@@ -1682,7 +1724,7 @@ async fn lp_leaders(State(state): State<AppState>, Query(q): Query<LeadersBoardQ
             "actor_count": fee_snapshots.len(),
             "refresh_cadence_seconds": 60,
         },
-        "honesty": "Claimed fees come from indexed claim events. Accrued fees add the latest verified unclaimed position fees when the venue reader supports them; missing venue coverage is left unavailable rather than estimated.",
+        "honesty": "Windowed claimed fees are indexed claim events. Windowed accrued fees add the change in verified unclaimed position fees between the window boundary and the latest snapshot; missing venue coverage is left unavailable rather than estimated.",
     });
     if let Some(client) = state.redis.as_ref() {
         if let Ok(serialized) = serde_json::to_string(&response_body) {
@@ -1792,6 +1834,7 @@ pub async fn refresh_leader_fee_snapshots(state: AppState) {
             // not leave stale unclaimed fees in the accrued total.
             let observed_at = Utc::now().timestamp();
             let db = state.index_db.lock().unwrap();
+            let _ = db.record_actor_fee_snapshot_history_zeroed(&actor, observed_at);
             let _ = db.clear_actor_fee_snapshots(&actor);
             for position in positions {
                 // Persist the verified position even when this venue does not
@@ -1803,6 +1846,15 @@ pub async fn refresh_leader_fee_snapshots(state: AppState) {
                     "fee_unavailable"
                 };
                 let _ = db.upsert_actor_fee_snapshot(
+                    &actor,
+                    &position.pool_address,
+                    &position.venue,
+                    position.fees_unclaimed_quote,
+                    position.value_quote,
+                    status,
+                    observed_at,
+                );
+                let _ = db.insert_actor_fee_snapshot_history(
                     &actor,
                     &position.pool_address,
                     &position.venue,
@@ -2972,6 +3024,7 @@ mod tests {
         let query = PoolListQuery {
             page: Some(1),
             limit: Some(1),
+            q: None,
             dex: Some("soroswap".into()),
             venue: None,
             refresh: None,
@@ -2983,6 +3036,7 @@ mod tests {
         let query = PoolListQuery {
             page: Some(1),
             limit: Some(1),
+            q: None,
             dex: Some("soroswap_amm".into()),
             venue: None,
             refresh: None,
@@ -3003,12 +3057,36 @@ mod tests {
         let query = PoolListQuery {
             page: Some(1),
             limit: Some(10),
+            q: None,
             dex: Some("sushi_v3".into()),
             venue: None,
             refresh: None,
         };
         let filtered = paginate_pool_body(json!({"pools": [{"address": "D", "venue": "sushi"}]}), &query);
         assert_eq!(filtered["pagination"]["total"], 1);
+    }
+
+    #[test]
+    fn pool_pagination_searches_addresses_and_token_metadata() {
+        let query = PoolListQuery {
+            page: Some(1),
+            limit: Some(10),
+            q: Some("usdc".into()),
+            dex: None,
+            venue: None,
+            refresh: None,
+        };
+        let filtered = paginate_pool_body(
+            json!({
+                "pools": [
+                    {"address": "CAAAAA", "venue": "aquarius", "tokens": ["XLM"]},
+                    {"address": "CBBBBB", "venue": "soroswap_amm", "token_meta": [{"symbol": "USDC"}]}
+                ]
+            }),
+            &query,
+        );
+        assert_eq!(filtered["pagination"]["total"], 1);
+        assert_eq!(filtered["pools"][0]["address"], "CBBBBB");
     }
 
     #[test]

@@ -296,6 +296,19 @@ impl IndexDb {
             );
             CREATE INDEX IF NOT EXISTS idx_actor_fee_snapshots_actor
               ON actor_fee_snapshots(actor, observed_at DESC);
+
+            CREATE TABLE IF NOT EXISTS actor_fee_snapshot_history (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              actor TEXT NOT NULL,
+              pool_address TEXT NOT NULL,
+              venue TEXT NOT NULL,
+              unclaimed_quote_xlm REAL,
+              position_value_quote_xlm REAL,
+              status TEXT NOT NULL,
+              observed_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_actor_fee_history_actor_pool_time
+              ON actor_fee_snapshot_history(actor, pool_address, observed_at DESC, id DESC);
             "#,
         )?;
         self.ensure_column("copy_sessions", "watermark_event_id", "TEXT NOT NULL DEFAULT ''")?;
@@ -936,6 +949,123 @@ impl IndexDb {
             ],
         )?;
         Ok(())
+    }
+
+    pub fn insert_actor_fee_snapshot_history(
+        &self,
+        actor: &str,
+        pool_address: &str,
+        venue: &str,
+        unclaimed_quote_xlm: Option<f64>,
+        position_value_quote_xlm: Option<f64>,
+        status: &str,
+        observed_at: i64,
+    ) -> Result<()> {
+        self.conn.execute(
+            r#"
+            INSERT INTO actor_fee_snapshot_history
+              (actor, pool_address, venue, unclaimed_quote_xlm,
+               position_value_quote_xlm, status, observed_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            "#,
+            params![
+                actor,
+                pool_address,
+                venue,
+                unclaimed_quote_xlm,
+                position_value_quote_xlm,
+                status,
+                observed_at
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Mark the actor's previously known positions as zero before replacing
+    /// the current set. A later insert at the same timestamp supersedes the
+    /// zero for positions that are still open.
+    pub fn record_actor_fee_snapshot_history_zeroed(&self, actor: &str, observed_at: i64) -> Result<()> {
+        let mut stmt = self.conn.prepare(
+            "SELECT pool_address, venue FROM actor_fee_snapshots WHERE actor = ?1",
+        )?;
+        let rows = stmt.query_map(params![actor], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        for row in rows {
+            let (pool_address, venue) = row?;
+            self.insert_actor_fee_snapshot_history(
+                actor,
+                &pool_address,
+                &venue,
+                Some(0.0),
+                Some(0.0),
+                "ok",
+                observed_at,
+            )?;
+        }
+        Ok(())
+    }
+
+    pub fn actor_fee_snapshot_deltas(&self, since_ts: i64) -> Result<HashMap<String, f64>> {
+        let mut baseline = HashMap::<(String, String), f64>::new();
+        let mut unavailable = HashSet::<String>::new();
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT h.actor, h.pool_address, COALESCE(h.unclaimed_quote_xlm, 0)
+            FROM actor_fee_snapshot_history h
+            WHERE h.observed_at <= ?1
+              AND h.id = (
+                SELECT h2.id
+                FROM actor_fee_snapshot_history h2
+                WHERE h2.actor = h.actor
+                  AND h2.pool_address = h.pool_address
+                  AND h2.observed_at <= ?1
+                ORDER BY h2.observed_at DESC, h2.id DESC
+                LIMIT 1
+              )
+            "#,
+        )?;
+        let rows = stmt.query_map(params![since_ts], |row| {
+            Ok((
+                (row.get::<_, String>(0)?, row.get::<_, String>(1)?),
+                row.get::<_, f64>(2)?,
+            ))
+        })?;
+        for row in rows {
+            let (key, value) = row?;
+            baseline.insert(key, value);
+        }
+
+        let mut deltas = HashMap::<String, f64>::new();
+        let mut current_stmt = self.conn.prepare(
+            "SELECT actor, pool_address, COALESCE(unclaimed_quote_xlm, 0) FROM actor_fee_snapshots WHERE actor GLOB 'G*'",
+        )?;
+        let current_rows = current_stmt.query_map([], |row| {
+            Ok((
+                (row.get::<_, String>(0)?, row.get::<_, String>(1)?),
+                row.get::<_, f64>(2)?,
+            ))
+        })?;
+        for row in current_rows {
+            let ((actor, pool), current) = row?;
+            let Some(previous) = baseline.remove(&(actor.clone(), pool)) else {
+                // A snapshot created after the requested window has no valid
+                // starting value. Do not treat its current fee as windowed
+                // accrual; wait until a real boundary snapshot exists.
+                unavailable.insert(actor);
+                continue;
+            };
+            *deltas.entry(actor).or_default() += current - previous;
+        }
+        for ((actor, _pool), previous) in baseline {
+            if !unavailable.contains(&actor) {
+                *deltas.entry(actor).or_default() -= previous;
+            }
+        }
+        for actor in unavailable {
+            deltas.remove(&actor);
+        }
+        Ok(deltas)
     }
 
     pub fn clear_actor_fee_snapshots(&self, actor: &str) -> Result<()> {

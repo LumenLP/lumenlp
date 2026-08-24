@@ -6,7 +6,6 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { TokenPairMark, tokenVisualsFromMeta } from "@/components/TokenIdentity";
 import {
   fetchPools,
-  fetchVenues,
   fmtNum,
   fmtPct,
   fmtTs,
@@ -96,10 +95,6 @@ function venueLabel(venue: string | null | undefined) {
   return !venue || venue === "unknown" ? "Unknown DEX" : venue;
 }
 
-function venueAccessLabel(venue: string | null | undefined, copyEnabledVenues: Set<string>) {
-  return venue && copyEnabledVenues.has(venue) ? "Copy enabled" : "Analytics only";
-}
-
 function tvlStatusLabel(status: PoolRow["tvl_status"]) {
   if (status === "missing_price") return "Price unavailable";
   if (status === "empty_reserves") return "Empty reserves";
@@ -165,9 +160,6 @@ function PoolsPageInner() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const [pools, setPools] = useState<PoolRow[]>([]);
-  const [copyEnabledVenues, setCopyEnabledVenues] = useState<Set<string>>(
-    () => new Set(["aquarius"]),
-  );
   const [quote, setQuote] = useState<QuoteInfo | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [indexedPoolCount, setIndexedPoolCount] = useState<number | null>(null);
@@ -259,23 +251,10 @@ function PoolsPageInner() {
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    Promise.allSettled([fetchPools(), fetchVenues()])
-      .then(([poolsResult, venuesResult]) => {
+    fetchPools()
+      .then((r) => {
         if (cancelled) return;
-        if (poolsResult.status === "rejected") {
-          throw poolsResult.reason;
-        }
-        const r = poolsResult.value;
         setPools(r.pools ?? []);
-        if (venuesResult.status === "fulfilled") {
-          setCopyEnabledVenues(
-            new Set(
-              venuesResult.value.venues
-                .filter((venue) => venue.copy_execution_enabled)
-                .map((venue) => venue.venue_id),
-            ),
-          );
-        }
         setQuote(r.quote ?? null);
         setIndexedPoolCount(r.indexed_pool_count ?? r.pools?.length ?? 0);
         setLastSnapshotAt(r.last_snapshot_at ?? null);
@@ -842,7 +821,6 @@ function PoolsPageInner() {
                     <td>{fmtNum(p.activity?.swap_count ?? 0, 0)}</td>
                     <td className="muted">
                       <span className="badge">{venueLabel(p.venue)}</span>
-                      <div style={{ fontSize: "0.68rem", marginTop: "0.2rem" }}>{venueAccessLabel(p.venue, copyEnabledVenues)}</div>
                     </td>
                     <td className="muted"><span className="badge">{poolTypeLabel(p.pool_type)}</span></td>
 	                    <td className="muted">{fmtUnixTs(p.activity?.last_event_at)}</td>
@@ -873,7 +851,6 @@ function PoolsPageInner() {
                       <span className="badge">{pool.fee_bps} bps</span>
                       <span className="badge">{poolTypeLabel(pool.pool_type)}</span>
                       <span className="badge">{venueLabel(pool.venue)}</span>
-                      <span className="badge">{venueAccessLabel(pool.venue, copyEnabledVenues)}</span>
                       {tvlStatusLabel(pool.tvl_status) ? <span className="badge">{tvlStatusLabel(pool.tvl_status)}</span> : null}
                     </div>
                   </div>

@@ -445,9 +445,6 @@ function PoolDetailInner() {
           <p className="detail-subtitle">{pairSubtitle || address}</p>
           <div className="detail-meta-row">
             <span className="badge">{venueLabel(detail?.venue)}</span>
-            <span className="badge">
-              {venueCopyEnabled(detail?.venue) ? "Copy enabled" : "Analytics only"}
-            </span>
             <span className="badge">{poolTypeLabel(detail?.pool_type)}</span>
             <span className="badge">{detail?.fee_bps ?? 0} bps</span>
             {score != null ? <span className="badge">score {fmtNum(score, 2)}</span> : null}

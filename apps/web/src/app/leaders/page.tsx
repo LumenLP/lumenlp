@@ -226,7 +226,7 @@ function LeadersInner() {
             {visibleBoard.map((row, i) => {
               const feeCap =
                 ratioPct(row.fee_capital_ratio) ??
-                feeCapitalPct(row.claim_quote_xlm, row.deposit_quote_xlm);
+                feeCapitalPct(row.accrued_fee_quote_xlm ?? row.claim_quote_xlm, row.deposit_quote_xlm);
               return (
                 <div
                   key={row.address}
@@ -264,7 +264,9 @@ function LeadersInner() {
                     {row.accrued_fee_quote_xlm != null && row.unclaimed_fee_quote_xlm != null
                       ? ` · ${quoteLabel(row.unclaimed_fee_quote_usd, row.unclaimed_fee_quote_xlm)} unclaimed`
                       : row.accrued_fee_quote_xlm == null
-                        ? " · unclaimed not verified"
+                        ? row.fee_status === "verified" && row.unclaimed_fee_quote_xlm != null
+                          ? ` · ${windowDays}d baseline pending`
+                          : " · unclaimed not verified"
                         : null}
                     {row.accrued_fee_quote_xlm == null && row.position_value_quote_xlm != null
                       ? ` · position ${fmtNum(row.position_value_quote_xlm, 1)} XLM`

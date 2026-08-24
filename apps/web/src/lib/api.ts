@@ -143,6 +143,8 @@ export type LeaderBoardRow = {
   claim_quote_usd?: number | null;
   unclaimed_fee_quote_xlm?: number | null;
   unclaimed_fee_quote_usd?: number | null;
+  unclaimed_fee_delta_quote_xlm?: number | null;
+  unclaimed_fee_delta_quote_usd?: number | null;
   accrued_fee_quote_xlm?: number | null;
   accrued_fee_quote_usd?: number | null;
   fee_status?: "verified" | "unavailable" | "not_verified" | string;
@@ -273,6 +275,12 @@ export type PositionsResponse = {
 
 export type PoolsResponse = {
   pools: PoolRow[];
+  pagination?: {
+    page: number;
+    limit: number;
+    total: number;
+    pages: number;
+  };
   quote?: QuoteInfo;
   indexed_pool_count?: number;
   last_snapshot_at?: string | null;
@@ -443,7 +451,24 @@ export function fetchLpLeaders(limit = 25, windowDays = 30, sort: "fees" | "acti
 }
 
 export function fetchPools() {
-  return getJson<PoolsResponse>("/v1/pools");
+  return getJson<PoolsResponse>("/v1/pools?limit=500&page=1").then(async (first) => {
+    const pages = first.pagination?.pages ?? 1;
+    if (pages <= 1) return first;
+
+    const rest = await Promise.all(
+      Array.from({ length: pages - 1 }, (_, index) =>
+        getJson<PoolsResponse>(`/v1/pools?limit=500&page=${index + 2}`),
+      ),
+    );
+    return {
+      ...first,
+      pools: [first, ...rest].flatMap((page) => page.pools ?? []),
+      pagination: {
+        ...first.pagination!,
+        page: 1,
+      },
+    };
+  });
 }
 
 export function fetchVenues() {

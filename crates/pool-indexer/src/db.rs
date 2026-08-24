@@ -94,6 +94,11 @@ impl IndexDb {
               ON pool_events(pool_address, created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_pool_events_kind_created
               ON pool_events(kind, created_at DESC);
+            -- Leader rankings group lifecycle events by the actor embedded in
+            -- the normalized event body. Keep this expression indexed so a
+            -- cache miss does not repeatedly scan and parse the full event log.
+            CREATE INDEX IF NOT EXISTS idx_pool_events_actor_kind_created
+              ON pool_events(json_extract(body_json, '$.derived.actor'), kind, created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_pool_events_ledger
               ON pool_events(ledger);
 
