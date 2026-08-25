@@ -193,7 +193,7 @@ TVL / fee metrics
 lumenlp.db
 ```
 
-The current snapshotter runs as a systemd timer every five minutes and snapshots the configured top-N pools by reserve depth. A pool can remain in the catalogue even when its current price path is incomplete; in that case its snapshot is stored with an unavailable or zero-valued quote metric rather than an invented price.
+The current snapshotter runs as a systemd timer every minute and snapshots the configured top-N pools by reserve depth. The indexer copies these observations into five-minute buckets for rollups. A pool can remain in the catalogue even when its current price path is incomplete; in that case its snapshot is stored with an unavailable or zero-valued quote metric rather than an invented price.
 
 ### Event and swap indexing
 
@@ -323,6 +323,52 @@ Fee/TVL(window) = estimated fees in window / current TVL
 ```
 
 It is not a guaranteed APR and should be interpreted together with data coverage, liquidity changes, and pool activity.
+
+### Time windows and Leader fee accounting
+
+Pool windows are fixed relative to the latest indexed observation: `5m` is the
+latest five minutes, `1h` the latest hour, `6h` the latest six hours, and
+`24h` the latest day. For each pool, the indexer filters swaps by
+`created_at` and computes:
+
+```text
+volume(window) = sum(swap.volume_quote)
+fee(window)    = sum(swap.fee_quote)
+Fee/TVL(window) = fee(window) / current_TVL
+```
+
+The indexer stores five-minute pool snapshots and derives rollups from those
+snapshots plus the canonical swap event table. The rollup retains average TVL
+for historical context, while the API headline uses the latest valid current
+TVL. Missing price coverage remains unavailable; LumenLP does not invent a
+quote price. Pool Fee/TVL is therefore distinct from a Leader's LP fee data.
+
+Leader claimed fees come from canonical indexed `claim_fees` and
+`claim_protocol_fee` events. They are not re-recorded as a synthetic balance
+every minute; the event log is the source of truth and the selected time
+window filters those events by `created_at`.
+
+Unclaimed fees are venue-specific position reads. Each successful background
+refresh records the latest value per `(actor, pool, venue)` in
+`actor_fee_snapshots` and appends an observation to
+`actor_fee_snapshot_history`, including `observed_at`, unclaimed fee, position
+value, and status. The nominal refresh cadence is one minute, although a
+rotating batch can make long-tail actors less frequent than active actors.
+
+When both boundaries are available, the windowed accrued fee is calculated as:
+
+```text
+accrued_fee(window)
+  = sum(claimed_fee_events in window)
+  + current_unclaimed_fee
+  - unclaimed_fee_at_window_start
+```
+
+The unclaimed subtraction is performed per pool before aggregation. If the
+starting snapshot is missing, or a venue cannot verify the position, the
+unclaimed delta is marked unavailable rather than treating the current
+unclaimed value as newly earned. A new window can therefore show a pending
+baseline until enough historical snapshots have accumulated.
 
 ### Leader activity
 
@@ -807,7 +853,7 @@ The deployment process must preserve both databases. In particular, an existing 
 Private deployment host
   ├── private Stellar RPC     RPC service
   ├── pool-indexer             systemd, 30s polling
-  ├── snapshotter              systemd timer, 5m interval
+  ├── snapshotter              systemd timer, 1m interval
   ├── api-server               internal API service
   └── nginx                    api.lumenlp.xyz → API server
 
