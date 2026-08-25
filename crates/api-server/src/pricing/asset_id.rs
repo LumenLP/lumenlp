@@ -15,13 +15,6 @@ impl FreighterAssetId {
             Self::Classic { code, issuer } => format!("{code}:{issuer}"),
         }
     }
-
-    pub fn as_stellar_expert_key(&self) -> Option<String> {
-        match self {
-            Self::Native => Some("XLM".to_string()),
-            Self::Classic { code, issuer } => Some(format!("{code}-{issuer}")),
-        }
-    }
 }
 
 /// Resolve Freighter id from contract address, optional registry issuer,
