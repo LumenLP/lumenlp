@@ -512,6 +512,12 @@ operation kind, quote limits, and expiry before it writes the updated daily
 budget and replay marker. A downstream Aquarius failure rolls back the
 Soroban transaction, including those policy writes.
 
+Successful copy execution emits the typed Soroban `CopyExecuted` event. Its
+topics remain `(copy, session_id)` and its Vec data remains
+`(source_event_id, pool, kind, quote)`. This stable event shape gives the
+indexer and operational tooling a deterministic execution record without
+introducing a second off-chain success signal.
+
 For coefficient-enabled sessions, the contract computes the scaled quote as
 `floor(recorded_quote × coefficient_ppm / 1,000,000)`. Deposit token amounts
 are scaled with checked `U256` arithmetic and compared against the submitted
