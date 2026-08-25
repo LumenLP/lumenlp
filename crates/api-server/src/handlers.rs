@@ -1903,12 +1903,14 @@ async fn refresh_one_actor(
         let db = state.db.lock().unwrap();
         let mut grouped: HashMap<String, Vec<String>> = HashMap::new();
         for pool in pools {
-            let venue = db
+            let Some(venue) = db
                 .pool_meta(&pool)
                 .ok()
                 .flatten()
                 .map(|(_, _, _, venue)| venue)
-                .unwrap_or_else(|| "aquarius".into());
+            else {
+                continue;
+            };
             grouped.entry(venue).or_default().push(pool);
         }
         grouped
@@ -1976,12 +1978,14 @@ async fn load_actor_positions(
         let db = state.db.lock().unwrap();
         let mut grouped: HashMap<String, Vec<String>> = HashMap::new();
         for pool in pools {
-            let venue = db
+            let Some(venue) = db
                 .pool_meta(pool)
                 .ok()
                 .flatten()
                 .map(|(_, _, _, venue)| venue)
-                .unwrap_or_else(|| "aquarius".into());
+            else {
+                continue;
+            };
             grouped.entry(venue).or_default().push(pool.clone());
         }
         grouped
