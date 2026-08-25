@@ -171,6 +171,11 @@ counter and owns a time lease. If the worker stops before reporting a terminal
 result, an expired lease returns to `pending` for retry. The source event ID
 remains unique, so retrying a claim cannot create a duplicate recorder event.
 
+The human-readable indexed event ID is retained in the database. Before a
+relayer sends it to Soroban, it is deterministically encoded as a zero-padded
+32-byte value for the policy contract's `BytesN<32>` replay key; IDs longer
+than 32 bytes are rejected rather than truncated.
+
 ## Repository Structure
 
 ```text

@@ -19,6 +19,18 @@ pub struct RecorderEvent {
     pub created_at: i64,
 }
 
+/// Encode an indexed event ID for the Soroban `BytesN<32>` replay key.
+/// Stellar ledger-operation IDs currently fit in 32 bytes; zero padding keeps
+/// the mapping deterministic without changing the human-readable DB key.
+pub fn source_event_id_bytes(source_event_id: &str) -> Option<[u8; 32]> {
+    if source_event_id.len() > 32 || !source_event_id.is_ascii() {
+        return None;
+    }
+    let mut encoded = [0u8; 32];
+    encoded[..source_event_id.len()].copy_from_slice(source_event_id.as_bytes());
+    Some(encoded)
+}
+
 /// Convert an indexed LP event into the exact payload shape expected by the
 /// Soroban recorder. Events without complete integer amounts or quote data are
 /// withheld rather than recorded with invented values.
@@ -132,5 +144,13 @@ mod tests {
             "GLEADER"
         )
         .is_none());
+    }
+
+    #[test]
+    fn source_event_id_encoding_is_deterministic_and_padded() {
+        let encoded = source_event_id_bytes("ledger-op-1").unwrap();
+        assert_eq!(&encoded[..11], b"ledger-op-1");
+        assert!(encoded[11..].iter().all(|byte| *byte == 0));
+        assert!(source_event_id_bytes(&"x".repeat(33)).is_none());
     }
 }
