@@ -1598,6 +1598,7 @@ async fn lp_leaders(State(state): State<AppState>, Query(q): Query<LeadersBoardQ
         {
             let refresh_state = state.clone();
             let refresh_flag = Arc::clone(&state.leader_list_refreshing);
+            let refresh_key = local_key.clone();
             let refresh_query = LeadersBoardQuery {
                 limit: Some(limit),
                 window_days: Some(window_days),
@@ -1608,6 +1609,7 @@ async fn lp_leaders(State(state): State<AppState>, Query(q): Query<LeadersBoardQ
                     refresh_flag.store(false, Ordering::Release);
                     return;
                 };
+                refresh_state.leader_list_cache.lock().unwrap().remove(&refresh_key);
                 runtime.block_on(async move {
                     let _ = lp_leaders(State(refresh_state), Query(refresh_query)).await;
                 });
