@@ -4,7 +4,7 @@ use {
         copy_policy::{coefficient_ppm, validate_copy_op, PolicyReject},
         index_db::{
             CopyOpRow, CopySessionRow, IndexDb, IndexerStatus, PoolActivityRow, PoolActivitySummaryRow, PoolEventRow,
-            PoolRollupRow,
+            PoolRollupRow, RecorderOutboxStatus,
         },
         pricing::{
             service::{PriceService, QuoteMeta},
@@ -613,16 +613,31 @@ async fn health() -> impl IntoResponse {
     Json(json!({ "ok": true }))
 }
 
+fn recorder_health(status: &RecorderOutboxStatus, now: i64) -> (&'static str, Option<i64>) {
+    let pending_age_seconds = status
+        .oldest_pending_at
+        .map(|created_at| now.saturating_sub(created_at).max(0));
+    let degraded = status.failed > 0 || pending_age_seconds.is_some_and(|age| age > 300);
+    (if degraded { "degraded" } else { "ok" }, pending_age_seconds)
+}
+
 async fn recorder_status(State(state): State<AppState>) -> impl IntoResponse {
     let index_db = state.index_db.lock().unwrap();
     match index_db.recorder_outbox_status() {
-        Ok(status) => Json(json!({
-            "pending": status.pending,
-            "submitted": status.submitted,
-            "failed": status.failed,
-            "oldest_pending_at": status.oldest_pending_at,
-        }))
-        .into_response(),
+        Ok(status) => {
+            let now = Utc::now().timestamp();
+            let (health, pending_age_seconds) = recorder_health(&status, now);
+            Json(json!({
+                "health": health,
+                "pending": status.pending,
+                "submitted": status.submitted,
+                "failed": status.failed,
+                "oldest_pending_at": status.oldest_pending_at,
+                "pending_age_seconds": pending_age_seconds,
+                "observed_at": now,
+            }))
+            .into_response()
+        }
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": error.to_string(), "code": "db_error" })),
@@ -3132,6 +3147,24 @@ mod tests {
                 Some("pool_not_allowed: copy policy rejected".to_string())
             )
         );
+    }
+
+    #[test]
+    fn recorder_health_flags_failed_or_stale_pending_work() {
+        let status = RecorderOutboxStatus {
+            pending: 1,
+            submitted: 0,
+            failed: 0,
+            oldest_pending_at: Some(700),
+        };
+        assert_eq!(recorder_health(&status, 1_000), ("ok", Some(300)));
+        assert_eq!(recorder_health(&status, 1_001), ("degraded", Some(301)));
+
+        let failed = RecorderOutboxStatus {
+            failed: 1,
+            ..status
+        };
+        assert_eq!(recorder_health(&failed, 1_000), ("degraded", Some(300)));
     }
 
     #[test]

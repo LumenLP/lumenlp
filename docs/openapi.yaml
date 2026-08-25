@@ -179,10 +179,13 @@ paths:
               schema:
                 type: object
                 properties:
+                  health: { type: string, enum: [ok, degraded] }
                   pending: { type: integer }
                   submitted: { type: integer }
                   failed: { type: integer }
                   oldest_pending_at: { type: integer, nullable: true }
+                  pending_age_seconds: { type: integer, nullable: true }
+                  observed_at: { type: integer, format: int64 }
   /v1/copy/sessions:
     get:
       summary: List copy sessions for follower
