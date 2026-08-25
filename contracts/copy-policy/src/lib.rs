@@ -2,7 +2,8 @@
 
 use soroban_sdk::{
     auth::{ContractContext, InvokerContractAuthEntry, SubContractInvocation},
-    contract, contracterror, contractimpl, contracttype, symbol_short, Address, BytesN, Env, IntoVal, Symbol, Vec,
+    contract, contracterror, contractevent, contractimpl, contracttype, symbol_short, Address, BytesN, Env, IntoVal,
+    Symbol, Vec,
     U256,
 };
 
@@ -60,6 +61,18 @@ pub struct LeaderEvent {
     pub quote: i128,
     pub ledger: u32,
     pub recorded_at: u64,
+}
+
+// Keep the legacy event topics and Vec data layout stable for the indexer while
+// using Soroban's type-safe event definition instead of Events::publish.
+#[contractevent(data_format = "vec", topics = ["copy"])]
+pub struct CopyExecuted {
+    #[topic]
+    pub session_id: u32,
+    pub source_event_id: BytesN<32>,
+    pub pool: Address,
+    pub kind: Symbol,
+    pub quote: i128,
 }
 
 #[contracttype]
@@ -339,10 +352,14 @@ impl CopyPolicy {
             return Err(Error::EventMismatch);
         }
         Self::authorize_copy_op(&env, session_id, &source_event_id, &pool, &kind, quote)?;
-        env.events().publish(
-            (symbol_short!("copy"), session_id),
-            (source_event_id, pool, kind, quote),
-        );
+        CopyExecuted {
+            session_id,
+            source_event_id,
+            pool,
+            kind,
+            quote,
+        }
+        .publish(&env);
         Ok(())
     }
 
@@ -556,10 +573,14 @@ impl CopyPolicy {
             );
             withdrawn.map_err(|_| Error::OperationNotAllowed)?;
         }
-        env.events().publish(
-            (symbol_short!("copy"), session_id),
-            (source_event_id, pool, kind, quote),
-        );
+        CopyExecuted {
+            session_id,
+            source_event_id,
+            pool,
+            kind,
+            quote,
+        }
+        .publish(&env);
         Ok(())
     }
 
@@ -682,10 +703,14 @@ impl CopyPolicy {
                 ),
             );
         }
-        env.events().publish(
-            (symbol_short!("copy"), session_id),
-            (source_event_id, pool, kind, quote),
-        );
+        CopyExecuted {
+            session_id,
+            source_event_id,
+            pool,
+            kind,
+            quote,
+        }
+        .publish(&env);
         Ok(())
     }
 
@@ -800,10 +825,14 @@ impl CopyPolicy {
                 ),
             );
         }
-        env.events().publish(
-            (symbol_short!("copy"), session_id),
-            (source_event_id, pool, kind, quote),
-        );
+        CopyExecuted {
+            session_id,
+            source_event_id,
+            pool,
+            kind,
+            quote,
+        }
+        .publish(&env);
         Ok(())
     }
 
@@ -979,10 +1008,14 @@ impl CopyPolicy {
                 Vec::from_array(&env, [user.into_val(&env)]),
             );
         }
-        env.events().publish(
-            (symbol_short!("copy"), session_id),
-            (source_event_id, pool, kind, quote),
-        );
+        CopyExecuted {
+            session_id,
+            source_event_id,
+            pool,
+            kind,
+            quote,
+        }
+        .publish(&env);
         Ok(())
     }
 
