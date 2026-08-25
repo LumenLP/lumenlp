@@ -310,6 +310,7 @@ fn latest_reserves_quote_xlm_from_events(events: &[PoolEventRow]) -> Option<(i64
 }
 
 /// Prefer latest event-derived reserves quote when snapshot TVL is missing.
+#[cfg(test)]
 fn reserves_quote_xlm_from_events(events: &[PoolEventRow]) -> Option<f64> {
     latest_reserves_quote_xlm_from_events(events).map(|(_, quote)| quote)
 }

@@ -46,6 +46,9 @@ pub fn position_key_cp(pool_address: &str) -> String {
     format!("cp:{pool_address}")
 }
 
+/// Stable key for a concentrated-liquidity position. The current UI does not
+/// create CL copy drafts yet, but the key is part of the future draft boundary.
+#[allow(dead_code)]
 pub fn position_key_cl(pool_address: &str, tick_lower: i64, tick_upper: i64) -> String {
     format!("cl:{pool_address}:{tick_lower}:{tick_upper}")
 }
