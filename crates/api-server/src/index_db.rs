@@ -444,6 +444,22 @@ impl IndexDb {
         collect_copy_session_rows(rows)
     }
 
+    pub fn active_copy_sessions(&self) -> Result<Vec<CopySessionRow>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT id, follower_address, leader_address, coefficient, status,
+                   include_claims, allowed_pools_json, max_per_op_quote_xlm,
+                   max_daily_quote_xlm, expires_at, cursor_ts, watermark_ts,
+                   watermark_event_id, created_at, updated_at
+            FROM copy_sessions
+            WHERE status = 'active'
+            ORDER BY updated_at ASC
+            "#,
+        )?;
+        let rows = stmt.query_map([], map_copy_session_row)?;
+        collect_copy_session_rows(rows)
+    }
+
     pub fn get_copy_session(&self, id: &str) -> Result<Option<CopySessionRow>> {
         let mut stmt = self.conn.prepare(
             r#"

@@ -16,6 +16,7 @@ Environment=LEADER_FEE_SNAPSHOT_SECS=60
 Environment=LEADER_FEE_SNAPSHOT_BATCH=80
 Environment=LEADER_FEE_SNAPSHOT_HOT_BATCH=40
 Environment=LEADER_FEE_SNAPSHOT_CONCURRENCY=8
+Environment=COPY_RECONCILE_SECS=15
 Environment=RUST_LOG=info
 ExecStart=/opt/lumenlp/target/release/api-server
 Restart=on-failure

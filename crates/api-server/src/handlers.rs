@@ -2761,6 +2761,33 @@ fn reconcile_copy_ops(index_db: &IndexDb, session: &mut CopySessionRow) -> Resul
     Ok(())
 }
 
+/// Reconcile active Copy sessions without requiring a user to keep the web
+/// page open. The worker only creates policy-validated pending operations;
+/// transaction submission remains a separately controlled relayer boundary.
+pub fn reconcile_active_copy_sessions(state: AppState) {
+    let sessions = {
+        let db = state.index_db.lock().unwrap();
+        match db.active_copy_sessions() {
+            Ok(sessions) => sessions,
+            Err(error) => {
+                tracing::warn!(%error, "copy session reconciliation list failed");
+                return;
+            }
+        }
+    };
+    let mut reconciled = 0usize;
+    for mut session in sessions {
+        let db = state.index_db.lock().unwrap();
+        match reconcile_copy_ops(&db, &mut session) {
+            Ok(()) => reconciled += 1,
+            Err(error) => tracing::warn!(session_id = %session.id, %error, "copy session reconciliation failed"),
+        }
+    }
+    if reconciled > 0 {
+        info!(reconciled, "active copy sessions reconciled");
+    }
+}
+
 #[derive(Deserialize)]
 struct CreateCopySessionBody {
     follower_address: String,

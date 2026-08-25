@@ -59,6 +59,7 @@ async fn main() -> Result<()> {
 
     let cors = CorsLayer::new().allow_origin(Any).allow_methods(Any).allow_headers(Any);
 
+    let copy_state = state.clone();
     let warm_state = state.clone();
     let fee_state = state.clone();
     let app = Router::new().merge(handlers::router()).layer(cors).with_state(state);
@@ -78,6 +79,20 @@ async fn main() -> Result<()> {
         loop {
             interval.tick().await;
             handlers::refresh_leader_fee_snapshots(fee_state.clone()).await;
+        }
+    });
+
+    let copy_reconcile_secs = std::env::var("COPY_RECONCILE_SECS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value >= 5)
+        .unwrap_or(15);
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(copy_reconcile_secs));
+        loop {
+            interval.tick().await;
+            let state = copy_state.clone();
+            let _ = tokio::task::spawn_blocking(move || handlers::reconcile_active_copy_sessions(state)).await;
         }
     });
 

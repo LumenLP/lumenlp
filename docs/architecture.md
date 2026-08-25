@@ -155,6 +155,16 @@ boundary; the API itself does not hold that signing key. The Soroban policy
 contract still re-checks the recorded event, coefficient, pool, action, and
 limits before any DEX call.
 
+Active Copy sessions are reconciled by a background worker in the API process
+every 15 seconds by default (`COPY_RECONCILE_SECS`). The worker reads each
+session's event watermark, converts newly indexed Leader liquidity events into
+coefficient-scaled operations, applies the same venue and quota checks used by
+the read endpoint, and persists idempotent pending operations. Reading the Copy
+queue from the web application also performs reconciliation as a recovery path,
+but user page activity is not required. This worker does not sign or submit
+transactions; a separately controlled relayer consumes the pending boundary and
+the Soroban policy contract remains the final execution authority.
+
 ## Repository Structure
 
 ```text
