@@ -51,6 +51,8 @@ async fn main() -> Result<()> {
         pool_list_cache: Arc::new(Mutex::new(None)),
         pool_list_refresh: Arc::new(tokio::sync::Mutex::new(())),
         pool_list_refreshing: Arc::new(AtomicBool::new(false)),
+        leader_list_cache: Arc::new(Mutex::new(HashMap::new())),
+        leader_list_refreshing: Arc::new(AtomicBool::new(false)),
         redis,
         leader_fee_scan_cursor: Arc::new(AtomicUsize::new(0)),
     };

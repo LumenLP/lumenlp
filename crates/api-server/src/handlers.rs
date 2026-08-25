@@ -55,6 +55,8 @@ pub struct AppState {
     /// all repeat the RPC, pricing, and rollup work.
     pub pool_list_refresh: Arc<tokio::sync::Mutex<()>>,
     pub pool_list_refreshing: Arc<AtomicBool>,
+    pub leader_list_cache: Arc<Mutex<HashMap<String, (StdInstant, Value)>>>,
+    pub leader_list_refreshing: Arc<AtomicBool>,
     pub redis: Option<redis::Client>,
     pub leader_fee_scan_cursor: Arc<std::sync::atomic::AtomicUsize>,
 }
@@ -97,6 +99,7 @@ const DUST_TVL_FLOOR: f64 = 1e-6;
 const REDIS_TOKEN_META_TTL_SECS: u64 = 3_600;
 const REDIS_LP_PROFILE_TTL_SECS: u64 = 60;
 const REDIS_LP_LEADERS_TTL_SECS: u64 = 60;
+const LEADER_LIST_CACHE_SECS: u64 = 60;
 
 fn redis_token_meta_key(address: &str) -> String {
     format!("lumenlp:token-meta:v1:{address}")
@@ -1570,11 +1573,70 @@ async fn lp_leaders(State(state): State<AppState>, Query(q): Query<LeadersBoardQ
         .then_some("activity")
         .unwrap_or("fees");
     let cache_key = redis_lp_leaders_key(window_days, limit, sort);
+    let local_key = cache_key.clone();
+    let local_cached = {
+        let cache = state.leader_list_cache.lock().unwrap();
+        cache.get(&local_key).cloned()
+    };
+    if let Some((expires_at, value)) = local_cached {
+        if expires_at > StdInstant::now() {
+            let mut response = Json(value).into_response();
+            response.headers_mut().insert(
+                HeaderName::from_static("x-lumenlp-cache"),
+                HeaderValue::from_static("leaders-local-hit"),
+            );
+            response.headers_mut().insert(
+                CACHE_CONTROL,
+                HeaderValue::from_static("public, max-age=60, s-maxage=60, stale-while-revalidate=120"),
+            );
+            return response;
+        }
+        if state
+            .leader_list_refreshing
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            let refresh_state = state.clone();
+            let refresh_flag = Arc::clone(&state.leader_list_refreshing);
+            let refresh_query = LeadersBoardQuery {
+                limit: Some(limit),
+                window_days: Some(window_days),
+                sort: Some(sort.to_string()),
+            };
+            std::thread::spawn(move || {
+                let Ok(runtime) = tokio::runtime::Builder::new_current_thread().enable_all().build() else {
+                    refresh_flag.store(false, Ordering::Release);
+                    return;
+                };
+                runtime.block_on(async move {
+                    let _ = lp_leaders(State(refresh_state), Query(refresh_query)).await;
+                });
+                refresh_flag.store(false, Ordering::Release);
+            });
+        }
+        let mut response = Json(value).into_response();
+        response.headers_mut().insert(
+            HeaderName::from_static("x-lumenlp-cache"),
+            HeaderValue::from_static("leaders-local-stale"),
+        );
+        response.headers_mut().insert(
+            CACHE_CONTROL,
+            HeaderValue::from_static("public, max-age=15, s-maxage=60, stale-while-revalidate=120"),
+        );
+        return response;
+    }
     if let Some(client) = state.redis.clone() {
         if let Ok(mut connection) = client.get_multiplexed_async_connection().await {
             let cached: redis::RedisResult<Option<String>> = connection.get(&cache_key).await;
             if let Ok(Some(serialized)) = cached {
                 if let Ok(value) = serde_json::from_str::<Value>(&serialized) {
+                    state.leader_list_cache.lock().unwrap().insert(
+                        local_key.clone(),
+                        (
+                            StdInstant::now() + StdDuration::from_secs(LEADER_LIST_CACHE_SECS),
+                            value.clone(),
+                        ),
+                    );
                     let mut response = Json(value).into_response();
                     response.headers_mut().insert(
                         HeaderName::from_static("x-lumenlp-cache"),
@@ -1753,6 +1815,13 @@ async fn lp_leaders(State(state): State<AppState>, Query(q): Query<LeadersBoardQ
             }
         }
     }
+    state.leader_list_cache.lock().unwrap().insert(
+        local_key,
+        (
+            StdInstant::now() + StdDuration::from_secs(LEADER_LIST_CACHE_SECS),
+            response_body.clone(),
+        ),
+    );
     let mut response = Json(response_body).into_response();
     response.headers_mut().insert(
         HeaderName::from_static("x-lumenlp-cache"),
