@@ -170,7 +170,7 @@ paths:
   /v1/copy/recorder/status:
     get:
       summary: Recorder outbox status
-      description: Read-only operational counters for canonical Copy LP events awaiting a separately controlled recorder worker.
+      description: Read-only operational counters for canonical Copy LP events awaiting or being processed by a separately controlled recorder worker. The pending count includes leased processing rows.
       responses:
         "200":
           description: Recorder outbox counters

@@ -643,6 +643,42 @@ impl IndexDb {
         rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
     }
 
+    /// Claim a batch for one relayer. The lease makes retries safe after a
+    /// worker crash while keeping the source event idempotency key intact.
+    #[allow(dead_code)]
+    pub fn claim_recorder_events(&self, limit: usize, lease_secs: i64) -> Result<Vec<RecorderOutboxRow>> {
+        let now = chrono::Utc::now().timestamp();
+        let lease_secs = lease_secs.max(30);
+        self.conn.execute_batch("BEGIN IMMEDIATE")?;
+        let result: anyhow::Result<Vec<RecorderOutboxRow>> = (|| {
+            self.conn.execute(
+                "UPDATE recorder_outbox SET status = 'pending', updated_at = ?1 WHERE status = 'processing' AND updated_at < ?2",
+                params![now, now - lease_secs],
+            )?;
+            let mut rows = self.pending_recorder_events(limit)?;
+            for row in &mut rows {
+                self.conn.execute(
+                    "UPDATE recorder_outbox SET status = 'processing', attempts = attempts + 1, updated_at = ?2 WHERE source_event_id = ?1 AND status = 'pending'",
+                    params![row.source_event_id, now],
+                )?;
+                row.status = "processing".into();
+                row.attempts = row.attempts.saturating_add(1);
+                row.updated_at = now;
+            }
+            Ok(rows)
+        })();
+        match result {
+            Ok(rows) => {
+                self.conn.execute_batch("COMMIT")?;
+                Ok(rows)
+            }
+            Err(error) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(error.into())
+            }
+        }
+    }
+
     #[allow(dead_code)]
     pub fn update_recorder_event(&self, source_event_id: &str, status: &str, error: Option<&str>) -> Result<()> {
         let now = chrono::Utc::now().timestamp();
@@ -672,9 +708,12 @@ impl IndexDb {
         for row in rows {
             let (kind, count, oldest) = row?;
             match kind.as_str() {
-                "pending" => {
-                    status.pending = count.max(0) as usize;
-                    status.oldest_pending_at = oldest;
+                "pending" | "processing" => {
+                    status.pending += count.max(0) as usize;
+                    status.oldest_pending_at = match (status.oldest_pending_at, oldest) {
+                        (Some(current), Some(candidate)) => Some(current.min(candidate)),
+                        (current, candidate) => current.or(candidate),
+                    };
                 }
                 "submitted" => status.submitted = count.max(0) as usize,
                 "failed" => status.failed = count.max(0) as usize,
@@ -2267,8 +2306,35 @@ mod tests {
         assert_eq!(pending[0].quote_stroops, 129_000_000);
         assert_eq!(pending[0].amounts, vec![100, 200]);
 
+        let claimed = db.claim_recorder_events(10, 300).unwrap();
+        assert_eq!(claimed[0].status, "processing");
+        assert_eq!(claimed[0].attempts, 1);
         db.update_recorder_event("evt-1", "submitted", None).unwrap();
         assert!(db.pending_recorder_events(10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn recorder_claim_recovers_expired_processing_lease() {
+        let db = test_db();
+        let event = RecorderEvent {
+            source_event_id: "evt-lease".into(),
+            leader_address: "GLEADER".into(),
+            pool_address: "CPOOL".into(),
+            kind: "deposit".into(),
+            amounts: vec![1],
+            quote_stroops: 1,
+            ledger: 1,
+            created_at: 1,
+        };
+        db.enqueue_recorder_event(&event).unwrap();
+        db.claim_recorder_events(1, 30).unwrap();
+        db.conn
+            .execute("UPDATE recorder_outbox SET updated_at = 1 WHERE source_event_id = 'evt-lease'", [])
+            .unwrap();
+        let retry = db.claim_recorder_events(1, 30).unwrap();
+        assert_eq!(retry.len(), 1);
+        assert_eq!(retry[0].attempts, 2);
+        assert_eq!(retry[0].status, "processing");
     }
 
     #[test]

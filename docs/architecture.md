@@ -165,6 +165,12 @@ but user page activity is not required. This worker does not sign or submit
 transactions; a separately controlled relayer consumes the pending boundary and
 the Soroban policy contract remains the final execution authority.
 
+The recorder outbox uses `pending` and `processing` states. A relayer claims a
+bounded batch by moving rows to `processing`; the claim increments the attempt
+counter and owns a time lease. If the worker stops before reporting a terminal
+result, an expired lease returns to `pending` for retry. The source event ID
+remains unique, so retrying a claim cannot create a duplicate recorder event.
+
 ## Repository Structure
 
 ```text
