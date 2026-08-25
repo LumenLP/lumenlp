@@ -39,6 +39,8 @@ export type CopyOp = {
   updated_at?: number;
 };
 
+export type CopyOpStatus = Exclude<CopyOp["status"], "pending">;
+
 export type CopyPositionEntry = {
   copyOpId: string;
   poolAddress: string;
@@ -141,7 +143,7 @@ export async function patchCopySession(
   return patchJson<CopySession>(`/v1/copy/sessions/${encodeURIComponent(id)}`, body);
 }
 
-export async function setCopyOpStatus(id: string, status: string): Promise<void> {
+export async function setCopyOpStatus(id: string, status: CopyOpStatus): Promise<void> {
   await postJson<{ id: string; status: string }>(
     `/v1/copy/ops/${encodeURIComponent(id)}/status`,
     { status },

@@ -246,6 +246,28 @@ paths:
                 $ref: "#/components/schemas/CopyOp"
         "404":
           description: Not found
+  /v1/copy/ops/{id}/status:
+    post:
+      summary: Update a user-reviewed Copy op status
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CopyOpStatusUpdate"
+      responses:
+        "200":
+          description: Copy op status updated
+        "400":
+          description: Unsupported status
+        "404":
+          description: Not found
 components:
   parameters:
     PoolAddress:
@@ -345,6 +367,16 @@ components:
         note: { type: string, nullable: true }
         created_at: { type: integer, format: int64 }
         updated_at: { type: integer, format: int64 }
+    CopyOpStatusUpdate:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [drafted, skipped, signed, failed, insufficient, rejected]
+        note:
+          type: string
+          nullable: true
     LpProfile:
       type: object
       properties:
