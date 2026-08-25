@@ -746,7 +746,7 @@ Copy session reconciliation
       │ leader amount × coefficient
       ▼
 Copy operation queue
-      │ pending / drafted / skipped / failed
+      │ pending / drafted / skipped / failed / rejected
       ▼
 Copy Preview
       │
@@ -758,6 +758,12 @@ User reviews and signs
 ```
 
 The current Copy LP implementation is not custodial and does not automatically submit transactions. A CopyOp must be tied to a source event and remain idempotent for a given session and source event.
+
+Copy operation status transitions are constrained: a pending operation can be
+drafted or skipped, a drafted operation can become signed, and rejected
+operations are terminal. An event that cannot produce a complete recorder
+payload is rejected with a machine-readable note rather than remaining
+pending indefinitely.
 
 For concentrated liquidity, the target range should be copied as an explicit range value, while liquidity or token amounts are scaled. A failed or unrecognized position mapping must remain visible as pending or unsupported; it must not silently guess a target position.
 

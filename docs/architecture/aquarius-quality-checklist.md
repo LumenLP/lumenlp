@@ -19,7 +19,7 @@ Use before SCF demos and tranche reviews. Spot-check mainnet via [lumenlp.xyz](h
 - [ ] Create session on `/copy` with coefficient (e.g. 0.1)
 - [ ] Leader deposit enqueues op; UI shows **leader → scaled** quote/amounts
 - [ ] Generate draft → Strategies banner shows scaled amounts
-- [ ] Status transitions: pending → drafted / skipped work; **no custody / no auto-submit** copy visible in UI
+- [ ] Status transitions: pending → drafted / skipped work; invalid transitions return a conflict and rejected operations remain terminal; **no custody / no auto-submit** copy visible in UI
 
 ## Multi-DEX surface
 
