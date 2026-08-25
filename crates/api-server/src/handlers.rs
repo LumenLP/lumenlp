@@ -2613,7 +2613,7 @@ fn reconcile_copy_ops(index_db: &IndexDb, session: &mut CopySessionRow) -> Resul
                 Utc::now().timestamp(),
                 index_db.copy_quote_used_since(&session.id, daily_start)?,
             );
-            let (status, note) = match policy_result {
+            let (mut status, mut note) = match policy_result {
                 Ok(()) => ("pending".to_string(), None),
                 Err(reason) => (
                     "rejected".to_string(),
@@ -2623,6 +2623,12 @@ fn reconcile_copy_ops(index_db: &IndexDb, session: &mut CopySessionRow) -> Resul
             if status == "pending" {
                 if let Some(recorder_event) = canonical_event(event, &session.leader_address) {
                     index_db.enqueue_recorder_event(&recorder_event)?;
+                } else {
+                    // A policy-approved event still needs complete integer
+                    // amounts and quote data before a recorder can attest it.
+                    // Never leave an unrecordable operation pending forever.
+                    status = "rejected".to_string();
+                    note = Some("event_not_recordable: incomplete recorder payload".to_string());
                 }
             }
             let op = CopyOpRow {
