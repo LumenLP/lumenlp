@@ -311,6 +311,15 @@ impl IndexDb {
               ON actor_fee_snapshot_history(actor, pool_address, observed_at DESC, id DESC);
             "#,
         )?;
+        // pool_events is created by the indexer component. API startup can
+        // race that initialization, so add the read-optimized index only
+        // after the shared table exists.
+        if self.has_table("pool_events") {
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_pool_events_lp_actor_time ON pool_events(json_extract(body_json, '$.derived.actor'), created_at DESC, kind, pool_address)",
+                [],
+            )?;
+        }
         self.ensure_column("copy_sessions", "watermark_event_id", "TEXT NOT NULL DEFAULT ''")?;
         self.ensure_column("copy_sessions", "allowed_pools_json", "TEXT NOT NULL DEFAULT '[]'")?;
         self.ensure_column("copy_sessions", "max_per_op_quote_xlm", "REAL NOT NULL DEFAULT 0")?;
@@ -331,6 +340,17 @@ impl IndexDb {
         self.conn
             .execute(&format!("ALTER TABLE {table} ADD COLUMN {column} {decl}"), [])?;
         Ok(())
+    }
+
+    fn has_table(&self, name: &str) -> bool {
+        self.conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
+                params![name],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|value| value != 0)
+            .unwrap_or(false)
     }
 
     pub fn create_copy_session(
@@ -986,20 +1006,26 @@ impl IndexDb {
     /// zero for positions that are still open.
     pub fn record_actor_fee_snapshot_history_zeroed(&self, actor: &str, observed_at: i64) -> Result<()> {
         let mut stmt = self.conn.prepare(
-            "SELECT pool_address, venue FROM actor_fee_snapshots WHERE actor = ?1",
+            "SELECT pool_address, venue, unclaimed_quote_xlm, status FROM actor_fee_snapshots WHERE actor = ?1",
         )?;
         let rows = stmt.query_map(params![actor], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<f64>>(2)?,
+                row.get::<_, String>(3)?,
+            ))
         })?;
         for row in rows {
-            let (pool_address, venue) = row?;
+            let (pool_address, venue, unclaimed, status) = row?;
+            let verified = status == "ok" && unclaimed.is_some();
             self.insert_actor_fee_snapshot_history(
                 actor,
                 &pool_address,
                 &venue,
-                Some(0.0),
-                Some(0.0),
-                "ok",
+                verified.then_some(0.0),
+                verified.then_some(0.0),
+                if verified { "ok" } else { &status },
                 observed_at,
             )?;
         }
@@ -1011,7 +1037,7 @@ impl IndexDb {
         let mut unavailable = HashSet::<String>::new();
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT h.actor, h.pool_address, COALESCE(h.unclaimed_quote_xlm, 0)
+            SELECT h.actor, h.pool_address, h.unclaimed_quote_xlm, h.status
             FROM actor_fee_snapshot_history h
             WHERE h.observed_at <= ?1
               AND h.id = (
@@ -1028,26 +1054,37 @@ impl IndexDb {
         let rows = stmt.query_map(params![since_ts], |row| {
             Ok((
                 (row.get::<_, String>(0)?, row.get::<_, String>(1)?),
-                row.get::<_, f64>(2)?,
+                row.get::<_, Option<f64>>(2)?,
+                row.get::<_, String>(3)?,
             ))
         })?;
         for row in rows {
-            let (key, value) = row?;
-            baseline.insert(key, value);
+            let ((actor, pool), value, status) = row?;
+            if status != "ok" || value.is_none() {
+                unavailable.insert(actor);
+            } else {
+                baseline.insert((actor, pool), value.unwrap_or_default());
+            }
         }
 
         let mut deltas = HashMap::<String, f64>::new();
         let mut current_stmt = self.conn.prepare(
-            "SELECT actor, pool_address, COALESCE(unclaimed_quote_xlm, 0) FROM actor_fee_snapshots WHERE actor GLOB 'G*'",
+            "SELECT actor, pool_address, unclaimed_quote_xlm, status FROM actor_fee_snapshots WHERE actor GLOB 'G*'",
         )?;
         let current_rows = current_stmt.query_map([], |row| {
             Ok((
                 (row.get::<_, String>(0)?, row.get::<_, String>(1)?),
-                row.get::<_, f64>(2)?,
+                row.get::<_, Option<f64>>(2)?,
+                row.get::<_, String>(3)?,
             ))
         })?;
         for row in current_rows {
-            let ((actor, pool), current) = row?;
+            let ((actor, pool), current, status) = row?;
+            if status != "ok" || current.is_none() {
+                unavailable.insert(actor);
+                continue;
+            }
+            let current = current.unwrap_or_default();
             let Some(previous) = baseline.remove(&(actor.clone(), pool)) else {
                 // A snapshot created after the requested window has no valid
                 // starting value. Do not treat its current fee as windowed
@@ -1066,6 +1103,81 @@ impl IndexDb {
             deltas.remove(&actor);
         }
         Ok(deltas)
+    }
+
+    /// Calculate one actor's verified unclaimed-fee change without scanning
+    /// snapshot history for every other actor. `None` means at least one leg
+    /// lacks a valid boundary or current fee value.
+    pub fn actor_fee_snapshot_delta(&self, actor: &str, since_ts: i64) -> Result<Option<f64>> {
+        let mut baseline = HashMap::<String, f64>::new();
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT h.pool_address, h.unclaimed_quote_xlm, h.status
+            FROM actor_fee_snapshot_history h
+            WHERE h.actor = ?1
+              AND h.observed_at <= ?2
+              AND h.id = (
+                SELECT h2.id
+                FROM actor_fee_snapshot_history h2
+                WHERE h2.actor = h.actor
+                  AND h2.pool_address = h.pool_address
+                  AND h2.observed_at <= ?2
+                ORDER BY h2.observed_at DESC, h2.id DESC
+                LIMIT 1
+              )
+            "#,
+        )?;
+        let rows = stmt.query_map(params![actor, since_ts], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<f64>>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?;
+        for row in rows {
+            let (pool, value, status) = row?;
+            if status != "ok" || value.is_none() {
+                return Ok(None);
+            }
+            baseline.insert(pool, value.unwrap_or_default());
+        }
+
+        let mut current_stmt = self.conn.prepare(
+            "SELECT pool_address, unclaimed_quote_xlm, status FROM actor_fee_snapshots WHERE actor = ?1",
+        )?;
+        let current_rows = current_stmt.query_map(params![actor], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<f64>>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?;
+        let mut delta = 0.0;
+        let mut current_count = 0usize;
+        for row in current_rows {
+            let (pool, value, status) = row?;
+            if status != "ok" || value.is_none() {
+                return Ok(None);
+            }
+            let Some(previous) = baseline.remove(&pool) else {
+                return Ok(None);
+            };
+            delta += value.unwrap_or_default() - previous;
+            current_count += 1;
+        }
+        if current_count == 0 {
+            return if baseline.is_empty() {
+                Ok(None)
+            } else {
+                // A zeroed history row is the valid terminal state for a
+                // position closed during the window.
+                Ok(Some(-baseline.values().sum::<f64>()))
+            };
+        }
+        if !baseline.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(delta))
     }
 
     pub fn clear_actor_fee_snapshots(&self, actor: &str) -> Result<()> {
@@ -2137,6 +2249,88 @@ mod tests {
         assert_eq!(total.position_count, 2);
         assert_eq!(total.pool_count, 2);
         assert_eq!(total.observed_at, Some(20));
+    }
+
+    #[test]
+    fn fee_snapshot_delta_uses_window_boundary_per_pool() {
+        let db = test_db();
+        db.insert_actor_fee_snapshot_history("GLEADER", "CPOOL1", "aquarius", Some(10.0), Some(100.0), "ok", 100)
+            .unwrap();
+        db.insert_actor_fee_snapshot_history("GLEADER", "CPOOL2", "aquarius", Some(3.0), Some(50.0), "ok", 100)
+            .unwrap();
+        db.upsert_actor_fee_snapshot("GLEADER", "CPOOL1", "aquarius", Some(14.0), Some(110.0), "ok", 200)
+            .unwrap();
+        db.upsert_actor_fee_snapshot("GLEADER", "CPOOL2", "aquarius", Some(5.5), Some(55.0), "ok", 200)
+            .unwrap();
+
+        let deltas = db.actor_fee_snapshot_deltas(100).unwrap();
+        assert_eq!(deltas.get("GLEADER"), Some(&6.5));
+    }
+
+    #[test]
+    fn fee_snapshot_delta_is_unavailable_without_window_boundary() {
+        let db = test_db();
+        db.insert_actor_fee_snapshot_history("GLEADER", "CPOOL", "aquarius", Some(10.0), Some(100.0), "ok", 200)
+            .unwrap();
+        db.upsert_actor_fee_snapshot("GLEADER", "CPOOL", "aquarius", Some(14.0), Some(110.0), "ok", 300)
+            .unwrap();
+
+        let deltas = db.actor_fee_snapshot_deltas(100).unwrap();
+        assert!(!deltas.contains_key("GLEADER"));
+    }
+
+    #[test]
+    fn fee_snapshot_delta_is_unavailable_for_unverified_fee_legs() {
+        let db = test_db();
+        db.insert_actor_fee_snapshot_history("GLEADER", "CPOOL", "soroswap", None, Some(100.0), "fee_unavailable", 100)
+            .unwrap();
+        db.upsert_actor_fee_snapshot("GLEADER", "CPOOL", "soroswap", Some(14.0), Some(110.0), "ok", 200)
+            .unwrap();
+
+        let deltas = db.actor_fee_snapshot_deltas(100).unwrap();
+        assert!(!deltas.contains_key("GLEADER"));
+    }
+
+    #[test]
+    fn actor_fee_snapshot_delta_scans_only_requested_actor() {
+        let db = test_db();
+        db.insert_actor_fee_snapshot_history("GLEADER", "CPOOL", "aquarius", Some(10.0), Some(100.0), "ok", 100)
+            .unwrap();
+        db.insert_actor_fee_snapshot_history("GOTHER", "CPOOL", "aquarius", Some(99.0), Some(100.0), "ok", 100)
+            .unwrap();
+        db.upsert_actor_fee_snapshot("GLEADER", "CPOOL", "aquarius", Some(13.5), Some(110.0), "ok", 200)
+            .unwrap();
+        db.upsert_actor_fee_snapshot("GOTHER", "CPOOL", "aquarius", Some(120.0), Some(110.0), "ok", 200)
+            .unwrap();
+
+        assert_eq!(db.actor_fee_snapshot_delta("GLEADER", 100).unwrap(), Some(3.5));
+    }
+
+    #[test]
+    fn actor_fee_snapshot_delta_handles_closed_positions() {
+        let db = test_db();
+        db.upsert_actor_fee_snapshot("GLEADER", "CPOOL", "aquarius", Some(10.0), Some(100.0), "ok", 100)
+            .unwrap();
+        db.insert_actor_fee_snapshot_history("GLEADER", "CPOOL", "aquarius", Some(10.0), Some(100.0), "ok", 100)
+            .unwrap();
+        db.record_actor_fee_snapshot_history_zeroed("GLEADER", 200).unwrap();
+        db.clear_actor_fee_snapshots("GLEADER").unwrap();
+
+        assert_eq!(db.actor_fee_snapshot_delta("GLEADER", 150).unwrap(), Some(-10.0));
+    }
+
+    #[test]
+    fn zeroed_history_preserves_unverified_fee_status() {
+        let db = test_db();
+        db.upsert_actor_fee_snapshot("GLEADER", "CPOOL", "soroswap", None, Some(100.0), "fee_unavailable", 100)
+            .unwrap();
+        db.record_actor_fee_snapshot_history_zeroed("GLEADER", 200).unwrap();
+        db.clear_actor_fee_snapshots("GLEADER").unwrap();
+        db.upsert_actor_fee_snapshot("GLEADER", "CPOOL", "soroswap", Some(4.0), Some(90.0), "ok", 300)
+            .unwrap();
+
+        let deltas = db.actor_fee_snapshot_deltas(200).unwrap();
+        assert!(!deltas.contains_key("GLEADER"));
     }
 
     #[test]

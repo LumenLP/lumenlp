@@ -14,6 +14,7 @@ and http.request.method eq "GET"
 and (
   starts_with(http.request.uri.path, "/v1/pools")
   or starts_with(http.request.uri.path, "/v1/lp/leaders")
+  or starts_with(http.request.uri.path, "/v1/lp/profile")
 )
 ```
 
@@ -25,13 +26,16 @@ Set:
 - **Query string:** Include all query string parameters in the cache key
 
 The query-string requirement is important: different pool filters, pagination,
-leader windows, and sort modes must not share a cached response.
+leader windows, sort modes, and profile addresses must not share a cached
+response.
 
 ## Safety
 
 Do not cache `POST`, `PATCH`, or `DELETE` requests. Do not apply this rule to
 wallet, copy-session, transaction, or health endpoints. The API responses are
-public analytics only and are refreshed on a one-minute cadence.
+public analytics only and are refreshed on a one-minute cadence. Profile
+responses are keyed by the requested public Stellar address and contain no
+private wallet data or authentication state.
 
 ## Verification
 
@@ -46,6 +50,7 @@ Expected headers after the first request is stored at the edge:
 ```text
 cf-cache-status: HIT
 cache-control: public, max-age=60, s-maxage=60, stale-while-revalidate=120
+cloudflare-cdn-cache-control: public, max-age=60, stale-while-revalidate=120
 ```
 
 The first request may show `MISS`; a second request with the identical URL

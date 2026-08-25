@@ -113,7 +113,7 @@ fn median_f64(values: &mut [f64]) -> Option<f64> {
     let mut finite = finite;
     finite.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let mid = finite.len() / 2;
-    Some(if finite.len() % 2 == 0 {
+    Some(if finite.len().is_multiple_of(2) {
         (finite[mid - 1] + finite[mid]) / 2.0
     } else {
         finite[mid]

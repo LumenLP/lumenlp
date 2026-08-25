@@ -53,8 +53,18 @@ paths:
       parameters:
         - in: query
           name: limit
+          description: Page size. `page_size` is accepted as a compatibility alias.
           schema:
             type: integer
+            minimum: 1
+            maximum: 500
+        - in: query
+          name: page_size
+          description: Compatibility alias for limit.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
         - in: query
           name: page
           schema:
@@ -81,7 +91,7 @@ paths:
       responses:
         "200":
           description: Pool detail
-    /v1/positions:
+  /v1/positions:
     get:
       summary: Positions for an account
       parameters:
@@ -105,11 +115,13 @@ paths:
                       $ref: "#/components/schemas/UserPosition"
   /v1/lp/profile:
     get:
-      summary: LP leader profile (positions + 7d/30d liquidity activity)
+      summary: LP leader profile (positions + 7d/30d liquidity and fee activity)
       description: |
-        Scout Copy leaders: open Aquarius LP portfolio (XLM/USD), unclaimed fees,
-        first/last activity, and indexed deposit/withdraw/claim windows (7d + 30d).
-        Claimed fees are an earnings proxy — not full PnL.
+        Scout Copy leaders across supported venues: open LP positions, current
+        unclaimed fees, first/last activity, and indexed deposit/withdraw/claim
+        windows (7d + 30d). When snapshot boundaries are available, each window
+        also exposes accrued fees: claimed fee events plus the change in verified
+        unclaimed position fees. These are observable signals, not full PnL.
       parameters:
         - in: query
           name: address
@@ -128,7 +140,7 @@ paths:
           description: Missing or invalid address
   /v1/lp/leaders:
     get:
-      summary: Ranked LP actors by claimed fees (Copy scouting board)
+      summary: Ranked LP actors by accrued fees (Copy scouting board)
       parameters:
         - in: query
           name: limit
@@ -413,6 +425,10 @@ components:
         withdraw_quote_xlm: { type: number }
         claim_quote_xlm: { type: number }
         claim_quote_usd: { type: number, nullable: true }
+        unclaimed_fee_delta_quote_xlm: { type: number, nullable: true }
+        unclaimed_fee_delta_quote_usd: { type: number, nullable: true }
+        accrued_fee_quote_xlm: { type: number, nullable: true }
+        accrued_fee_quote_usd: { type: number, nullable: true }
         distinct_pools: { type: integer }
         net_liquidity_quote_xlm: { type: number }
         avg_deposit_quote_xlm: { type: number, nullable: true }
@@ -422,6 +438,13 @@ components:
         address: { type: string }
         claim_quote_xlm: { type: number }
         claim_quote_usd: { type: number, nullable: true }
+        unclaimed_fee_quote_xlm: { type: number, nullable: true }
+        unclaimed_fee_quote_usd: { type: number, nullable: true }
+        unclaimed_fee_delta_quote_xlm: { type: number, nullable: true }
+        unclaimed_fee_delta_quote_usd: { type: number, nullable: true }
+        accrued_fee_quote_xlm: { type: number, nullable: true }
+        accrued_fee_quote_usd: { type: number, nullable: true }
+        fee_status: { type: string, enum: [verified, unavailable, not_verified] }
         deposit_quote_xlm: { type: number }
         claim_count: { type: integer }
         deposit_count: { type: integer }

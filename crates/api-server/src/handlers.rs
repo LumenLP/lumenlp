@@ -681,6 +681,8 @@ async fn indexer_status(State(state): State<AppState>) -> impl IntoResponse {
 #[derive(Debug, Default, Deserialize)]
 struct PoolListQuery {
     page: Option<usize>,
+    /// Accept the common REST spelling as an alias for `limit`.
+    #[serde(alias = "page_size")]
     limit: Option<usize>,
     q: Option<String>,
     /// `dex` is the public UI spelling; `venue` is retained for API clients.
@@ -799,7 +801,7 @@ async fn list_pools(State(state): State<AppState>, Query(query): Query<PoolListQ
                 HeaderValue::from_static("public, max-age=60, s-maxage=60, stale-while-revalidate=120"),
             );
             response.headers_mut().insert(
-                HeaderName::from_static("cdn-cache-control"),
+                HeaderName::from_static("cloudflare-cdn-cache-control"),
                 HeaderValue::from_static("public, max-age=60, stale-while-revalidate=120"),
             );
             return response;
@@ -844,7 +846,7 @@ async fn list_pools(State(state): State<AppState>, Query(query): Query<PoolListQ
                 HeaderValue::from_static("public, max-age=60, s-maxage=60, stale-while-revalidate=120"),
             );
             response.headers_mut().insert(
-                HeaderName::from_static("cdn-cache-control"),
+                HeaderName::from_static("cloudflare-cdn-cache-control"),
                 HeaderValue::from_static("public, max-age=60, stale-while-revalidate=120"),
             );
             response.headers_mut().insert(
@@ -873,7 +875,7 @@ async fn list_pools(State(state): State<AppState>, Query(query): Query<PoolListQ
             HeaderValue::from_static("public, max-age=60, s-maxage=60, stale-while-revalidate=120"),
         );
         response.headers_mut().insert(
-            HeaderName::from_static("cdn-cache-control"),
+            HeaderName::from_static("cloudflare-cdn-cache-control"),
             HeaderValue::from_static("public, max-age=60, stale-while-revalidate=120"),
         );
         return response;
@@ -900,7 +902,7 @@ async fn list_pools(State(state): State<AppState>, Query(query): Query<PoolListQ
                         HeaderValue::from_static("public, max-age=60, s-maxage=60, stale-while-revalidate=120"),
                     );
                     response.headers_mut().insert(
-                        HeaderName::from_static("cdn-cache-control"),
+                        HeaderName::from_static("cloudflare-cdn-cache-control"),
                         HeaderValue::from_static("public, max-age=60, stale-while-revalidate=120"),
                     );
                     return response;
@@ -1093,7 +1095,7 @@ async fn list_pools(State(state): State<AppState>, Query(query): Query<PoolListQ
                 HeaderValue::from_static("public, max-age=60, s-maxage=60, stale-while-revalidate=120"),
             );
             response.headers_mut().insert(
-                HeaderName::from_static("cdn-cache-control"),
+                HeaderName::from_static("cloudflare-cdn-cache-control"),
                 HeaderValue::from_static("public, max-age=60, stale-while-revalidate=120"),
             );
             response
@@ -1567,7 +1569,7 @@ async fn lp_leaders(State(state): State<AppState>, Query(q): Query<LeadersBoardQ
                         HeaderValue::from_static("public, max-age=60, s-maxage=60, stale-while-revalidate=120"),
                     );
                     response.headers_mut().insert(
-                        HeaderName::from_static("cdn-cache-control"),
+                        HeaderName::from_static("cloudflare-cdn-cache-control"),
                         HeaderValue::from_static("public, max-age=60, stale-while-revalidate=120"),
                     );
                     return response;
@@ -1748,7 +1750,7 @@ async fn lp_leaders(State(state): State<AppState>, Query(q): Query<LeadersBoardQ
         HeaderValue::from_static("public, max-age=60, s-maxage=60, stale-while-revalidate=120"),
     );
     response.headers_mut().insert(
-        HeaderName::from_static("cdn-cache-control"),
+        HeaderName::from_static("cloudflare-cdn-cache-control"),
         HeaderValue::from_static("public, max-age=60, stale-while-revalidate=120"),
     );
     response
@@ -2141,7 +2143,7 @@ async fn lp_profile(State(state): State<AppState>, Query(q): Query<AddressQuery>
                         HeaderValue::from_static("public, max-age=60, s-maxage=60, stale-while-revalidate=120"),
                     );
                     response.headers_mut().insert(
-                        HeaderName::from_static("cdn-cache-control"),
+                        HeaderName::from_static("cloudflare-cdn-cache-control"),
                         HeaderValue::from_static("public, max-age=60, stale-while-revalidate=120"),
                     );
                     return response;
@@ -2295,7 +2297,22 @@ async fn lp_profile(State(state): State<AppState>, Query(q): Query<AddressQuery>
     let xlm_usd = quote_meta.xlm_usd;
     let to_usd = |xlm: f64| xlm_usd.and_then(|px| xlm_quote_to_usd(xlm, px));
 
-    let window_json = |a: &crate::index_db::ActorLiquidityActivity| {
+    let unclaimed_deltas = {
+        let index_db = state.index_db.lock().unwrap();
+        (
+            index_db
+                .actor_fee_snapshot_delta(&q.address, since_7d)
+                .ok()
+                .flatten(),
+            index_db
+                .actor_fee_snapshot_delta(&q.address, since_30d)
+                .ok()
+                .flatten(),
+        )
+    };
+
+    let window_json = |a: &crate::index_db::ActorLiquidityActivity, unclaimed_delta: Option<f64>| {
+        let accrued_fee = unclaimed_delta.map(|delta| a.claim_quote_xlm + delta);
         json!({
             "since_ts": a.since_ts,
             "event_count": a.event_count,
@@ -2308,6 +2325,10 @@ async fn lp_profile(State(state): State<AppState>, Query(q): Query<AddressQuery>
             "deposit_quote_usd": to_usd(a.deposit_quote_xlm),
             "withdraw_quote_usd": to_usd(a.withdraw_quote_xlm),
             "claim_quote_usd": to_usd(a.claim_quote_xlm),
+            "unclaimed_fee_delta_quote_xlm": unclaimed_delta,
+            "unclaimed_fee_delta_quote_usd": unclaimed_delta.and_then(to_usd),
+            "accrued_fee_quote_xlm": accrued_fee,
+            "accrued_fee_quote_usd": accrued_fee.and_then(to_usd),
             "distinct_pools": a.distinct_pools,
             "last_activity_at": a.last_activity_at,
             "net_liquidity_quote_xlm": a.deposit_quote_xlm - a.withdraw_quote_xlm,
@@ -2325,8 +2346,8 @@ async fn lp_profile(State(state): State<AppState>, Query(q): Query<AddressQuery>
     };
 
     let empty_activity = activity_7d.event_count == 0 && activity_30d.event_count == 0;
-    let activity_30d_json = window_json(&activity_30d);
-    let activity_7d_json = window_json(&activity_7d);
+    let activity_30d_json = window_json(&activity_30d, unclaimed_deltas.1);
+    let activity_7d_json = window_json(&activity_7d, unclaimed_deltas.0);
 
     let fee_capital = |claim: f64, deposit: f64| -> Option<f64> {
         if deposit > 0.0 && claim.is_finite() && deposit.is_finite() {
@@ -2442,7 +2463,7 @@ async fn lp_profile(State(state): State<AppState>, Query(q): Query<AddressQuery>
         } else {
             None
         }),
-        "honesty": "Proxies use indexed claim/deposit quotes — not full PnL vs entry, not win rate. Open positions scan pools touched in ~90d; Sushi V3 also verifies the Position Manager list against known pools.",
+        "honesty": "Profile windows use indexed claimed fees and, when snapshot boundaries are available, verified unclaimed-fee changes to form accrued fees. These are not full PnL vs entry and not a win rate. Open positions scan pools touched in ~90d; Sushi V3 also verifies the Position Manager list against known pools.",
     });
     if let Some(client) = state.redis.as_ref() {
         if let Ok(serialized) = serde_json::to_string(&response_body) {
@@ -2463,7 +2484,7 @@ async fn lp_profile(State(state): State<AppState>, Query(q): Query<AddressQuery>
         HeaderValue::from_static("public, max-age=60, s-maxage=60, stale-while-revalidate=120"),
     );
     response.headers_mut().insert(
-        HeaderName::from_static("cdn-cache-control"),
+        HeaderName::from_static("cloudflare-cdn-cache-control"),
         HeaderValue::from_static("public, max-age=60, stale-while-revalidate=120"),
     );
     response
@@ -3064,6 +3085,12 @@ mod tests {
         };
         let filtered = paginate_pool_body(json!({"pools": [{"address": "D", "venue": "sushi"}]}), &query);
         assert_eq!(filtered["pagination"]["total"], 1);
+    }
+
+    #[test]
+    fn pool_pagination_accepts_page_size_alias() {
+        let query: PoolListQuery = serde_json::from_value(json!({"page_size": 25})).unwrap();
+        assert_eq!(query.limit, Some(25));
     }
 
     #[test]

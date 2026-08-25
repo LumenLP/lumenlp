@@ -60,6 +60,10 @@ export type ActivityWindow = {
   deposit_quote_usd?: number | null;
   withdraw_quote_usd?: number | null;
   claim_quote_usd?: number | null;
+  unclaimed_fee_delta_quote_xlm?: number | null;
+  unclaimed_fee_delta_quote_usd?: number | null;
+  accrued_fee_quote_xlm?: number | null;
+  accrued_fee_quote_usd?: number | null;
   distinct_pools: number;
   last_activity_at?: number | null;
   net_liquidity_quote_xlm: number;
@@ -402,7 +406,13 @@ export type HistoryPoint = {
 };
 
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, { cache: "no-store", ...init });
+  // Public analytics responses advertise a short max-age from the API. Keep
+  // GETs cacheable in the browser, while writes remain explicitly uncached.
+  const method = (init?.method ?? "GET").toUpperCase();
+  const res = await fetch(`${API_BASE}${path}`, {
+    cache: method === "GET" ? "default" : "no-store",
+    ...init,
+  });
   if (!res.ok) {
     const body = await res.text();
     throw new Error(`${res.status}: ${body}`);

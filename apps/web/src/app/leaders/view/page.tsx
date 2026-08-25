@@ -161,7 +161,7 @@ function LeaderViewInner() {
 
   const w7 = windowOrFallback(profile, "7d");
   const w30 = windowOrFallback(profile, "30d");
-  const feeCapital = feeCapitalPct(w30.claim_quote_xlm, w30.deposit_quote_xlm);
+  const feeCapital = feeCapitalPct(w30.accrued_fee_quote_xlm ?? w30.claim_quote_xlm, w30.deposit_quote_xlm);
   const proxies = profile.proxies;
 
   return (
@@ -184,9 +184,9 @@ function LeaderViewInner() {
 
         <div className="leaders-hero-row">
           <div className="leaders-hero-metric">
-            <span className="filter-label">Claimed fees · 30d</span>
-            <strong className="leaders-pos">{quoteLabel(w30.claim_quote_usd, w30.claim_quote_xlm, 2)}</strong>
-            <span className="muted">{w30.claim_count} claims · {w30.distinct_pools} pools</span>
+            <span className="filter-label">{w30.accrued_fee_quote_xlm != null ? "Accrued fees" : "Claimed fees"} · 30d</span>
+            <strong className="leaders-pos">{quoteLabel(w30.accrued_fee_quote_usd ?? w30.claim_quote_usd, w30.accrued_fee_quote_xlm ?? w30.claim_quote_xlm, 2)}</strong>
+            <span className="muted">{w30.claim_count} claims · {w30.distinct_pools} pools{w30.accrued_fee_quote_xlm == null ? " · baseline pending" : ""}</span>
           </div>
           <div className="leaders-hero-metric">
             <span className="filter-label">Avg monthly claimed</span>
@@ -198,9 +198,9 @@ function LeaderViewInner() {
             <span className="muted">lifetime claims ÷ active months (proxy)</span>
           </div>
           <div className="leaders-hero-metric">
-            <span className="filter-label">Claimed fee / capital · 30d</span>
+            <span className="filter-label">Accrued fee / capital · 30d</span>
             <strong className="leaders-pos">{feeCapital != null ? `${feeCapital.toFixed(2)}%` : "—"}</strong>
-            <span className="muted">claimed ÷ deposits (not ROI)</span>
+            <span className="muted">accrued or claimed ÷ deposits (not ROI)</span>
           </div>
         </div>
 
@@ -215,10 +215,12 @@ function LeaderViewInner() {
 
         <div className="leaders-window-table-wrap">
           <table className="leaders-window-table">
-            <thead><tr><th>Window</th><th>Events</th><th>Claimed fees</th><th>Fee / capital</th><th>Net liquidity</th><th>Pools</th></tr></thead>
+            <thead><tr><th>Window</th><th>Events</th><th>Accrued / claimed fees</th><th>Fee / capital</th><th>Net liquidity</th><th>Pools</th></tr></thead>
             <tbody>{([['7D', w7], ['30D', w30]] as const).map(([label, window]) => {
-              const pct = feeCapitalPct(window.claim_quote_xlm, window.deposit_quote_xlm);
-              return <tr key={label}><td>{label}</td><td>{window.event_count} <span className="muted">({window.deposit_count}d / {window.withdraw_count}w / {window.claim_count}c)</span></td><td className="leaders-pos">{quoteLabel(window.claim_quote_usd, window.claim_quote_xlm)}</td><td className="leaders-pos">{pct != null ? `${pct.toFixed(2)}%` : "—"}</td><td>{fmtNum(window.net_liquidity_quote_xlm, 1)} XLM</td><td>{window.distinct_pools}</td></tr>;
+              const fee = window.accrued_fee_quote_xlm ?? window.claim_quote_xlm;
+              const feeUsd = window.accrued_fee_quote_usd ?? window.claim_quote_usd;
+              const pct = feeCapitalPct(fee, window.deposit_quote_xlm);
+              return <tr key={label}><td>{label}</td><td>{window.event_count} <span className="muted">({window.deposit_count}d / {window.withdraw_count}w / {window.claim_count}c)</span></td><td className="leaders-pos">{quoteLabel(feeUsd, fee)}{window.accrued_fee_quote_xlm == null ? <span className="muted"> · claimed</span> : null}</td><td className="leaders-pos">{pct != null ? `${pct.toFixed(2)}%` : "—"}</td><td>{fmtNum(window.net_liquidity_quote_xlm, 1)} XLM</td><td>{window.distinct_pools}</td></tr>;
             })}</tbody>
           </table>
         </div>
