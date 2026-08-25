@@ -1,7 +1,7 @@
 use {
     crate::recorder::RecorderEvent,
     anyhow::{Context, Result},
-    rusqlite::{params, Connection},
+    rusqlite::{params, Connection, OptionalExtension},
     serde_json::Value,
     std::collections::{HashMap, HashSet},
 };
@@ -109,6 +109,20 @@ pub struct RecorderOutboxStatus {
     pub submitted: usize,
     pub failed: usize,
     pub oldest_pending_at: Option<i64>,
+}
+
+fn copy_status_transition_allowed(current: &str, next: &str) -> bool {
+    if current == next {
+        return true;
+    }
+    match current {
+        "pending" => matches!(next, "drafted" | "skipped" | "failed" | "insufficient" | "rejected"),
+        "drafted" => matches!(next, "signed" | "skipped" | "failed"),
+        "insufficient" => matches!(next, "drafted" | "skipped" | "failed"),
+        "signed" => next == "failed",
+        "skipped" | "failed" | "rejected" => false,
+        _ => false,
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -685,6 +699,14 @@ impl IndexDb {
     }
 
     pub fn update_copy_op_status(&self, id: &str, status: &str, note: Option<&str>) -> Result<()> {
+        let current: String = self
+            .conn
+            .query_row("SELECT status FROM copy_ops WHERE id = ?1", params![id], |row| row.get(0))
+            .optional()?
+            .ok_or_else(|| anyhow::anyhow!("copy op not found: {id}"))?;
+        if !copy_status_transition_allowed(&current, status) {
+            anyhow::bail!("invalid copy op status transition: {current} -> {status}");
+        }
         let updated_at = chrono::Utc::now().timestamp();
         let rows = self.conn.execute(
             r#"
@@ -2198,6 +2220,15 @@ mod tests {
         assert!(db.table_exists("copy_ops"));
         assert!(db.table_exists("recorder_outbox"));
         assert!(db.table_exists("token_metadata"));
+    }
+
+    #[test]
+    fn copy_status_transitions_are_fail_closed() {
+        assert!(copy_status_transition_allowed("pending", "drafted"));
+        assert!(copy_status_transition_allowed("drafted", "signed"));
+        assert!(copy_status_transition_allowed("insufficient", "drafted"));
+        assert!(!copy_status_transition_allowed("rejected", "signed"));
+        assert!(!copy_status_transition_allowed("signed", "drafted"));
     }
 
     #[test]

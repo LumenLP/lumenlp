@@ -2979,6 +2979,11 @@ async fn set_copy_op_status(
             Json(json!({ "error": "copy op not found", "code": "not_found" })),
         )
             .into_response(),
+        Err(error) if error.to_string().contains("invalid copy op status transition") => (
+            StatusCode::CONFLICT,
+            Json(json!({ "error": error.to_string(), "code": "invalid_status_transition" })),
+        )
+            .into_response(),
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": error.to_string(), "code": "db_error" })),
