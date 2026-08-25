@@ -1155,7 +1155,8 @@ fn proportional_floor(env: &Env, reserve: u128, shares: u128, total_shares: u128
 mod test {
     use {
         super::*,
-        soroban_sdk::testutils::{Address as _, Ledger as _},
+        soroban_sdk::{vec, Val},
+        soroban_sdk::testutils::{Address as _, Events as _, Ledger as _},
     };
 
     #[contract]
@@ -1429,6 +1430,26 @@ mod test {
             &1,
         );
         CopyPolicyClient::new(&env, &contract).execute_copy_op(&1, &id, &pool, &symbol_short!("deposit"), &10);
+        assert_eq!(
+            env.events().all(),
+            vec![
+                &env,
+                (
+                    contract.clone(),
+                    (symbol_short!("copy"), 1u32).into_val(&env),
+                    Vec::<Val>::from_array(
+                        &env,
+                        [
+                            id.clone().into_val(&env),
+                            pool.clone().into_val(&env),
+                            symbol_short!("deposit").into_val(&env),
+                            10i128.into_val(&env),
+                        ],
+                    )
+                    .into_val(&env),
+                ),
+            ]
+        );
         assert!(CopyPolicyClient::new(&env, &contract)
             .try_execute_copy_op(&1, &id, &pool, &symbol_short!("deposit"), &10)
             .is_err());
