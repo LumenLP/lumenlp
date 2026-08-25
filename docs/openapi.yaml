@@ -339,7 +339,9 @@ components:
         scaled_amounts: { nullable: true }
         leader_quote_xlm: { type: number, nullable: true }
         scaled_quote_xlm: { type: number, nullable: true }
-        status: { type: string }
+        status:
+          type: string
+          enum: [pending, drafted, skipped, signed, failed, insufficient, rejected]
         note: { type: string, nullable: true }
         created_at: { type: integer, format: int64 }
         updated_at: { type: integer, format: int64 }

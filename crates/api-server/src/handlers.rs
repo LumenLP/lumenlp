@@ -2964,7 +2964,7 @@ async fn set_copy_op_status(
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({
-                "error": "status must be drafted, skipped, signed, failed, or insufficient",
+                "error": "status must be drafted, skipped, signed, failed, insufficient, or rejected",
                 "code": "bad_status"
             })),
         )

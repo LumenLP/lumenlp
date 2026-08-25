@@ -33,7 +33,7 @@ export type CopyOp = {
   scaled_amounts: unknown;
   leader_quote_xlm?: number | null;
   scaled_quote_xlm?: number | null;
-  status: string;
+  status: "pending" | "drafted" | "skipped" | "signed" | "failed" | "insufficient" | "rejected";
   note?: string | null;
   created_at: number;
   updated_at?: number;
