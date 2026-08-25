@@ -87,6 +87,7 @@ pub struct CopyOpRow {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+#[allow(dead_code)]
 pub struct RecorderOutboxRow {
     pub source_event_id: String,
     pub leader_address: String,
@@ -574,6 +575,7 @@ impl IndexDb {
         Ok(rows > 0)
     }
 
+    #[allow(dead_code)]
     pub fn pending_recorder_events(&self, limit: usize) -> Result<Vec<RecorderOutboxRow>> {
         let limit = limit.clamp(1, 1_000) as i64;
         let mut stmt = self.conn.prepare(
@@ -611,6 +613,7 @@ impl IndexDb {
         rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
     }
 
+    #[allow(dead_code)]
     pub fn update_recorder_event(&self, source_event_id: &str, status: &str, error: Option<&str>) -> Result<()> {
         let now = chrono::Utc::now().timestamp();
         self.conn.execute(
