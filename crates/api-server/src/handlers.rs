@@ -1,7 +1,7 @@
 use {
     crate::{
         copy_lp::build_scaled_op_payload,
-        copy_policy::{coefficient_ppm, validate_copy_op},
+        copy_policy::{coefficient_ppm, validate_copy_op, PolicyReject},
         index_db::{
             CopyOpRow, CopySessionRow, IndexDb, IndexerStatus, PoolActivityRow, PoolActivitySummaryRow, PoolEventRow,
             PoolRollupRow,
@@ -2557,6 +2557,23 @@ fn copy_op_json(op: &CopyOpRow, venue: Option<&str>) -> Value {
     })
 }
 
+fn copy_op_status(policy_result: Result<(), PolicyReject>, recorder_ready: bool) -> (String, Option<String>) {
+    let (status, note) = match policy_result {
+        Ok(()) => ("pending".to_string(), None),
+        Err(reason) => (
+            "rejected".to_string(),
+            Some(format!("{}: copy policy rejected", reason.code())),
+        ),
+    };
+    if status == "pending" && !recorder_ready {
+        return (
+            "rejected".to_string(),
+            Some("event_not_recordable: incomplete recorder payload".to_string()),
+        );
+    }
+    (status, note)
+}
+
 fn reconcile_copy_ops(index_db: &IndexDb, session: &mut CopySessionRow) -> Result<(), anyhow::Error> {
     if session.status != "active" {
         return Ok(());
@@ -2613,22 +2630,11 @@ fn reconcile_copy_ops(index_db: &IndexDb, session: &mut CopySessionRow) -> Resul
                 Utc::now().timestamp(),
                 index_db.copy_quote_used_since(&session.id, daily_start)?,
             );
-            let (mut status, mut note) = match policy_result {
-                Ok(()) => ("pending".to_string(), None),
-                Err(reason) => (
-                    "rejected".to_string(),
-                    Some(format!("{}: copy policy rejected", reason.code())),
-                ),
-            };
+            let recorder_event = canonical_event(event, &session.leader_address);
+            let (status, note) = copy_op_status(policy_result, recorder_event.is_some());
             if status == "pending" {
-                if let Some(recorder_event) = canonical_event(event, &session.leader_address) {
+                if let Some(recorder_event) = recorder_event {
                     index_db.enqueue_recorder_event(&recorder_event)?;
-                } else {
-                    // A policy-approved event still needs complete integer
-                    // amounts and quote data before a recorder can attest it.
-                    // Never leave an unrecordable operation pending forever.
-                    status = "rejected".to_string();
-                    note = Some("event_not_recordable: incomplete recorder payload".to_string());
                 }
             }
             let op = CopyOpRow {
@@ -3102,6 +3108,25 @@ mod tests {
     fn pool_pagination_accepts_page_size_alias() {
         let query: PoolListQuery = serde_json::from_value(json!({"page_size": 25})).unwrap();
         assert_eq!(query.limit, Some(25));
+    }
+
+    #[test]
+    fn copy_status_rejects_policy_approved_event_without_recorder_payload() {
+        assert_eq!(
+            copy_op_status(Ok(()), false),
+            (
+                "rejected".to_string(),
+                Some("event_not_recordable: incomplete recorder payload".to_string())
+            )
+        );
+        assert_eq!(copy_op_status(Ok(()), true), ("pending".to_string(), None));
+        assert_eq!(
+            copy_op_status(Err(PolicyReject::PoolNotAllowed), true),
+            (
+                "rejected".to_string(),
+                Some("pool_not_allowed: copy policy rejected".to_string())
+            )
+        );
     }
 
     #[test]
