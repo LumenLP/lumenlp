@@ -43,6 +43,11 @@ if [[ "$op_status" != "pending" || -z "$session_id" ]]; then
   echo "Invalid pending Copy operation row" >&2
   exit 1
 fi
+contract_session_id="${COPY_CONTRACT_SESSION_ID:-}"
+if [[ "${RUN_WRITE:-0}" == "1" && ! "$contract_session_id" =~ ^[0-9]+$ ]]; then
+  echo "Refusing to write: COPY_CONTRACT_SESSION_ID must be the registered Soroban u32 session ID" >&2
+  exit 1
+fi
 
 source_event_key="$(python3 -c 'import sys; value=sys.argv[1].encode("ascii"); assert len(value)<=32, "source event ID exceeds 32 bytes"; print((value+b"\x00"*(32-len(value))).hex())' "$source_event_id")"
 
@@ -53,7 +58,8 @@ scaled_quote_stroops="$(python3 -c 'import decimal,sys; value=decimal.Decimal(sy
 echo "Copy relayer candidate"
 echo "  source event: $source_event_id"
 echo "  replay key:   $source_event_key"
-echo "  session:      $session_id"
+echo "  local session: $session_id"
+echo "  chain session: ${contract_session_id:-not configured}"
 echo "  leader:       $leader"
 echo "  pool:         $pool"
 echo "  kind:         $kind"
@@ -89,7 +95,7 @@ echo "$output"
 
 echo "Executing policy-gated Copy operation on testnet"
 if ! output="$(invoke "$RELAYER_ACCOUNT" execute_copy_op \
-  --session_id "$session_id" \
+  --session_id "$contract_session_id" \
   --source_event_id "$source_event_key" \
   --pool "$pool" \
   --kind "$kind" \

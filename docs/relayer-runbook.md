@@ -35,6 +35,12 @@ Dry-run is the default. It prints the selected source event, deterministic
 `BytesN<32>` replay key, normalized integer amounts, and quote values without
 submitting a transaction.
 
+The local database uses an opaque session string, while the current Soroban
+entry point uses a `u32` session ID. Therefore a write also requires an
+explicit `COPY_CONTRACT_SESSION_ID` matching the session registered on the
+testnet policy contract. The helper refuses to write when this mapping is not
+provided; it never guesses or hashes a local session ID.
+
 ## Testnet write
 
 Only after the isolated testnet policy and accounts are configured, add
@@ -44,6 +50,7 @@ the dry-run output before enabling writes.
 
 ```sh
 RUN_WRITE=1 STELLAR_NETWORK=testnet \
+COPY_CONTRACT_SESSION_ID=<registered-u32-session-id> \
 COPY_POLICY=<testnet-policy-contract> \
 COPY_RECORDER_ACCOUNT=<recorder-signer> \
 COPY_RELAYER_ACCOUNT=<relayer-signer> \
