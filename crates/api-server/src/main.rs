@@ -74,7 +74,7 @@ async fn main() -> Result<()> {
 
     tokio::spawn(async move {
         handlers::warm_leader_list_cache(leader_warm_state).await;
-        info!("default leaders cache warmed");
+        info!("leaders caches warmed");
     });
 
     let fee_refresh_secs = std::env::var("LEADER_FEE_SNAPSHOT_SECS")

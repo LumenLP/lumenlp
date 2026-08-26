@@ -1163,18 +1163,22 @@ pub async fn warm_pool_list_cache(state: AppState) {
     let _ = list_pools(State(state), Query(PoolListQuery::default())).await;
 }
 
-/// Warm the default leaders view so the first page load after an API restart
-/// does not pay the full ranking query and fee-snapshot join.
+/// Warm the leaders views used by the web app so the first page load after an
+/// API restart or fee refresh does not pay the full ranking query and join.
 pub async fn warm_leader_list_cache(state: AppState) {
-    let _ = lp_leaders(
-        State(state),
-        Query(LeadersBoardQuery {
-            limit: Some(500),
-            window_days: Some(1),
-            sort: Some("fees".to_owned()),
-        }),
-    )
-    .await;
+    for window_days in [1_i64, 7, 30] {
+        for sort in ["fees", "activity"] {
+            let _ = lp_leaders(
+                State(state.clone()),
+                Query(LeadersBoardQuery {
+                    limit: Some(500),
+                    window_days: Some(window_days),
+                    sort: Some(sort.to_owned()),
+                }),
+            )
+            .await;
+        }
+    }
 }
 
 async fn pool_detail(State(state): State<AppState>, Path(address): Path<String>) -> impl IntoResponse {
