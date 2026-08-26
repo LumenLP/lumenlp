@@ -8,6 +8,7 @@ NETWORK_PASSPHRASE="${NETWORK_PASSPHRASE:-Test SDF Network ; September 2015}"
 POLICY="${SOROSWAP_COPY_POLICY:?Set SOROSWAP_COPY_POLICY to the isolated testnet Copy Policy contract}"
 SOURCE_ACCOUNT="${SOURCE_ACCOUNT:?Set SOURCE_ACCOUNT to the event-recorder/owner testnet account}"
 RELAYER_ACCOUNT="${RELAYER_ACCOUNT:-bob}"
+ROUTER="${SOROSWAP_ROUTER:-CCJUD55AG6W5HAI5LRVNKAE5WDP5XGZBUDS5WNTIVDU7O264UZZE7BRD}"
 POOL="${SOROSWAP_POOL:?Set SOROSWAP_POOL to an allowlisted Soroswap pair}"
 LEADER="${SOROSWAP_LEADER:?Set SOROSWAP_LEADER to the registered session leader}"
 SESSION_ID="${SOROSWAP_SESSION_ID:?Set SOROSWAP_SESSION_ID to the registered policy session}"
@@ -55,6 +56,12 @@ invoke_read() {
     --send no -- "$@"
 }
 
+invoke_pool_read() {
+  stellar contract invoke --id "$POOL" --source-account "$SOURCE_ACCOUNT" \
+    --rpc-url "$RPC_URL" --network-passphrase "$NETWORK_PASSPHRASE" \
+    --send no -- "$@"
+}
+
 schema="$(invoke_read --help 2>&1 || true)"
 for command in record_leader_event execute_standard_op; do
   if ! grep -q "^[[:space:]]*${command}[[:space:]]" <<< "$schema"; then
@@ -63,9 +70,35 @@ for command in record_leader_event execute_standard_op; do
   fi
 done
 
+if ! configured_router="$(invoke_read venue_router --venue soroswap_amm 2>/tmp/lumenlp-soroswap-router.err)"; then
+  echo "Copy Policy has no configured Soroswap Router; run set_venue_router first" >&2
+  cat /tmp/lumenlp-soroswap-router.err >&2
+  rm -f /tmp/lumenlp-soroswap-router.err
+  exit 1
+fi
+rm -f /tmp/lumenlp-soroswap-router.err
+if [[ "$configured_router" != "$ROUTER" ]]; then
+  echo "Copy Policy Router is $configured_router, expected $ROUTER" >&2
+  exit 1
+fi
+if ! token0="$(invoke_pool_read token_0 2>/tmp/lumenlp-soroswap-pair.err)" || \
+   ! token1="$(invoke_pool_read token_1 2>>/tmp/lumenlp-soroswap-pair.err)"; then
+  echo "Soroswap pair token read failed; check SOROSWAP_POOL" >&2
+  cat /tmp/lumenlp-soroswap-pair.err >&2
+  rm -f /tmp/lumenlp-soroswap-pair.err
+  exit 1
+fi
+rm -f /tmp/lumenlp-soroswap-pair.err
+if [[ -z "$token0" || -z "$token1" || "$token0" == "$token1" ]]; then
+  echo "Soroswap pair returned invalid token addresses" >&2
+  exit 1
+fi
+
 echo "Soroswap Copy Testnet preflight passed"
 echo "  policy:  $POLICY"
 echo "  pool:    $POOL"
+echo "  router:  $configured_router"
+echo "  tokens:  $token0 / $token1"
 echo "  session: $SESSION_ID"
 echo "  event:   $EVENT_ID"
 if [[ "$KIND" == "deposit" ]]; then
