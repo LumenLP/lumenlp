@@ -109,6 +109,7 @@ mod tests {
     fn session() -> CopySessionRow {
         CopySessionRow {
             id: "s".into(),
+            contract_session_id: None,
             follower_address: "GFOLLOWER".into(),
             leader_address: "GLEADER".into(),
             coefficient: 0.1,

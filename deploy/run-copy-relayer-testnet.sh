@@ -22,9 +22,10 @@ fi
 row="$(sqlite3 -separator '|' "$DATABASE_PATH" \
   "SELECT o.source_event_id, o.leader_address, o.pool_address, o.kind,
           o.amounts_json, o.quote_stroops, o.ledger,
-          c.session_id, c.status, c.scaled_quote_xlm
+          c.session_id, s.contract_session_id, c.status, c.scaled_quote_xlm
      FROM recorder_outbox o
      JOIN copy_ops c ON c.source_event_id = o.source_event_id
+     JOIN copy_sessions s ON s.id = c.session_id
     WHERE o.status = 'pending' AND c.status = 'pending'
     ORDER BY o.created_at ASC
     LIMIT 1;")"
@@ -34,7 +35,7 @@ if [[ -z "$row" ]]; then
   exit 0
 fi
 
-IFS='|' read -r source_event_id leader pool kind amounts quote_stroops ledger session_id op_status scaled_quote_xlm <<< "$row"
+IFS='|' read -r source_event_id leader pool kind amounts quote_stroops ledger session_id db_contract_session_id op_status scaled_quote_xlm <<< "$row"
 if [[ ! "$source_event_id" =~ ^[A-Za-z0-9._:-]+$ ]]; then
   echo "Unsupported source event ID characters" >&2
   exit 1
@@ -43,7 +44,7 @@ if [[ "$op_status" != "pending" || -z "$session_id" ]]; then
   echo "Invalid pending Copy operation row" >&2
   exit 1
 fi
-contract_session_id="${COPY_CONTRACT_SESSION_ID:-}"
+contract_session_id="${db_contract_session_id:-${COPY_CONTRACT_SESSION_ID:-}}"
 if [[ "${RUN_WRITE:-0}" == "1" && ! "$contract_session_id" =~ ^[0-9]+$ ]]; then
   echo "Refusing to write: COPY_CONTRACT_SESSION_ID must be the registered Soroban u32 session ID" >&2
   exit 1

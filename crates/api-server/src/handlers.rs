@@ -2601,6 +2601,7 @@ fn new_copy_entity_id() -> String {
 fn copy_session_json(session: &CopySessionRow) -> Value {
     json!({
         "id": session.id,
+        "contract_session_id": session.contract_session_id,
         "follower_address": session.follower_address,
         "leader_address": session.leader_address,
         "coefficient": session.coefficient,
@@ -2749,6 +2750,7 @@ fn reconcile_copy_ops(index_db: &IndexDb, session: &mut CopySessionRow) -> Resul
             Some(last_created_at),
             Some(&last_event_id),
             None,
+            None,
         )?;
         session.watermark_ts = last_created_at;
         session.watermark_event_id = last_event_id;
@@ -2798,6 +2800,7 @@ struct CreateCopySessionBody {
     max_per_op_quote_xlm: Option<f64>,
     max_daily_quote_xlm: Option<f64>,
     expires_at: Option<i64>,
+    contract_session_id: Option<u32>,
 }
 
 async fn create_copy_session(
@@ -2856,6 +2859,7 @@ async fn create_copy_session(
         max_per_op,
         max_daily,
         body.expires_at,
+        body.contract_session_id,
     ) {
         Ok(session) => Json(copy_session_json(&session)).into_response(),
         Err(error) => (
@@ -2902,6 +2906,7 @@ struct UpdateCopySessionBody {
     status: Option<String>,
     coefficient: Option<f64>,
     include_claims: Option<bool>,
+    contract_session_id: Option<u32>,
 }
 
 async fn update_copy_session_handler(
@@ -2945,6 +2950,7 @@ async fn update_copy_session_handler(
             None,
             None,
             body.include_claims,
+            body.contract_session_id,
         ) {
             Ok(()) => match index_db.get_copy_session(&id) {
                 Ok(Some(session)) => Json(copy_session_json(&session)).into_response(),

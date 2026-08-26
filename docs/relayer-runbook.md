@@ -36,10 +36,12 @@ Dry-run is the default. It prints the selected source event, deterministic
 submitting a transaction.
 
 The local database uses an opaque session string, while the current Soroban
-entry point uses a `u32` session ID. Therefore a write also requires an
-explicit `COPY_CONTRACT_SESSION_ID` matching the session registered on the
-testnet policy contract. The helper refuses to write when this mapping is not
-provided; it never guesses or hashes a local session ID.
+entry point uses a `u32` session ID. Therefore a write also requires a
+`contract_session_id` matching the session registered on the testnet policy
+contract. This value can be supplied when creating or updating a Copy session
+through the API. For one-off legacy sessions, `COPY_CONTRACT_SESSION_ID` can
+override the missing database value. The helper refuses to write when this
+mapping is not provided; it never guesses or hashes a local session ID.
 
 ## Testnet write
 

@@ -52,6 +52,7 @@ pub struct PoolEventRow {
 #[derive(Debug, Clone, PartialEq)]
 pub struct CopySessionRow {
     pub id: String,
+    pub contract_session_id: Option<u32>,
     pub follower_address: String,
     pub leader_address: String,
     pub coefficient: f64,
@@ -237,6 +238,7 @@ impl IndexDb {
             r#"
             CREATE TABLE IF NOT EXISTS copy_sessions (
               id TEXT PRIMARY KEY,
+              contract_session_id INTEGER,
               follower_address TEXT NOT NULL,
               leader_address TEXT NOT NULL,
               coefficient REAL NOT NULL,
@@ -336,6 +338,7 @@ impl IndexDb {
             )?;
         }
         self.ensure_column("copy_sessions", "watermark_event_id", "TEXT NOT NULL DEFAULT ''")?;
+        self.ensure_column("copy_sessions", "contract_session_id", "INTEGER")?;
         self.ensure_column("copy_sessions", "allowed_pools_json", "TEXT NOT NULL DEFAULT '[]'")?;
         self.ensure_column("copy_sessions", "max_per_op_quote_xlm", "REAL NOT NULL DEFAULT 0")?;
         self.ensure_column("copy_sessions", "max_daily_quote_xlm", "REAL NOT NULL DEFAULT 0")?;
@@ -378,11 +381,13 @@ impl IndexDb {
         max_per_op_quote_xlm: f64,
         max_daily_quote_xlm: f64,
         expires_at: Option<i64>,
+        contract_session_id: Option<u32>,
     ) -> Result<CopySessionRow> {
         self.pause_active_sessions_for_pair(follower_address, leader_address)?;
         let now = chrono::Utc::now().timestamp();
         let row = CopySessionRow {
             id: new_copy_id(),
+            contract_session_id,
             follower_address: follower_address.to_string(),
             leader_address: leader_address.to_string(),
             coefficient,
@@ -401,14 +406,15 @@ impl IndexDb {
         self.conn.execute(
             r#"
             INSERT INTO copy_sessions (
-              id, follower_address, leader_address, coefficient, status,
+              id, contract_session_id, follower_address, leader_address, coefficient, status,
               include_claims, cursor_ts, watermark_ts, watermark_event_id,
               allowed_pools_json, max_per_op_quote_xlm, max_daily_quote_xlm, expires_at,
               created_at, updated_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
             "#,
             params![
                 row.id,
+                row.contract_session_id,
                 row.follower_address,
                 row.leader_address,
                 row.coefficient,
@@ -431,7 +437,7 @@ impl IndexDb {
     pub fn list_copy_sessions(&self, follower: &str) -> Result<Vec<CopySessionRow>> {
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT id, follower_address, leader_address, coefficient, status,
+            SELECT id, contract_session_id, follower_address, leader_address, coefficient, status,
                    include_claims, allowed_pools_json, max_per_op_quote_xlm,
                    max_daily_quote_xlm, expires_at, cursor_ts, watermark_ts,
                    watermark_event_id, created_at, updated_at
@@ -447,7 +453,7 @@ impl IndexDb {
     pub fn active_copy_sessions(&self) -> Result<Vec<CopySessionRow>> {
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT id, follower_address, leader_address, coefficient, status,
+            SELECT id, contract_session_id, follower_address, leader_address, coefficient, status,
                    include_claims, allowed_pools_json, max_per_op_quote_xlm,
                    max_daily_quote_xlm, expires_at, cursor_ts, watermark_ts,
                    watermark_event_id, created_at, updated_at
@@ -463,7 +469,7 @@ impl IndexDb {
     pub fn get_copy_session(&self, id: &str) -> Result<Option<CopySessionRow>> {
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT id, follower_address, leader_address, coefficient, status,
+            SELECT id, contract_session_id, follower_address, leader_address, coefficient, status,
                    include_claims, allowed_pools_json, max_per_op_quote_xlm,
                    max_daily_quote_xlm, expires_at, cursor_ts, watermark_ts,
                    watermark_event_id, created_at, updated_at
@@ -487,6 +493,7 @@ impl IndexDb {
         watermark_ts: Option<i64>,
         watermark_event_id: Option<&str>,
         include_claims: Option<bool>,
+        contract_session_id: Option<u32>,
     ) -> Result<()> {
         let Some(mut row) = self.get_copy_session(id)? else {
             anyhow::bail!("copy session not found: {id}");
@@ -506,12 +513,16 @@ impl IndexDb {
         if let Some(value) = include_claims {
             row.include_claims = value;
         }
+        if contract_session_id.is_some() {
+            row.contract_session_id = contract_session_id;
+        }
         row.updated_at = chrono::Utc::now().timestamp();
         self.conn.execute(
             r#"
             UPDATE copy_sessions
             SET status = ?2, coefficient = ?3, watermark_ts = ?4,
-                watermark_event_id = ?5, include_claims = ?6, updated_at = ?7
+                watermark_event_id = ?5, include_claims = ?6,
+                contract_session_id = ?7, updated_at = ?8
             WHERE id = ?1
             "#,
             params![
@@ -521,6 +532,7 @@ impl IndexDb {
                 row.watermark_ts,
                 row.watermark_event_id,
                 row.include_claims as i64,
+                row.contract_session_id,
                 row.updated_at,
             ],
         )?;
@@ -2139,23 +2151,24 @@ fn collect_event_rows(
 }
 
 fn map_copy_session_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<CopySessionRow> {
-    let allowed_pools_json: String = row.get(6)?;
+    let allowed_pools_json: String = row.get(7)?;
     Ok(CopySessionRow {
         id: row.get(0)?,
-        follower_address: row.get(1)?,
-        leader_address: row.get(2)?,
-        coefficient: row.get(3)?,
-        status: row.get(4)?,
-        include_claims: row.get::<_, i64>(5)? != 0,
+        contract_session_id: row.get(1)?,
+        follower_address: row.get(2)?,
+        leader_address: row.get(3)?,
+        coefficient: row.get(4)?,
+        status: row.get(5)?,
+        include_claims: row.get::<_, i64>(6)? != 0,
         allowed_pools: serde_json::from_str(&allowed_pools_json).unwrap_or_default(),
-        max_per_op_quote_xlm: row.get(7)?,
-        max_daily_quote_xlm: row.get(8)?,
-        expires_at: row.get(9)?,
-        cursor_ts: row.get(10)?,
-        watermark_ts: row.get(11)?,
-        watermark_event_id: row.get(12)?,
-        created_at: row.get(13)?,
-        updated_at: row.get(14)?,
+        max_per_op_quote_xlm: row.get(8)?,
+        max_daily_quote_xlm: row.get(9)?,
+        expires_at: row.get(10)?,
+        cursor_ts: row.get(11)?,
+        watermark_ts: row.get(12)?,
+        watermark_event_id: row.get(13)?,
+        created_at: row.get(14)?,
+        updated_at: row.get(15)?,
     })
 }
 
@@ -2453,7 +2466,7 @@ mod tests {
     fn insert_copy_op_is_idempotent() {
         let db = test_db();
         let session = db
-            .create_copy_session("GFOLLOWER", "GLEADER", 0.5, false, &[], 0.0, 0.0, None)
+            .create_copy_session("GFOLLOWER", "GLEADER", 0.5, false, &[], 0.0, 0.0, None, None)
             .unwrap();
         let op = CopyOpRow {
             id: "op-1".into(),
@@ -2480,12 +2493,12 @@ mod tests {
     fn create_copy_session_pauses_prior_active_pair() {
         let db = test_db();
         let first = db
-            .create_copy_session("GFOLLOWER", "GLEADER", 1.0, false, &[], 0.0, 0.0, None)
+            .create_copy_session("GFOLLOWER", "GLEADER", 1.0, false, &[], 0.0, 0.0, None, None)
             .unwrap();
         assert_eq!(first.status, "active");
 
         let second = db
-            .create_copy_session("GFOLLOWER", "GLEADER", 0.5, true, &[], 0.0, 0.0, None)
+            .create_copy_session("GFOLLOWER", "GLEADER", 0.5, true, &[], 0.0, 0.0, None, None)
             .unwrap();
         assert_eq!(second.status, "active");
         assert_eq!(db.get_copy_session(&first.id).unwrap().unwrap().status, "paused");

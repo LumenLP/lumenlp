@@ -321,6 +321,7 @@ components:
       required: [follower_address, leader_address, coefficient]
       properties:
         follower_address: { type: string }
+        contract_session_id: { type: integer, format: int32, minimum: 0, nullable: true }
         leader_address: { type: string }
         coefficient: { type: number }
         include_claims: { type: boolean }
@@ -334,6 +335,7 @@ components:
       type: object
       properties:
         id: { type: string }
+        contract_session_id: { type: integer, format: int32, minimum: 0, nullable: true }
         follower_address: { type: string }
         leader_address: { type: string }
         coefficient: { type: number }
