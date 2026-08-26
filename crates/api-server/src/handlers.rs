@@ -2600,13 +2600,24 @@ async fn lp_profile(State(state): State<AppState>, Query(q): Query<AddressQuery>
         }),
         "honesty": "Profile windows use indexed claimed fees and, when snapshot boundaries are available, verified unclaimed-fee changes to form accrued fees. These are not full PnL vs entry and not a win rate. Open positions scan pools touched in ~90d; Sushi V3 also verifies the Position Manager list against known pools.",
     });
-    state.lp_profile_cache.lock().unwrap().insert(
-        q.address.clone(),
-        (
-            StdInstant::now() + StdDuration::from_secs(30),
-            response_body.clone(),
-        ),
-    );
+    {
+        let now = StdInstant::now();
+        let mut cache = state.lp_profile_cache.lock().unwrap();
+        cache.retain(|_, (expires_at, _)| *expires_at > now);
+        if cache.len() >= 256 {
+            if let Some(oldest_key) = cache
+                .iter()
+                .min_by_key(|(_, (expires_at, _))| *expires_at)
+                .map(|(key, _)| key.clone())
+            {
+                cache.remove(&oldest_key);
+            }
+        }
+        cache.insert(
+            q.address.clone(),
+            (now + StdDuration::from_secs(30), response_body.clone()),
+        );
+    }
     if let Some(client) = state.redis.as_ref() {
         if let Ok(serialized) = serde_json::to_string(&response_body) {
             if let Ok(mut connection) = client.get_multiplexed_async_connection().await {
