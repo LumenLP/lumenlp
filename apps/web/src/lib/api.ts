@@ -461,13 +461,13 @@ export function fetchLpLeaders(limit = 25, windowDays = 30, sort: "fees" | "acti
 }
 
 export function fetchPools() {
-  return getJson<PoolsResponse>("/v1/pools?limit=500&page=1").then(async (first) => {
+  return getJson<PoolsResponse>("/v1/pools?limit=1000&page=1").then(async (first) => {
     const pages = first.pagination?.pages ?? 1;
     if (pages <= 1) return first;
 
     const rest = await Promise.all(
       Array.from({ length: pages - 1 }, (_, index) =>
-        getJson<PoolsResponse>(`/v1/pools?limit=500&page=${index + 2}`),
+        getJson<PoolsResponse>(`/v1/pools?limit=1000&page=${index + 2}`),
       ),
     );
     return {

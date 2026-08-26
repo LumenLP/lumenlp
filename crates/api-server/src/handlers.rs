@@ -753,7 +753,10 @@ fn paginate_pool_body(mut body: Value, query: &PoolListQuery) -> Value {
     let total = pools.len();
     // Keep the normal UI request to a single page while allowing clients to
     // fetch the full catalogue without opening one request per 100 pools.
-    let limit = query.limit.unwrap_or(total.max(1)).clamp(1, 500);
+    // The web client loads the catalogue once and applies filters locally. Keep
+    // the ceiling above the current multi-venue catalogue so normal loads do
+    // not require a second request, while retaining bounded response sizes.
+    let limit = query.limit.unwrap_or(total.max(1)).clamp(1, 1_000);
     let page = query.page.unwrap_or(1).max(1);
     let start = page.saturating_sub(1).saturating_mul(limit).min(total);
     let end = start.saturating_add(limit).min(total);
