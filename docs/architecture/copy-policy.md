@@ -128,6 +128,16 @@ validated without signing a transaction. The policy instance has not been
 connected to production relayers and no Copy LP deposit or withdrawal was
 executed through it.
 
+The read-only Soroswap Testnet preflight was repeated on 2026-08-26 after the
+policy and adapter regression tests. It confirmed that the configured Router
+`CCJUD55AG6W5HAI5LRVNKAE5WDP5XGZBUDS5WNTIVDU7O264UZZE7BRD` resolves to the
+configured Factory
+`CDP3HMUH6SMS3S7NPGNDJLULCOXXEPSHY4JKUKMBNQMATHDHWXRRJTBY`. The Factory
+returned 225 pairs; a real pair read returned both token addresses, ordered
+reserves `1232150007934 / 2069771239621`, and a normalized fee of 30 bps.
+This confirms the read and configuration boundary only. It does not claim that
+Soroswap Copy LP execution is production-enabled.
+
 The provisioning helper is intentionally separate from execution. Its default
 mode only checks the Router/Factory relationship and the policy's configured
 Router. Its explicit write mode requires a caller-supplied testnet token-admin
