@@ -183,6 +183,13 @@ relayer sends it to Soroban, it is deterministically encoded as a zero-padded
 32-byte value for the policy contract's `BytesN<32>` replay key; IDs longer
 than 32 bytes are rejected rather than truncated.
 
+Copy sessions also keep two distinct identifiers. LumenLP uses an opaque local
+session ID for API and database relationships, while the Soroban policy uses a
+registered `u32` session ID. The optional `contract_session_id` binding is
+stored on the local session only after the corresponding policy session has
+been registered. A relayer must use that explicit binding and must not derive
+one by hashing or truncating the local ID.
+
 ## Repository Structure
 
 ```text
