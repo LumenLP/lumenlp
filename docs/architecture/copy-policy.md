@@ -62,9 +62,9 @@ stellar contract build --package lumenlp-copy-policy --out-dir target/contracts
 
 The current local build artifact is
 `target/wasm32v1-none/release/lumenlp_copy_policy.wasm`. It was built on
-2026-08-24 with hash:
+2026-08-26 with hash:
 
-`4c48263115c925f9806915bf2b9f26d5980a14c8a1ec66ff4e4c43ad9aee4d19`
+`3ac2e5657e55b81b3539e2ab0f91ecad07c9f06799474bf3a0c2760052d4e204`
 
 The deployed v3 testnet instance below is the previous promotion-gated build.
 The Soroswap-gated build is deployed separately and remains isolated from
@@ -85,6 +85,19 @@ The first testnet deployment completed on 2026-08-18:
 - Deployment transaction: [b47ac3822186fdf7c15593c6109b58cc01db16d8b89b9511166eba25b7efdb6f](https://stellar.expert/explorer/testnet/tx/b47ac3822186fdf7c15593c6109b58cc01db16d8b89b9511166eba25b7efdb6f)
 - Lab view: [testnet contract](https://lab.stellar.org/r/testnet/contract/CCFF6EGDGRXQYXMYTW6KZHIGGVG6A7IPJTQUB2MHTCDXVSVHHMEXHHBI)
 - Initialization transaction: [35de3ae514ee8f31736f2617dbe744f3a6265745d3edfb5ada61f28193c0f4ee](https://stellar.expert/explorer/testnet/tx/35de3ae514ee8f31736f2617dbe744f3a6265745d3edfb5ada61f28193c0f4ee)
+
+The current ABI was deployed as a new isolated testnet instance on
+2026-08-26. It is the schema-verified target for the next testnet vertical
+slice and is not connected to production relayers or mainnet funds:
+
+- Contract: `CC2M72PXE2W66T54NIL6FHIDORLIEETVEKP27MMGGGQ52OFAZS62B534`
+- WASM upload transaction: [670e5de07588845cbd2b0cbacf6f360298621937ecf9d065807eaac43be6dc12](https://stellar.expert/explorer/testnet/tx/670e5de07588845cbd2b0cbacf6f360298621937ecf9d065807eaac43be6dc12)
+- Deployment transaction: [7957bdfa72b81f0a522f1720eddf412e27ac46e35626473c81789ed4d4400926](https://stellar.expert/explorer/testnet/tx/7957bdfa72b81f0a522f1720eddf412e27ac46e35626473c81789ed4d4400926)
+- Lab view: [testnet contract](https://lab.stellar.org/r/testnet/contract/CC2M72PXE2W66T54NIL6FHIDORLIEETVEKP27MMGGGQ52OFAZS62B534)
+- Verified entry points: `set_event_recorder`, `record_leader_event`, `register_session_coeff`, `execute_copy_op`, and `execute_standard_op`.
+
+The ABI check was read-only. The instance remains uninitialized until the
+owner, recorder, relayer, and isolated session configuration are reviewed.
 
 The isolated Soroswap routing instance was deployed and configured on
 2026-08-24:
