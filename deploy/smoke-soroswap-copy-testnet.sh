@@ -114,6 +114,47 @@ for token in "$token0" "$token1"; do
 done
 rm -f /tmp/lumenlp-soroswap-token.err
 
+session_json="$(invoke_read session --session_id "$SESSION_ID")"
+if ! python3 - "$session_json" "$POOL" "$LEADER" "$QUOTE" <<'PY'
+import json, sys
+session = json.loads(sys.argv[1])
+pool, leader, quote = sys.argv[2], sys.argv[3], int(sys.argv[4])
+if session.get("leader") != leader:
+    raise SystemExit("policy session leader does not match SOROSWAP_LEADER")
+if pool not in session.get("allowed_pools", []):
+    raise SystemExit("policy session does not allowlist SOROSWAP_POOL")
+if session.get("paused"):
+    raise SystemExit("policy session is paused")
+if quote > int(session["max_per_op_quote"]):
+    raise SystemExit("quote exceeds policy per-operation limit")
+if int(session["daily_used_quote"]) + quote > int(session["max_daily_quote"]):
+    raise SystemExit("quote exceeds remaining policy daily limit")
+PY
+then
+  echo "Soroswap policy session preflight failed" >&2
+  exit 1
+fi
+
+if [[ "$KIND" == "deposit" ]]; then
+  for token_amount in "$token0:$AMOUNT0" "$token1:$AMOUNT1"; do
+    token="${token_amount%%:*}"
+    amount="${token_amount##*:}"
+    balance="$(stellar contract invoke --id "$token" --source-account "$SOURCE_ACCOUNT" \
+      --rpc-url "$RPC_URL" --network-passphrase "$NETWORK_PASSPHRASE" \
+      --send no -- balance --id "$POLICY")"
+    if ! python3 - "$balance" "$amount" <<'PY'
+import json, sys
+balance = json.loads(sys.argv[1])
+if int(balance) < int(sys.argv[2]):
+    raise SystemExit(1)
+PY
+    then
+      echo "Insufficient policy token balance for $token (need $amount, have $balance)" >&2
+      exit 1
+    fi
+  done
+fi
+
 echo "Soroswap Copy Testnet preflight passed"
 echo "  policy:  $POLICY"
 echo "  pool:    $POOL"
