@@ -25,6 +25,19 @@ invoke() {
     --send yes -- "${@:2}"
 }
 
+# Check the embedded contract schema before any state-changing call. This
+# prevents accidentally running the current smoke flow against an older policy
+# instance that predates the recorder boundary.
+SCHEMA="$(stellar contract invoke --id "$POLICY" --source-account "$SOURCE_ACCOUNT" \
+  --rpc-url "$RPC_URL" --network-passphrase "$NETWORK_PASSPHRASE" \
+  --send no -- --help 2>&1 || true)"
+for command in set_event_recorder record_leader_event execute_copy_op; do
+  if ! grep -q "^[[:space:]]*${command}[[:space:]]" <<< "$SCHEMA"; then
+    echo "Policy ABI is missing ${command}; deploy the current Copy Policy first" >&2
+    exit 1
+  fi
+done
+
 echo "Configuring event recorder"
 invoke "$SOURCE_ACCOUNT" set_event_recorder --recorder "$SOURCE_ACCOUNT"
 
