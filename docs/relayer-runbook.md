@@ -35,6 +35,14 @@ Dry-run is the default. It prints the selected source event, deterministic
 `BytesN<32>` replay key, normalized integer amounts, and quote values without
 submitting a transaction.
 
+## Configure policy
+
+For a fresh isolated testnet policy, use
+`deploy/configure-copy-policy-testnet.sh` to perform the owner-controlled
+initialization, recorder configuration, and numeric session registration as
+separate actions. Its default action is `help`; every write requires an
+explicit `COPY_POLICY_ACTION` and the script refuses non-testnet networks.
+
 The local database uses an opaque session string, while the current Soroban
 entry point uses a `u32` session ID. Therefore a write also requires a
 `contract_session_id` matching the session registered on the testnet policy
