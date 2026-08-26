@@ -2250,6 +2250,25 @@ async fn positions_summary(State(state): State<AppState>, Query(q): Query<Addres
 
 /// Portfolio + recent liquidity activity for scouting Copy leaders (Smart
 /// LP–style).
+fn cache_lp_profile(state: &AppState, address: &str, value: &Value) {
+    let now = StdInstant::now();
+    let mut cache = state.lp_profile_cache.lock().unwrap();
+    cache.retain(|_, (expires_at, _)| *expires_at > now);
+    if cache.len() >= 256 {
+        if let Some(oldest_key) = cache
+            .iter()
+            .min_by_key(|(_, (expires_at, _))| *expires_at)
+            .map(|(key, _)| key.clone())
+        {
+            cache.remove(&oldest_key);
+        }
+    }
+    cache.insert(
+        address.to_owned(),
+        (now + StdDuration::from_secs(30), value.clone()),
+    );
+}
+
 async fn lp_profile(State(state): State<AppState>, Query(q): Query<AddressQuery>) -> impl IntoResponse {
     if !valid_stellar_address(&q.address) {
         return (
@@ -2282,6 +2301,7 @@ async fn lp_profile(State(state): State<AppState>, Query(q): Query<AddressQuery>
             let cached: redis::RedisResult<Option<String>> = connection.get(redis_lp_profile_key(&q.address)).await;
             if let Ok(Some(serialized)) = cached {
                 if let Ok(value) = serde_json::from_str::<Value>(&serialized) {
+                    cache_lp_profile(&state, &q.address, &value);
                     let mut response = Json(value).into_response();
                     response.headers_mut().insert(
                         HeaderName::from_static("x-lumenlp-cache"),
@@ -2614,24 +2634,7 @@ async fn lp_profile(State(state): State<AppState>, Query(q): Query<AddressQuery>
         }),
         "honesty": "Profile windows use indexed claimed fees and, when snapshot boundaries are available, verified unclaimed-fee changes to form accrued fees. These are not full PnL vs entry and not a win rate. Open positions scan pools touched in ~90d; Sushi V3 also verifies the Position Manager list against known pools.",
     });
-    {
-        let now = StdInstant::now();
-        let mut cache = state.lp_profile_cache.lock().unwrap();
-        cache.retain(|_, (expires_at, _)| *expires_at > now);
-        if cache.len() >= 256 {
-            if let Some(oldest_key) = cache
-                .iter()
-                .min_by_key(|(_, (expires_at, _))| *expires_at)
-                .map(|(key, _)| key.clone())
-            {
-                cache.remove(&oldest_key);
-            }
-        }
-        cache.insert(
-            q.address.clone(),
-            (now + StdDuration::from_secs(30), response_body.clone()),
-        );
-    }
+    cache_lp_profile(&state, &q.address, &response_body);
     if let Some(client) = state.redis.as_ref() {
         if let Ok(serialized) = serde_json::to_string(&response_body) {
             if let Ok(mut connection) = client.get_multiplexed_async_connection().await {
