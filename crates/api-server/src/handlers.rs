@@ -711,6 +711,8 @@ struct PoolListQuery {
     /// `dex` is the public UI spelling; `venue` is retained for API clients.
     dex: Option<String>,
     venue: Option<String>,
+    /// Omit expensive diagnostic fields that are only needed by pool detail.
+    compact: Option<bool>,
     #[serde(rename = "refresh")]
     refresh: Option<bool>,
 }
@@ -765,6 +767,14 @@ fn paginate_pool_body(mut body: Value, query: &PoolListQuery) -> Value {
     let start = page.saturating_sub(1).saturating_mul(limit).min(total);
     let end = start.saturating_add(limit).min(total);
     let page_rows = pools[start..end].to_vec();
+    let mut page_rows = page_rows;
+    if query.compact == Some(true) {
+        for pool in &mut page_rows {
+            if let Some(object) = pool.as_object_mut() {
+                object.remove("score_breakdown");
+            }
+        }
+    }
     *pools = page_rows;
     body["pagination"] = json!({
         "page": page,
@@ -3268,6 +3278,7 @@ mod tests {
             q: None,
             dex: Some("soroswap".into()),
             venue: None,
+            compact: None,
             refresh: None,
         };
         let filtered = paginate_pool_body(body, &query);
@@ -3280,6 +3291,7 @@ mod tests {
             q: None,
             dex: Some("soroswap_amm".into()),
             venue: None,
+            compact: None,
             refresh: None,
         };
         let filtered = paginate_pool_body(
@@ -3301,6 +3313,7 @@ mod tests {
             q: None,
             dex: Some("sushi_v3".into()),
             venue: None,
+            compact: None,
             refresh: None,
         };
         let filtered = paginate_pool_body(json!({"pools": [{"address": "D", "venue": "sushi"}]}), &query);
@@ -3311,6 +3324,24 @@ mod tests {
     fn pool_pagination_accepts_page_size_alias() {
         let query: PoolListQuery = serde_json::from_value(json!({"page_size": 25})).unwrap();
         assert_eq!(query.limit, Some(25));
+    }
+
+    #[test]
+    fn compact_pool_pagination_omits_diagnostic_breakdown() {
+        let query = PoolListQuery {
+            page: Some(1),
+            limit: Some(10),
+            q: None,
+            dex: None,
+            venue: None,
+            compact: Some(true),
+            refresh: None,
+        };
+        let filtered = paginate_pool_body(
+            json!({"pools": [{"address": "A", "score_breakdown": {"score": 1}}]}),
+            &query,
+        );
+        assert!(filtered["pools"][0].get("score_breakdown").is_none());
     }
 
     #[test]
@@ -3358,6 +3389,7 @@ mod tests {
             q: Some("usdc".into()),
             dex: None,
             venue: None,
+            compact: None,
             refresh: None,
         };
         let filtered = paginate_pool_body(
