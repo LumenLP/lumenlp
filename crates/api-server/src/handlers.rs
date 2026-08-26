@@ -61,6 +61,9 @@ pub struct AppState {
     /// expensive, but profiles should still refresh frequently enough to show
     /// current LP state.
     pub lp_profile_cache: Arc<Mutex<HashMap<String, (StdInstant, Value)>>>,
+    /// Prevents several expired profile requests from starting the same RPC
+    /// refresh at once.
+    pub lp_profile_refreshing: Arc<AtomicBool>,
     pub redis: Option<redis::Client>,
     pub leader_fee_scan_cursor: Arc<std::sync::atomic::AtomicUsize>,
 }
@@ -102,6 +105,7 @@ const SCORE_TVL_FLOOR_USD: f64 = 0.05;
 const DUST_TVL_FLOOR: f64 = 1e-6;
 const REDIS_TOKEN_META_TTL_SECS: u64 = 3_600;
 const REDIS_LP_PROFILE_TTL_SECS: u64 = 60;
+const LP_PROFILE_STALE_GRACE_SECS: u64 = 300;
 const REDIS_LP_LEADERS_TTL_SECS: u64 = 60;
 const LEADER_LIST_CACHE_SECS: u64 = 60;
 
@@ -2288,12 +2292,50 @@ async fn lp_profile(State(state): State<AppState>, Query(q): Query<AddressQuery>
             .into_response();
     }
 
-    if let Some(value) = {
+    if let Some((expires_at, value)) = {
         let cache = state.lp_profile_cache.lock().unwrap();
         cache
             .get(&q.address)
-            .and_then(|(expires_at, value)| (*expires_at > StdInstant::now()).then(|| value.clone()))
+            .map(|(expires_at, value)| (*expires_at, value.clone()))
     } {
+        let now = StdInstant::now();
+        if expires_at <= now && expires_at + StdDuration::from_secs(LP_PROFILE_STALE_GRACE_SECS) > now
+            && state
+                .lp_profile_refreshing
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+        {
+            let refresh_state = state.clone();
+            let refresh_address = q.address.clone();
+            let refresh_flag = Arc::clone(&state.lp_profile_refreshing);
+            std::thread::spawn(move || {
+                let Ok(runtime) = tokio::runtime::Builder::new_current_thread().enable_all().build() else {
+                    refresh_flag.store(false, Ordering::Release);
+                    return;
+                };
+                refresh_state.lp_profile_cache.lock().unwrap().remove(&refresh_address);
+                runtime.block_on(async move {
+                    let _ = lp_profile(
+                        State(refresh_state),
+                        Query(AddressQuery { address: refresh_address }),
+                    )
+                    .await;
+                });
+                refresh_flag.store(false, Ordering::Release);
+            });
+        }
+        if expires_at <= now {
+            let mut response = Json(value).into_response();
+            response.headers_mut().insert(
+                HeaderName::from_static("x-lumenlp-cache"),
+                HeaderValue::from_static("profile-local-stale"),
+            );
+            response.headers_mut().insert(
+                CACHE_CONTROL,
+                HeaderValue::from_static("public, max-age=15, s-maxage=60, stale-while-revalidate=300"),
+            );
+            return response;
+        }
         let mut response = Json(value).into_response();
         response.headers_mut().insert(
             HeaderName::from_static("x-lumenlp-cache"),
