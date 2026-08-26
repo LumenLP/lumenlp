@@ -51,6 +51,45 @@ through the API. For one-off legacy sessions, `COPY_CONTRACT_SESSION_ID` can
 override the missing database value. The helper refuses to write when this
 mapping is not provided; it never guesses or hashes a local session ID.
 
+## Soroswap standard operation
+
+Soroswap AMM uses a separate venue-aware smoke tool because its Router call
+needs two token amounts for deposits and an LP-share amount for withdrawals.
+The tool performs all checks without writing by default:
+
+```sh
+STELLAR_NETWORK=testnet \
+SOROSWAP_COPY_POLICY=<testnet-policy-contract> \
+SOURCE_ACCOUNT=<owner-or-recorder-signer> \
+SOROSWAP_POOL=<allowlisted-pair> \
+SOROSWAP_LEADER=<registered-leader-address> \
+SOROSWAP_SESSION_ID=<registered-u32-session-id> \
+SOROSWAP_AMOUNT0=<token0-stroops> \
+SOROSWAP_AMOUNT1=<token1-stroops> \
+SOROSWAP_QUOTE=<quote-unit> \
+./deploy/smoke-soroswap-copy-testnet.sh
+```
+
+Before enabling writes, configure the Router with the owner-only helper and
+provision both token contracts to the policy. The provisioning command needs
+the token admin signer; it must not be replaced with the policy owner unless
+the token contract explicitly uses that same admin:
+
+```sh
+COPY_POLICY_ACTION=set-router \
+STELLAR_NETWORK=testnet \
+STELLAR_TESTNET_SOURCE=<policy-owner-signer> \
+COPY_POLICY=<testnet-policy-contract> \
+COPY_VENUE=soroswap_amm \
+COPY_ROUTER_ADDRESS=<testnet-router> \
+./deploy/configure-copy-policy-testnet.sh
+```
+
+Only after the preflight confirms the Router, pair tokens, session limits, and
+policy balances should `RUN_WRITE=1` be added to the Soroswap command. The
+command submits no mainnet transaction and has no fallback to generic
+`execute_copy_op`.
+
 ## Testnet write
 
 Only after the isolated testnet policy and accounts are configured, add
