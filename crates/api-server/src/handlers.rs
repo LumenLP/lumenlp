@@ -1735,6 +1735,21 @@ async fn lp_leaders(State(state): State<AppState>, Query(q): Query<LeadersBoardQ
                     + unclaimed_fee_deltas.get(&leader.address).copied().unwrap_or(0.0)
             };
             total(b).partial_cmp(&total(a)).unwrap_or(std::cmp::Ordering::Equal)
+                // Keep equal/zero-fee rows stable. HashMap iteration order is
+                // intentionally unspecified and otherwise makes the board
+                // appear to reshuffle on every cache refresh.
+                .then_with(|| {
+                    b.claim_quote_xlm
+                        .partial_cmp(&a.claim_quote_xlm)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .then_with(|| {
+                    b.deposit_quote_xlm
+                        .partial_cmp(&a.deposit_quote_xlm)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .then_with(|| b.event_count.cmp(&a.event_count))
+                .then_with(|| a.address.cmp(&b.address))
         });
     }
     leaders.truncate(limit);
