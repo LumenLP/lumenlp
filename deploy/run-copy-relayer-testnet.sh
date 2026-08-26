@@ -87,7 +87,7 @@ if ! output="$(invoke "$RECORDER_ACCOUNT" record_leader_event \
   --amounts "$amounts_vec" \
   --quote "$quote_stroops" \
   --ledger "$ledger" 2>&1)"; then
-  sqlite3 "$DATABASE_PATH" "UPDATE recorder_outbox SET status='failed', last_error='record_leader_event failed', updated_at=strftime('%s','now') WHERE source_event_id='$source_event_id';" || true
+  sqlite3 "$DATABASE_PATH" "UPDATE recorder_outbox SET status='pending', last_error='record_leader_event failed', updated_at=strftime('%s','now') WHERE source_event_id='$source_event_id';" || true
   echo "$output" >&2
   exit 1
 fi
@@ -101,7 +101,7 @@ if ! output="$(invoke "$RELAYER_ACCOUNT" execute_copy_op \
   --kind "$kind" \
   --quote "$scaled_quote_stroops" 2>&1)"; then
   echo "$output" >&2
-  sqlite3 "$DATABASE_PATH" "UPDATE recorder_outbox SET status='failed', last_error='execute_copy_op failed', updated_at=strftime('%s','now') WHERE source_event_id='$source_event_id';" || true
+  sqlite3 "$DATABASE_PATH" "UPDATE recorder_outbox SET status='pending', last_error='execute_copy_op failed', updated_at=strftime('%s','now') WHERE source_event_id='$source_event_id';" || true
   exit 1
 fi
 echo "$output"
