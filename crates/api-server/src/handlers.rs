@@ -1168,15 +1168,17 @@ pub async fn warm_pool_list_cache(state: AppState) {
 pub async fn warm_leader_list_cache(state: AppState) {
     for window_days in [1_i64, 7, 30] {
         for sort in ["fees", "activity"] {
-            let _ = lp_leaders(
-                State(state.clone()),
-                Query(LeadersBoardQuery {
-                    limit: Some(500),
-                    window_days: Some(window_days),
-                    sort: Some(sort.to_owned()),
-                }),
-            )
-            .await;
+            for limit in [25_usize, 500] {
+                let _ = lp_leaders(
+                    State(state.clone()),
+                    Query(LeadersBoardQuery {
+                        limit: Some(limit),
+                        window_days: Some(window_days),
+                        sort: Some(sort.to_owned()),
+                    }),
+                )
+                .await;
+            }
         }
     }
 }
