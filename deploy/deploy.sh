@@ -68,10 +68,13 @@ ufw delete allow 3300/tcp 2>/dev/null || true
 
 ufw allow ${API_PORT}/tcp comment 'lumenlp-api' || true
 
-systemctl stop lpagent-api.service 2>/dev/null || true
-systemctl stop lpagent-indexer.service 2>/dev/null || true
-systemctl stop lpagent-snapshotter.timer 2>/dev/null || true
-systemctl stop lpagent-snapshotter.service 2>/dev/null || true
+# Remove the old pre-rename units so they cannot be started accidentally or
+# compete for the same SQLite files after a reboot.
+systemctl disable --now lpagent-api.service lpagent-indexer.service lpagent-snapshotter.timer lpagent-snapshotter.service 2>/dev/null || true
+rm -f /etc/systemd/system/lpagent-api.service \
+      /etc/systemd/system/lpagent-indexer.service \
+      /etc/systemd/system/lpagent-snapshotter.service \
+      /etc/systemd/system/lpagent-snapshotter.timer
 
 python3 - <<'PY'
 import os
