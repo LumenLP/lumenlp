@@ -77,3 +77,22 @@ Before a testnet run, verify:
 After a run, compare the transaction result with the local `recorder_outbox`
 and `copy_ops` rows. A failed submission must remain visible for retry and
 must not be treated as executed merely because a transaction was constructed.
+
+## Bind a local session
+
+After the Soroban owner has registered a session, bind its numeric ID to the
+matching local Copy session through the API. The leader, allowed pools,
+coefficient, claim setting, expiry, and quote limits must already match the
+on-chain policy; `contract_session_id` is only an identity binding and does not
+replace those checks.
+
+```sh
+curl -X PATCH https://api.lumenlp.xyz/v1/copy/sessions/<local-session-id> \
+  -H 'content-type: application/json' \
+  -d '{"contract_session_id":42}'
+```
+
+Use the returned session JSON to confirm the binding before running the
+relayer. If the local and on-chain policies do not describe the same follower
+workflow, stop and create a new isolated testnet session instead of reusing
+the numeric ID.
