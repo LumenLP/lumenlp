@@ -143,6 +143,13 @@ The isolated policy Router binding was then configured by the Testnet owner on
 The follow-up smoke preflight verified the stored Router and pair token
 addresses successfully. No LP deposit or withdrawal was submitted.
 
+An isolated Soroswap session was registered on 2026-08-26 for the same pair,
+with leader `GBTZVQRXWUTOBJZU5VEZZVNOQIEP7TIHORJFG26FVAHJGCUPDC22BULU`, session
+ID `43`, and bounded quote limits: [session configuration transaction](https://stellar.expert/explorer/testnet/tx/91378566d09775bea5f76b6c87604e32ae900dc407f6301204f62a89f59452f8).
+The subsequent asset-provisioning attempt correctly stopped because the token
+admin signer is not present in the local key store. No asset mint or LP
+operation was submitted.
+
 The provisioning helper is intentionally separate from execution. Its default
 mode only checks the Router/Factory relationship and the policy's configured
 Router. Its explicit write mode requires a caller-supplied testnet token-admin
