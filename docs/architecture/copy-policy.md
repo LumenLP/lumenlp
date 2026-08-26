@@ -138,6 +138,11 @@ reserves `1232150007934 / 2069771239621`, and a normalized fee of 30 bps.
 This confirms the read and configuration boundary only. It does not claim that
 Soroswap Copy LP execution is production-enabled.
 
+The isolated policy Router binding was then configured by the Testnet owner on
+2026-08-26: [configuration transaction](https://stellar.expert/explorer/testnet/tx/2cb5eb661e9b14a6345e2f4efd89440002a0e2eecf41695ea9d1c567cb15ca19).
+The follow-up smoke preflight verified the stored Router and pair token
+addresses successfully. No LP deposit or withdrawal was submitted.
+
 The provisioning helper is intentionally separate from execution. Its default
 mode only checks the Router/Factory relationship and the policy's configured
 Router. Its explicit write mode requires a caller-supplied testnet token-admin

@@ -62,6 +62,15 @@ invoke_pool_read() {
     --send no -- "$@"
 }
 
+normalize_address() {
+  python3 -c 'import json,sys; value=sys.stdin.read().strip();
+try:
+    parsed=json.loads(value)
+    print(parsed if isinstance(parsed, str) else value)
+except json.JSONDecodeError:
+    print(value)' 
+}
+
 schema="$(invoke_read --help 2>&1 || true)"
 for command in record_leader_event execute_standard_op; do
   if ! grep -q "^[[:space:]]*${command}[[:space:]]" <<< "$schema"; then
@@ -70,7 +79,7 @@ for command in record_leader_event execute_standard_op; do
   fi
 done
 
-if ! configured_router="$(invoke_read venue_router --venue soroswap_amm 2>/tmp/lumenlp-soroswap-router.err)"; then
+if ! configured_router="$(invoke_read venue_router --venue soroswap_amm 2>/tmp/lumenlp-soroswap-router.err | normalize_address)"; then
   echo "Copy Policy has no configured Soroswap Router; run set_venue_router first" >&2
   cat /tmp/lumenlp-soroswap-router.err >&2
   rm -f /tmp/lumenlp-soroswap-router.err
@@ -81,8 +90,8 @@ if [[ "$configured_router" != "$ROUTER" ]]; then
   echo "Copy Policy Router is $configured_router, expected $ROUTER" >&2
   exit 1
 fi
-if ! token0="$(invoke_pool_read token_0 2>/tmp/lumenlp-soroswap-pair.err)" || \
-   ! token1="$(invoke_pool_read token_1 2>>/tmp/lumenlp-soroswap-pair.err)"; then
+if ! token0="$(invoke_pool_read token_0 2>/tmp/lumenlp-soroswap-pair.err | normalize_address)" || \
+   ! token1="$(invoke_pool_read token_1 2>>/tmp/lumenlp-soroswap-pair.err | normalize_address)"; then
   echo "Soroswap pair token read failed; check SOROSWAP_POOL" >&2
   cat /tmp/lumenlp-soroswap-pair.err >&2
   rm -f /tmp/lumenlp-soroswap-pair.err
