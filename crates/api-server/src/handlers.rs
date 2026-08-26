@@ -1839,13 +1839,27 @@ async fn lp_leaders(State(state): State<AppState>, Query(q): Query<LeadersBoardQ
             }
         }
     }
-    state.leader_list_cache.lock().unwrap().insert(
-        local_key,
-        (
-            StdInstant::now() + StdDuration::from_secs(LEADER_LIST_CACHE_SECS),
-            response_body.clone(),
-        ),
-    );
+    {
+        let now = StdInstant::now();
+        let mut cache = state.leader_list_cache.lock().unwrap();
+        cache.retain(|_, (expires_at, _)| *expires_at > now);
+        if cache.len() >= 128 {
+            if let Some(oldest_key) = cache
+                .iter()
+                .min_by_key(|(_, (expires_at, _))| *expires_at)
+                .map(|(key, _)| key.clone())
+            {
+                cache.remove(&oldest_key);
+            }
+        }
+        cache.insert(
+            local_key,
+            (
+                now + StdDuration::from_secs(LEADER_LIST_CACHE_SECS),
+                response_body.clone(),
+            ),
+        );
+    }
     let mut response = Json(response_body).into_response();
     response.headers_mut().insert(
         HeaderName::from_static("x-lumenlp-cache"),
