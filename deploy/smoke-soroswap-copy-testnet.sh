@@ -68,7 +68,7 @@ try:
     parsed=json.loads(value)
     print(parsed if isinstance(parsed, str) else value)
 except json.JSONDecodeError:
-    print(value)' 
+    print(value)'
 }
 
 schema="$(invoke_read --help 2>&1 || true)"
