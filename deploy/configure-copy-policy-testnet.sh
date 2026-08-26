@@ -54,9 +54,22 @@ case "$ACTION" in
       --max_daily_quote "$MAX_DAILY" \
       --expires_at "$COPY_EXPIRES_AT"
     ;;
+  set-router)
+    : "${COPY_VENUE:?Set COPY_VENUE to soroswap_amm or soroswap}"
+    : "${COPY_ROUTER_ADDRESS:?Set COPY_ROUTER_ADDRESS to the allowlisted Testnet Router}"
+    if [[ "$COPY_VENUE" != "soroswap" && "$COPY_VENUE" != "soroswap_amm" ]]; then
+      echo "COPY_VENUE must be soroswap or soroswap_amm" >&2
+      exit 1
+    fi
+    echo "Configuring ${COPY_VENUE} Router on the isolated Testnet policy"
+    invoke set_venue_router \
+      --venue "$COPY_VENUE" \
+      --router "$COPY_ROUTER_ADDRESS"
+    ;;
   help)
     cat <<'EOF'
-Set COPY_POLICY_ACTION to one of: initialize, set-recorder, register-session.
+Set COPY_POLICY_ACTION to one of: initialize, set-recorder, register-session,
+or set-router.
 All actions write to Stellar Testnet and require explicit environment values.
 EOF
     ;;

@@ -150,6 +150,10 @@ performs an ABI preflight by default; only `RUN_WRITE=1` records one synthetic
 source event and calls `execute_standard_op` for a Soroswap deposit or
 withdrawal. Token/share amounts, quote, session, leader, and pair are all
 supplied explicitly, and the script refuses any network other than Testnet.
+The owner-only Router binding can be applied with
+`deploy/configure-copy-policy-testnet.sh` using
+`COPY_POLICY_ACTION=set-router`; the smoke tool verifies that binding before
+it can submit an operation.
 
 The authorization-tree build was deployed as a new, isolated testnet
 instance on 2026-08-24. It is configured only for authorization-boundary
