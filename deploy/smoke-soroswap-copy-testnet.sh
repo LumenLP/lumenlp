@@ -102,6 +102,17 @@ if [[ -z "$token0" || -z "$token1" || "$token0" == "$token1" ]]; then
   echo "Soroswap pair returned invalid token addresses" >&2
   exit 1
 fi
+for token in "$token0" "$token1"; do
+  if ! invoke_token_read="$(stellar contract invoke --id "$token" --source-account "$SOURCE_ACCOUNT" \
+      --rpc-url "$RPC_URL" --network-passphrase "$NETWORK_PASSPHRASE" \
+      --send no -- decimals 2>/tmp/lumenlp-soroswap-token.err)"; then
+    echo "Soroswap pair token is not a readable token contract: $token" >&2
+    cat /tmp/lumenlp-soroswap-token.err >&2
+    rm -f /tmp/lumenlp-soroswap-token.err
+    exit 1
+  fi
+done
+rm -f /tmp/lumenlp-soroswap-token.err
 
 echo "Soroswap Copy Testnet preflight passed"
 echo "  policy:  $POLICY"
