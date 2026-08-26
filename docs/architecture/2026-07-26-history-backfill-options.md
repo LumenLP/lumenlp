@@ -1,10 +1,10 @@
-# LPAgent 历史补数方案对比
+# LumenLP 历史补数方案对比
 
 日期：2026-07-26
 
 ## 目标
 
-为 `lpagent` 的 pools analytics 建立可持续的数据历史。
+为 `lumenlp` 的 pools analytics 建立可持续的数据历史。
 
 当前诉求不是“立刻拥有全历史”，而是：
 
@@ -57,7 +57,7 @@
 
 方案描述：
 
-- `snapshotter` 继续写 `lpagent.db`
+- `snapshotter` 继续写 `lumenlp.db`
 - `pool-indexer` 常驻写 `pool-indexer.db`
 - `api-server` 读取两份库，优先使用 event-driven rollup
 
@@ -140,7 +140,7 @@
 - 最重的方案
 - 维护的是“网络历史基础设施”，不是直接的产品能力
 - history archive 最终会是 TB 级长期增长
-- 更适合 validator / infra 团队，不适合当前 `lpagent` 阶段
+- 更适合 validator / infra 团队，不适合当前 `lumenlp` 阶段
 
 适用性：
 
@@ -172,7 +172,7 @@ archive 的重点不在本机 SSD，而在外部对象存储：
 
 长期容量会增长到 TB 级。
 
-这对当前 `lpagent` 来说过重。
+这对当前 `lumenlp` 来说过重。
 
 ## 当前推荐实施路径
 
@@ -205,7 +205,7 @@ archive 的重点不在本机 SSD，而在外部对象存储：
 
 当前明确不做：
 
-- 为了 `lpagent` 当前阶段而先上 archive node
+- 为了 `lumenlp` 当前阶段而先上 archive node
 
 ## 后续工作
 

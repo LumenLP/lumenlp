@@ -1,4 +1,4 @@
-# LPAgent Rich Pools Data Plan
+# LumenLP Rich Pools Data Plan
 
 Last updated: 2026-07-26
 
@@ -15,7 +15,7 @@ Target outcomes:
 
 ## Current state in this repo
 
-Current `lpagent` strengths:
+Current `lumenlp` strengths:
 
 - Pool discovery and on-chain hydrate already exist.
 - Snapshotter already persists pool state into SQLite.
@@ -70,7 +70,7 @@ Key ideas to reuse:
 - Use touched contracts to decide which pools to refresh
 - Separate hot path from slow full discovery
 
-This is the right model for `lpagent` too. The current hourly or 5-minute snapshot timer is enough for coarse snapshots, but not enough for rich pool analytics.
+This is the right model for `lumenlp` too. The current hourly or 5-minute snapshot timer is enough for coarse snapshots, but not enough for rich pool analytics.
 
 ### 3. Token metadata enrichment
 
@@ -84,9 +84,9 @@ Key idea:
 - Keep topology/state ingest separate from metadata enrichment
 - Backfill symbols/logos asynchronously
 
-For `lpagent`, this is the easiest way to upgrade pool labels from raw addresses to product-quality names.
+For `lumenlp`, this is the easiest way to upgrade pool labels from raw addresses to product-quality names.
 
-## Recommended architecture for lpagent
+## Recommended architecture for lumenlp
 
 Do not replace the current crates. Add one new lane beside them.
 
@@ -266,14 +266,14 @@ This is the most important architectural correction.
 - Separation of discovery vs hot refresh
 - Rollup table idea
 
-### Rewrite for lpagent
+### Rewrite for lumenlp
 
 - Event parser for Aquarius pool swaps
 - Pool-level event attribution
 - TVL + fee/tvl rollup logic
 - API schema for pools leaderboard
 
-The aggregator contract indexer is invocation-centric. `lpagent` needs pool-centric indexing.
+The aggregator contract indexer is invocation-centric. `lumenlp` needs pool-centric indexing.
 
 ## API shape to target
 

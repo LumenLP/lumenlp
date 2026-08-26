@@ -1,10 +1,10 @@
-# LPAgent Pools Methodology
+# LumenLP Pools Methodology
 
 Date: July 26, 2026
 
 ## Scope
 
-This document describes the current MVP methodology used in the LPAgent pool list and pool detail views.
+This document describes the current MVP methodology used in the LumenLP pool list and pool detail views.
 
 The current implementation is designed for:
 

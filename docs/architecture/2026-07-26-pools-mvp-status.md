@@ -1,4 +1,4 @@
-# LPAgent Pools MVP Status
+# LumenLP Pools MVP Status
 
 Date: July 26, 2026
 
@@ -44,7 +44,7 @@ This makes the ranking explainable in demos and grant conversations.
 
 Good enough for now:
 
-- Demoing that LPAgent can rank Aquarius pools using live indexed data
+- Demoing that LumenLP can rank Aquarius pools using live indexed data
 - Showing richer-than-snapshot pool analytics
 - Explaining how event indexing powers fee, volume, activity, liquidity-flow, and cadence views
 - Continuing to accumulate recent history without waiting for full archive-grade backfill
