@@ -63,12 +63,18 @@ async fn main() -> Result<()> {
 
     let copy_state = state.clone();
     let warm_state = state.clone();
+    let leader_warm_state = state.clone();
     let fee_state = state.clone();
     let app = Router::new().merge(handlers::router()).layer(cors).with_state(state);
 
     tokio::spawn(async move {
         handlers::warm_pool_list_cache(warm_state).await;
         info!("pool list cache warmed");
+    });
+
+    tokio::spawn(async move {
+        handlers::warm_leader_list_cache(leader_warm_state).await;
+        info!("default leaders cache warmed");
     });
 
     let fee_refresh_secs = std::env::var("LEADER_FEE_SNAPSHOT_SECS")
@@ -80,7 +86,11 @@ async fn main() -> Result<()> {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(fee_refresh_secs));
         loop {
             interval.tick().await;
-            handlers::refresh_leader_fee_snapshots(fee_state.clone()).await;
+            let refresh_state = fee_state.clone();
+            handlers::refresh_leader_fee_snapshots(refresh_state.clone()).await;
+            // Snapshot refresh invalidates fee-dependent leader variants. Warm
+            // the default board again before the next user request arrives.
+            handlers::warm_leader_list_cache(refresh_state).await;
         }
     });
 
