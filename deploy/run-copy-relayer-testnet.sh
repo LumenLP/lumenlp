@@ -73,6 +73,19 @@ if [[ "${RUN_WRITE:-0}" != "1" ]]; then
   exit 0
 fi
 
+# Refuse writes against an older policy instance before touching either the
+# recorder or execution entry point. The CLI returns a non-zero status for
+# --help on some contract versions, so validate the printed schema explicitly.
+SCHEMA="$(stellar contract invoke --id "$POLICY" --source-account "$RECORDER_ACCOUNT" \
+  --rpc-url "$RPC_URL" --network-passphrase "$NETWORK_PASSPHRASE" \
+  --send no -- --help 2>&1 || true)"
+for command in record_leader_event execute_copy_op; do
+  if ! grep -q "^[[:space:]]*${command}[[:space:]]" <<< "$SCHEMA"; then
+    echo "Policy ABI is missing ${command}; deploy the current Copy Policy first" >&2
+    exit 1
+  fi
+done
+
 invoke() {
   stellar contract invoke --id "$POLICY" --source-account "$1" \
     --rpc-url "$RPC_URL" --network-passphrase "$NETWORK_PASSPHRASE" \
