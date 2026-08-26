@@ -57,6 +57,10 @@ pub struct AppState {
     pub pool_list_refreshing: Arc<AtomicBool>,
     pub leader_list_cache: Arc<Mutex<HashMap<String, (StdInstant, Value)>>>,
     pub leader_list_refreshing: Arc<AtomicBool>,
+    /// Short-lived response cache for profile pages. RPC position reads are
+    /// expensive, but profiles should still refresh frequently enough to show
+    /// current LP state.
+    pub lp_profile_cache: Arc<Mutex<HashMap<String, (StdInstant, Value)>>>,
     pub redis: Option<redis::Client>,
     pub leader_fee_scan_cursor: Arc<std::sync::atomic::AtomicUsize>,
 }
@@ -2241,6 +2245,24 @@ async fn lp_profile(State(state): State<AppState>, Query(q): Query<AddressQuery>
             .into_response();
     }
 
+    if let Some(value) = {
+        let cache = state.lp_profile_cache.lock().unwrap();
+        cache
+            .get(&q.address)
+            .and_then(|(expires_at, value)| (*expires_at > StdInstant::now()).then(|| value.clone()))
+    } {
+        let mut response = Json(value).into_response();
+        response.headers_mut().insert(
+            HeaderName::from_static("x-lumenlp-cache"),
+            HeaderValue::from_static("profile-local-hit"),
+        );
+        response.headers_mut().insert(
+            CACHE_CONTROL,
+            HeaderValue::from_static("public, max-age=30, s-maxage=60, stale-while-revalidate=120"),
+        );
+        return response;
+    }
+
     if let Some(client) = state.redis.clone() {
         if let Ok(mut connection) = client.get_multiplexed_async_connection().await {
             let cached: redis::RedisResult<Option<String>> = connection.get(redis_lp_profile_key(&q.address)).await;
@@ -2578,6 +2600,13 @@ async fn lp_profile(State(state): State<AppState>, Query(q): Query<AddressQuery>
         }),
         "honesty": "Profile windows use indexed claimed fees and, when snapshot boundaries are available, verified unclaimed-fee changes to form accrued fees. These are not full PnL vs entry and not a win rate. Open positions scan pools touched in ~90d; Sushi V3 also verifies the Position Manager list against known pools.",
     });
+    state.lp_profile_cache.lock().unwrap().insert(
+        q.address.clone(),
+        (
+            StdInstant::now() + StdDuration::from_secs(30),
+            response_body.clone(),
+        ),
+    );
     if let Some(client) = state.redis.as_ref() {
         if let Ok(serialized) = serde_json::to_string(&response_body) {
             if let Ok(mut connection) = client.get_multiplexed_async_connection().await {
