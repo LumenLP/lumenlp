@@ -147,9 +147,9 @@ never stored in the repository and the helper does not invoke a DEX operation.
 Once a funded, allowlisted Testnet session and pair are available,
 `deploy/smoke-soroswap-copy-testnet.sh` provides the next isolated step. It
 performs an ABI preflight by default; only `RUN_WRITE=1` records one synthetic
-source event and calls `execute_standard_op` for a Soroswap deposit. Token
-amounts, quote, session, leader, and pair are all supplied explicitly, and the
-script refuses any network other than Testnet.
+source event and calls `execute_standard_op` for a Soroswap deposit or
+withdrawal. Token/share amounts, quote, session, leader, and pair are all
+supplied explicitly, and the script refuses any network other than Testnet.
 
 The authorization-tree build was deployed as a new, isolated testnet
 instance on 2026-08-24. It is configured only for authorization-boundary
