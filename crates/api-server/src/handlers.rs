@@ -1984,6 +1984,10 @@ pub async fn refresh_leader_fee_snapshots(state: AppState) {
     }
     info!(refreshed, "leader fee snapshot refresh complete");
     if refreshed > 0 {
+        // The fee refresh changes accrued-fee fields used by every board
+        // variant. Clear the process-local response cache as well as Redis;
+        // otherwise a worker can serve the previous ranking for another TTL.
+        state.leader_list_cache.lock().unwrap().clear();
         if let Some(redis) = state.redis.as_ref() {
             invalidate_lp_leaders_cache(redis).await;
         }
