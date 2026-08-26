@@ -96,8 +96,19 @@ slice and is not connected to production relayers or mainnet funds:
 - Lab view: [testnet contract](https://lab.stellar.org/r/testnet/contract/CC2M72PXE2W66T54NIL6FHIDORLIEETVEKP27MMGGGQ52OFAZS62B534)
 - Verified entry points: `set_event_recorder`, `record_leader_event`, `register_session_coeff`, `execute_copy_op`, and `execute_standard_op`.
 
-The ABI check was read-only. The instance remains uninitialized until the
-owner, recorder, relayer, and isolated session configuration are reviewed.
+The isolated testnet configuration was then applied and verified:
+
+- Initialization transaction: [edf6cc32c4b9154b2435df3ddad6d72e65905bc4429be4814cd01a5c7494a869](https://stellar.expert/explorer/testnet/tx/edf6cc32c4b9154b2435df3ddad6d72e65905bc4429be4814cd01a5c7494a869)
+- Event recorder configuration transaction: [fbd1f720cae46bfa8aa746dedc7fb1d2a06010c598ef99ad8c713b6ce42eaa92](https://stellar.expert/explorer/testnet/tx/fbd1f720cae46bfa8aa746dedc7fb1d2a06010c598ef99ad8c713b6ce42eaa92)
+- Session `43` registration transaction: [4d1fd22bedcb514329e9531046d2e359f9451847e67df2163e3a3096a1853e06](https://stellar.expert/explorer/testnet/tx/4d1fd22bedcb514329e9531046d2e359f9451847e67df2163e3a3096a1853e06)
+- Read-only session verification confirmed the configured Leader, pool allowlist, 10% coefficient, quote limits, and expiry.
+
+The ABI check and session read were read-only. A synthetic recorder event and
+policy-only Copy operation were subsequently verified on testnet; no DEX call
+or token balance change was involved:
+
+- Recorder event transaction: [2aabd8c48bfb838f389a02204419a32b26e4798201e55fe87b38e4358bd28d1f](https://stellar.expert/explorer/testnet/tx/2aabd8c48bfb838f389a02204419a32b26e4798201e55fe87b38e4358bd28d1f)
+- `CopyExecuted` transaction: [551f237d9ddf28c9ddc4101505c3f8c9fbfb098be6923ff91a99fb6666710257](https://stellar.expert/explorer/testnet/tx/551f237d9ddf28c9ddc4101505c3f8c9fbfb098be6923ff91a99fb6666710257)
 
 The isolated Soroswap routing instance was deployed and configured on
 2026-08-24:

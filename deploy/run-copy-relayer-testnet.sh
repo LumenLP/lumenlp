@@ -120,6 +120,18 @@ if ! output="$(invoke "$RELAYER_ACCOUNT" execute_copy_op \
 fi
 echo "$output"
 
-sqlite3 "$DATABASE_PATH" "UPDATE recorder_outbox SET status='submitted', last_error=NULL, updated_at=strftime('%s','now') WHERE source_event_id='$source_event_id';"
-sqlite3 "$DATABASE_PATH" "UPDATE copy_ops SET status='signed', note='testnet relayer submitted policy execution', updated_at=strftime('%s','now') WHERE source_event_id='$source_event_id' AND status='pending';"
+if ! sqlite3 "$DATABASE_PATH" <<SQL
+BEGIN;
+UPDATE recorder_outbox
+   SET status = 'submitted', last_error = NULL, updated_at = strftime('%s','now')
+ WHERE source_event_id = '$source_event_id';
+UPDATE copy_ops
+   SET status = 'signed', note = 'testnet relayer submitted policy execution', updated_at = strftime('%s','now')
+ WHERE source_event_id = '$source_event_id' AND status = 'pending';
+COMMIT;
+SQL
+then
+  echo "On-chain Copy succeeded but local status reconciliation failed" >&2
+  exit 1
+fi
 echo "Copy relayer submitted one testnet policy operation."
