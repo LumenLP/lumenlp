@@ -326,7 +326,7 @@ Important API surfaces:
 |---|---|
 | `GET /health` | Service health |
 | `GET /v1/indexer/status` | Indexer cursor and counts |
-| `GET /v1/pools` | Ranked pool list and window metrics |
+| `GET /v1/pools` | Ranked pool list and window metrics; `compact=true` omits diagnostic `score_breakdown` fields for faster catalogue loads |
 | `GET /v1/pools/{address}` | Pool detail and latest state |
 | `GET /v1/pools/{address}/history` | Snapshot history |
 | `GET /v1/pools/{address}/events` | Recent pool events |
