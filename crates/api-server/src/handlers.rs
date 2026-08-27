@@ -104,7 +104,10 @@ const SCORE_TVL_FLOOR: f64 = 10.0;
 const SCORE_TVL_FLOOR_USD: f64 = 0.05;
 const DUST_TVL_FLOOR: f64 = 1e-6;
 const REDIS_TOKEN_META_TTL_SECS: u64 = 3_600;
-const REDIS_LP_PROFILE_TTL_SECS: u64 = 60;
+// Profile generation includes on-chain position verification. Keep the
+// shared result for the full stale-revalidation window so separate API
+// workers do not repeat the same expensive scan every minute.
+const REDIS_LP_PROFILE_TTL_SECS: u64 = 300;
 const LP_PROFILE_STALE_GRACE_SECS: u64 = 300;
 const REDIS_LP_LEADERS_TTL_SECS: u64 = 60;
 const LEADER_LIST_CACHE_SECS: u64 = 60;
