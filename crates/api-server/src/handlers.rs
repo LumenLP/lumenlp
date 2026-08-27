@@ -2303,6 +2303,20 @@ fn cache_lp_profile(state: &AppState, address: &str, value: &Value) {
     );
 }
 
+/// Compare accrued fees with capital committed during the same window.
+///
+/// `accrued_fee` includes both claimed fees and the verified change in
+/// unclaimed fees. Keeping this calculation separate prevents profile proxy
+/// metrics from silently falling back to claimed fees only.
+fn fee_capital_ratio(accrued_fee: Option<f64>, deposit: f64) -> Option<f64> {
+    let fee = accrued_fee?;
+    if deposit > 0.0 && fee.is_finite() && deposit.is_finite() {
+        Some(fee / deposit)
+    } else {
+        None
+    }
+}
+
 async fn lp_profile(State(state): State<AppState>, Query(q): Query<AddressQuery>) -> impl IntoResponse {
     if !valid_stellar_address(&q.address) {
         return (
@@ -2590,13 +2604,13 @@ async fn lp_profile(State(state): State<AppState>, Query(q): Query<AddressQuery>
     let activity_30d_json = window_json(&activity_30d, unclaimed_deltas.1);
     let activity_7d_json = window_json(&activity_7d, unclaimed_deltas.0);
 
-    let fee_capital = |claim: f64, deposit: f64| -> Option<f64> {
-        if deposit > 0.0 && claim.is_finite() && deposit.is_finite() {
-            Some(claim / deposit)
-        } else {
-            None
-        }
-    };
+    let accrued_7d = unclaimed_deltas
+        .0
+        .map(|delta| activity_7d.claim_quote_xlm + delta);
+    let accrued_30d = unclaimed_deltas
+        .1
+        .map(|delta| activity_30d.claim_quote_xlm + delta);
+    let accrued_lifetime = Some(lifetime.claim_quote_xlm);
     let months_active = match (first_activity_at, last_activity_at) {
         (Some(first), Some(last)) if last >= first => ((last - first) as f64 / (30.0 * 86_400.0)).max(1.0 / 30.0),
         _ => 0.0,
@@ -2678,15 +2692,15 @@ async fn lp_profile(State(state): State<AppState>, Query(q): Query<AddressQuery>
             "net_liquidity_quote_xlm": lifetime.deposit_quote_xlm - lifetime.withdraw_quote_xlm,
         },
         "proxies": {
-            "fee_capital_ratio_7d": fee_capital(activity_7d.claim_quote_xlm, activity_7d.deposit_quote_xlm),
-            "fee_capital_ratio_30d": fee_capital(activity_30d.claim_quote_xlm, activity_30d.deposit_quote_xlm),
-            "fee_capital_ratio_lifetime": fee_capital(lifetime.claim_quote_xlm, lifetime.deposit_quote_xlm),
+            "fee_capital_ratio_7d": fee_capital_ratio(accrued_7d, activity_7d.deposit_quote_xlm),
+            "fee_capital_ratio_30d": fee_capital_ratio(accrued_30d, activity_30d.deposit_quote_xlm),
+            "fee_capital_ratio_lifetime": fee_capital_ratio(accrued_lifetime, lifetime.deposit_quote_xlm),
             "claim_intensity_30d": claim_intensity_30d,
             "avg_monthly_claimed_xlm": avg_monthly_claimed_xlm,
             "avg_monthly_claimed_usd": avg_monthly_claimed_xlm.and_then(|xlm| to_usd(xlm)),
             "months_active_indexed": if months_active > 0.0 { Some(months_active) } else { None },
             "labels": {
-                "fee_capital_ratio": "claimed_fees / deposits (not ROI)",
+                "fee_capital_ratio": "windowed accrued_fees / deposits; lifetime uses claimed_fees because no lifetime unclaimed baseline exists (not ROI)",
                 "claim_intensity_30d": "claim_events / deposit_events (not win rate)",
                 "avg_monthly_claimed": "lifetime claimed fees / indexed active months (proxy)",
             },
@@ -3271,6 +3285,13 @@ mod tests {
         assert_eq!(bridge_tvl_usd(0.0, Some(0.17)), None);
         assert_eq!(bridge_tvl_usd(-1.0, Some(0.17)), None);
         assert!(bridge_tvl_usd(100.0, Some(0.17)).unwrap() > 0.0);
+    }
+
+    #[test]
+    fn fee_capital_ratio_uses_accrued_fee_when_unclaimed_delta_exists() {
+        assert_eq!(fee_capital_ratio(Some(15.0), 100.0), Some(0.15));
+        assert_eq!(fee_capital_ratio(Some(15.0), 0.0), None);
+        assert_eq!(fee_capital_ratio(None, 100.0), None);
     }
 
     #[test]
