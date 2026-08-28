@@ -870,12 +870,22 @@ impl IndexDb {
                 .last_activity_at
                 .map(|t| t.max(event.created_at))
                 .or(Some(event.created_at));
+            // Claim events must use an explicit fee quote. Some venues use
+            // total_quote_xlm for position or token amounts, which is not a
+            // fee and can inflate leader rankings by orders of magnitude.
+            let quote_key = match event.kind.as_str() {
+                "claim_fees" | "claim_protocol_fee" => "fee_quote_xlm",
+                _ => "total_quote_xlm",
+            };
             let quote = event
                 .body
-                .pointer("/derived/total_quote_xlm")
+                .pointer(&format!("/derived/{quote_key}"))
                 .and_then(|v| v.as_f64())
-                .or_else(|| event.body.pointer("/derived/fee_quote_xlm").and_then(|v| v.as_f64()))
-                .or_else(|| event.body.pointer("/derived/quote_xlm").and_then(|v| v.as_f64()))
+                .or_else(|| {
+                    (quote_key == "total_quote_xlm")
+                        .then(|| event.body.pointer("/derived/quote_xlm").and_then(|v| v.as_f64()))
+                        .flatten()
+                })
                 .filter(|v| v.is_finite() && *v > 0.0);
             match event.kind.as_str() {
                 "deposit_liquidity" => {
@@ -912,12 +922,16 @@ impl IndexDb {
             SELECT
               kind,
               COUNT(*) AS c,
-              COALESCE(SUM(COALESCE(
-                json_extract(body_json, '$.derived.total_quote_xlm'),
-                json_extract(body_json, '$.derived.fee_quote_xlm'),
-                json_extract(body_json, '$.derived.quote_xlm'),
-                0
-              )), 0) AS quote_sum,
+              COALESCE(SUM(CASE
+                WHEN kind IN ('claim_fees', 'claim_protocol_fee') THEN
+                  COALESCE(json_extract(body_json, '$.derived.fee_quote_xlm'), 0)
+                ELSE
+                  COALESCE(
+                    json_extract(body_json, '$.derived.total_quote_xlm'),
+                    json_extract(body_json, '$.derived.quote_xlm'),
+                    0
+                  )
+              END), 0) AS quote_sum,
               MIN(created_at) AS first_ts,
               MAX(created_at) AS last_ts
             FROM pool_events
@@ -1403,12 +1417,16 @@ impl IndexDb {
             SELECT
               json_extract(body_json, '$.derived.actor') AS actor,
               kind,
-              COALESCE(
-                json_extract(body_json, '$.derived.total_quote_xlm'),
-                json_extract(body_json, '$.derived.fee_quote_xlm'),
-                json_extract(body_json, '$.derived.quote_xlm'),
-                0
-              ) AS quote_xlm,
+              CASE
+                WHEN kind IN ('claim_fees', 'claim_protocol_fee') THEN
+                  COALESCE(json_extract(body_json, '$.derived.fee_quote_xlm'), 0)
+                ELSE
+                  COALESCE(
+                    json_extract(body_json, '$.derived.total_quote_xlm'),
+                    json_extract(body_json, '$.derived.quote_xlm'),
+                    0
+                  )
+              END AS quote_xlm,
               pool_address,
               created_at
             FROM pool_events
