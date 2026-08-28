@@ -90,7 +90,8 @@ async fn main() -> Result<()> {
             handlers::refresh_leader_fee_snapshots(refresh_state.clone()).await;
             // Snapshot refresh invalidates fee-dependent leader variants. Warm
             // the default board again before the next user request arrives.
-            handlers::warm_leader_list_cache(refresh_state).await;
+            handlers::warm_leader_list_cache(refresh_state.clone()).await;
+            handlers::warm_lp_profile_cache(refresh_state).await;
         }
     });
 

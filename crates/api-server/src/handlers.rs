@@ -1186,6 +1186,42 @@ pub async fn warm_leader_list_cache(state: AppState) {
     }
 }
 
+/// Warm a small set of active leader profiles outside the request path. A
+/// profile may perform several venue-specific RPC reads, so keep this bounded
+/// and let less frequently visited accounts remain on-demand.
+pub async fn warm_lp_profile_cache(state: AppState) {
+    let limit = std::env::var("LP_PROFILE_WARM_LIMIT")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .map(|value| value.clamp(1, 50))
+        .unwrap_or(10);
+    let concurrency = 2;
+    let addresses = {
+        let db = state.index_db.lock().unwrap();
+        db.known_liquidity_actors(limit).unwrap_or_default()
+    };
+    if addresses.is_empty() {
+        return;
+    }
+
+    let mut pending = addresses.into_iter();
+    let mut tasks = JoinSet::new();
+    for _ in 0..concurrency {
+        let Some(address) = pending.next() else { break };
+        tasks.spawn(lp_profile(State(state.clone()), Query(AddressQuery { address })));
+    }
+    let mut warmed = 0usize;
+    while let Some(result) = tasks.join_next().await {
+        if result.is_ok() {
+            warmed += 1;
+        }
+        if let Some(address) = pending.next() {
+            tasks.spawn(lp_profile(State(state.clone()), Query(AddressQuery { address })));
+        }
+    }
+    info!(warmed, "leader profile caches warmed");
+}
+
 async fn pool_detail(State(state): State<AppState>, Path(address): Path<String>) -> impl IntoResponse {
     let (meta, history, stats) = {
         let db = state.db.lock().unwrap();
