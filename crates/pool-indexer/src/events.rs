@@ -843,7 +843,6 @@ fn derive_sushi_collect(
                 {"token": pool_tokens.first(), "amount": amount0},
                 {"token": pool_tokens.get(1), "amount": amount1}
             ],
-            "fee_quote_xlm": total_quote_xlm,
             "total_quote_xlm": total_quote_xlm,
         }),
         actor,
