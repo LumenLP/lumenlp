@@ -927,6 +927,8 @@ impl IndexDb {
               COUNT(*) AS c,
               COALESCE(SUM(CASE
                 WHEN kind IN ('claim_fees', 'claim_protocol_fee')
+                  AND COALESCE(json_extract(body_json, '$.derived.venue'), '') IN ('sushi', 'sushi_v3') THEN 0
+                WHEN kind IN ('claim_fees', 'claim_protocol_fee')
                   AND COALESCE(json_extract(body_json, '$.derived.venue'), '') NOT IN ('sushi', 'sushi_v3') THEN
                   COALESCE(json_extract(body_json, '$.derived.fee_quote_xlm'), 0)
                 ELSE
@@ -1422,6 +1424,8 @@ impl IndexDb {
               json_extract(body_json, '$.derived.actor') AS actor,
               kind,
               CASE
+                WHEN kind IN ('claim_fees', 'claim_protocol_fee')
+                  AND COALESCE(json_extract(body_json, '$.derived.venue'), '') IN ('sushi', 'sushi_v3') THEN 0
                 WHEN kind IN ('claim_fees', 'claim_protocol_fee')
                   AND COALESCE(json_extract(body_json, '$.derived.venue'), '') NOT IN ('sushi', 'sushi_v3') THEN
                   COALESCE(json_extract(body_json, '$.derived.fee_quote_xlm'), 0)
