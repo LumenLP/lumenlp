@@ -877,10 +877,13 @@ impl IndexDb {
                 "claim_fees" | "claim_protocol_fee" => "fee_quote_xlm",
                 _ => "total_quote_xlm",
             };
-            let quote = event
-                .body
-                .pointer(&format!("/derived/{quote_key}"))
-                .and_then(|v| v.as_f64())
+            let sushi_claim = matches!(
+                event.body.pointer("/derived/venue").and_then(Value::as_str),
+                Some("sushi") | Some("sushi_v3")
+            ) && matches!(event.kind.as_str(), "claim_fees" | "claim_protocol_fee");
+            let quote = (!sushi_claim)
+                .then(|| event.body.pointer(&format!("/derived/{quote_key}")).and_then(|v| v.as_f64()))
+                .flatten()
                 .or_else(|| {
                     (quote_key == "total_quote_xlm")
                         .then(|| event.body.pointer("/derived/quote_xlm").and_then(|v| v.as_f64()))
@@ -923,7 +926,8 @@ impl IndexDb {
               kind,
               COUNT(*) AS c,
               COALESCE(SUM(CASE
-                WHEN kind IN ('claim_fees', 'claim_protocol_fee') THEN
+                WHEN kind IN ('claim_fees', 'claim_protocol_fee')
+                  AND COALESCE(json_extract(body_json, '$.derived.venue'), '') NOT IN ('sushi', 'sushi_v3') THEN
                   COALESCE(json_extract(body_json, '$.derived.fee_quote_xlm'), 0)
                 ELSE
                   COALESCE(
@@ -1418,7 +1422,8 @@ impl IndexDb {
               json_extract(body_json, '$.derived.actor') AS actor,
               kind,
               CASE
-                WHEN kind IN ('claim_fees', 'claim_protocol_fee') THEN
+                WHEN kind IN ('claim_fees', 'claim_protocol_fee')
+                  AND COALESCE(json_extract(body_json, '$.derived.venue'), '') NOT IN ('sushi', 'sushi_v3') THEN
                   COALESCE(json_extract(body_json, '$.derived.fee_quote_xlm'), 0)
                 ELSE
                   COALESCE(
