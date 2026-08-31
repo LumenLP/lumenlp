@@ -2584,6 +2584,27 @@ mod tests {
         assert_eq!(page2.len(), 1);
         assert_eq!(page2[0].event_id, "evt-same-b");
     }
+
+    #[test]
+    fn sushi_claim_amount_is_not_counted_as_fee() {
+        let db = test_db();
+        db.ensure_pool_events_table_for_test().unwrap();
+        let actor = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+        db.insert_pool_event_for_test(
+            "evt-sushi-claim",
+            200,
+            "claim_fees",
+            &format!(
+                r#"{{"derived":{{"actor":"{actor}","venue":"sushi","total_quote_xlm":999999.0}}}}"#
+            ),
+        )
+        .unwrap();
+
+        let leaders = db.top_liquidity_actors(100, 10, "fees").unwrap();
+        let leader = leaders.iter().find(|row| row.address == actor).unwrap();
+        assert_eq!(leader.claim_count, 1);
+        assert_eq!(leader.claim_quote_xlm, 0.0);
+    }
 }
 
 #[cfg(test)]
