@@ -48,19 +48,21 @@ impl DexAdaptor for SushiAdaptor {
         VenueCapabilities {
             list_pools: true,
             positions: true,
-            unclaimed_fees: true,
+            // Position-manager owed amounts are not yet proven to be a
+            // directly comparable fee accumulator across all Sushi pools.
+            unclaimed_fees: false,
             liquidity_events: true,
             quotes: true,
             draft_ops: true,
             deposit: true,
             withdraw: true,
-            claim: true,
+            claim: false,
             copy_scale: false,
         }
     }
 
     fn notes(&self) -> &'static str {
-        "Validated unsigned Position Manager drafts; policy-controlled execution remains fail-closed."
+        "Pool and position reads are available; claim fee attribution and policy-controlled execution remain fail-closed."
     }
 
     fn build_draft_op(&self, request: DraftRequest) -> Result<DraftOp> {
