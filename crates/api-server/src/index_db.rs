@@ -877,11 +877,13 @@ impl IndexDb {
                 "claim_fees" | "claim_protocol_fee" => "fee_quote_xlm",
                 _ => "total_quote_xlm",
             };
-            let sushi_claim = matches!(
-                event.body.pointer("/derived/venue").and_then(Value::as_str),
-                Some("sushi") | Some("sushi_v3")
-            ) && matches!(event.kind.as_str(), "claim_fees" | "claim_protocol_fee");
-            let quote = (!sushi_claim)
+            let unsupported_claim = event
+                .body
+                .pointer("/derived/venue")
+                .and_then(Value::as_str)
+                .is_some_and(|venue| venue != "aquarius")
+                && matches!(event.kind.as_str(), "claim_fees" | "claim_protocol_fee");
+            let quote = (!unsupported_claim)
                 .then(|| event.body.pointer(&format!("/derived/{quote_key}")).and_then(|v| v.as_f64()))
                 .flatten()
                 .or_else(|| {
@@ -927,9 +929,8 @@ impl IndexDb {
               COUNT(*) AS c,
               COALESCE(SUM(CASE
                 WHEN kind IN ('claim_fees', 'claim_protocol_fee')
-                  AND COALESCE(json_extract(body_json, '$.derived.venue'), '') IN ('sushi', 'sushi_v3') THEN 0
-                WHEN kind IN ('claim_fees', 'claim_protocol_fee')
-                  AND COALESCE(json_extract(body_json, '$.derived.venue'), '') NOT IN ('sushi', 'sushi_v3') THEN
+                  AND COALESCE(json_extract(body_json, '$.derived.venue'), '') NOT IN ('', 'aquarius') THEN 0
+                WHEN kind IN ('claim_fees', 'claim_protocol_fee') THEN
                   COALESCE(json_extract(body_json, '$.derived.fee_quote_xlm'), 0)
                 ELSE
                   COALESCE(
@@ -1425,9 +1426,8 @@ impl IndexDb {
               kind,
               CASE
                 WHEN kind IN ('claim_fees', 'claim_protocol_fee')
-                  AND COALESCE(json_extract(body_json, '$.derived.venue'), '') IN ('sushi', 'sushi_v3') THEN 0
-                WHEN kind IN ('claim_fees', 'claim_protocol_fee')
-                  AND COALESCE(json_extract(body_json, '$.derived.venue'), '') NOT IN ('sushi', 'sushi_v3') THEN
+                  AND COALESCE(json_extract(body_json, '$.derived.venue'), '') NOT IN ('', 'aquarius') THEN 0
+                WHEN kind IN ('claim_fees', 'claim_protocol_fee') THEN
                   COALESCE(json_extract(body_json, '$.derived.fee_quote_xlm'), 0)
                 ELSE
                   COALESCE(

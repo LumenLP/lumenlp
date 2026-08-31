@@ -507,19 +507,31 @@ fn derive_event_fields(
             if is_sushi {
                 return derive_sushi_collect(pool_fee_bps, &pool_tokens, data, context, actor);
             }
+            let venue = if is_soroswap {
+                "soroswap"
+            } else if is_phoenix {
+                "phoenix"
+            } else if is_comet {
+                "comet"
+            } else {
+                "aquarius"
+            };
             let token0 = topic.get(2).and_then(value_address_string);
             let token1 = topic.get(3).and_then(value_address_string);
             let amount0 = data.get(0).and_then(value_amount_string);
             let amount1 = data.get(1).and_then(value_amount_string);
-            let fee_quote_xlm = estimate_two_token_amounts_xlm(
-                &context.price_book,
-                token0.as_deref(),
-                amount0.as_deref(),
-                token1.as_deref(),
-                amount1.as_deref(),
-            );
+            let fee_quote_xlm = (venue == "aquarius").then(|| {
+                estimate_two_token_amounts_xlm(
+                    &context.price_book,
+                    token0.as_deref(),
+                    amount0.as_deref(),
+                    token1.as_deref(),
+                    amount1.as_deref(),
+                )
+            }).flatten();
             derived_with_actor(
                 json!({
+                    "venue": venue,
                     "pool_fee_bps": pool_fee_bps,
                     "token0": token0,
                     "token1": token1,
