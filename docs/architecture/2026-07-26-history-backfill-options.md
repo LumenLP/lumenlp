@@ -37,7 +37,7 @@
 
 当前推荐路线：
 
-1. 立刻在 `88.198.16.144` 上常驻运行 `pool-indexer`
+1. 立刻在 production host 上常驻运行 `pool-indexer`
 2. 接受当前只能回补最近保留窗口
 3. 从 2026-07-26 开始长期积累自己的历史库
 4. 等产品稳定后，再决定是否补 2026-07-18 之前的历史
@@ -178,7 +178,7 @@ archive 的重点不在本机 SSD，而在外部对象存储：
 
 ### 第一阶段：现在就跑
 
-- 在 `88.198.16.144` 上常驻运行 `pool-indexer`
+- 在 production host 上常驻运行 `pool-indexer`
 - 让 `api-server` 读取 `pool-indexer.db`
 - 接受仅有最近保留窗口的回补能力
 - 从今天开始沉淀长期历史
@@ -209,7 +209,7 @@ archive 的重点不在本机 SSD，而在外部对象存储：
 
 ## 后续工作
 
-- [ ] 在 `88.198.16.144` 上部署并常驻运行 `pool-indexer`
+- [ ] 在 production host 上部署并常驻运行 `pool-indexer`
 - [ ] 验证 `api-server` 读取 `pool-indexer.db`
 - [ ] 增加 indexer 状态监控：cursor、event_count、rollup 更新时间
 - [ ] 两周后再评估是否需要补 2026-07-18 之前历史
