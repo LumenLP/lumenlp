@@ -61,6 +61,7 @@ async fn main() -> Result<()> {
         lp_profile_inflight: Arc::new(Mutex::new(HashMap::new())),
         redis,
         leader_fee_scan_cursor: Arc::new(AtomicUsize::new(0)),
+        indexer_status_cache: Arc::new(Mutex::new(None)),
     };
 
     let cors = CorsLayer::new().allow_origin(Any).allow_methods(Any).allow_headers(Any);

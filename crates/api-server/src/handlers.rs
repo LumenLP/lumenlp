@@ -70,6 +70,7 @@ pub struct AppState {
     pub lp_profile_inflight: Arc<Mutex<HashMap<String, Arc<tokio::sync::Notify>>>>,
     pub redis: Option<redis::Client>,
     pub leader_fee_scan_cursor: Arc<std::sync::atomic::AtomicUsize>,
+    pub indexer_status_cache: Arc<Mutex<Option<(StdInstant, IndexerStatus)>>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -115,6 +116,7 @@ const REDIS_LP_PROFILE_TTL_SECS: u64 = 300;
 const LP_PROFILE_STALE_GRACE_SECS: u64 = 300;
 const REDIS_LP_LEADERS_TTL_SECS: u64 = 30;
 const LEADER_LIST_CACHE_SECS: u64 = 30;
+const INDEXER_STATUS_CACHE_SECS: u64 = 5;
 
 fn redis_token_meta_key(address: &str) -> String {
     format!("lumenlp:token-meta:v1:{address}")
@@ -726,13 +728,37 @@ fn indexer_status_json(status: &IndexerStatus) -> serde_json::Value {
 }
 
 async fn indexer_status(State(state): State<AppState>) -> impl IntoResponse {
+    if let Some(status) = {
+        let cache = state.indexer_status_cache.lock().unwrap();
+        cache
+            .as_ref()
+            .and_then(|(expires_at, status)| (*expires_at > StdInstant::now()).then(|| status.clone()))
+    } {
+        let mut response = Json(indexer_status_json(&status)).into_response();
+        response.headers_mut().insert(
+            HeaderName::from_static("x-lumenlp-cache"),
+            HeaderValue::from_static("indexer-status-local-hit"),
+        );
+        return response;
+    }
     let status = tokio::task::spawn_blocking(move || {
         let index_db = state.index_db.lock().unwrap();
         index_db.status()
     })
     .await;
     match status {
-        Ok(Ok(status)) => Json(indexer_status_json(&status)).into_response(),
+        Ok(Ok(status)) => {
+            state.indexer_status_cache.lock().unwrap().replace((
+                StdInstant::now() + StdDuration::from_secs(INDEXER_STATUS_CACHE_SECS),
+                status.clone(),
+            ));
+            let mut response = Json(indexer_status_json(&status)).into_response();
+            response.headers_mut().insert(
+                HeaderName::from_static("x-lumenlp-cache"),
+                HeaderValue::from_static("indexer-status-origin"),
+            );
+            response
+        }
         Ok(Err(error)) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": error.to_string(), "code": "db_error" })),
