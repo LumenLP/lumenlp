@@ -1186,16 +1186,16 @@ pub async fn warm_leader_list_cache(state: AppState) {
     }
 }
 
-/// Warm a small set of active leader profiles outside the request path. A
-/// profile may perform several venue-specific RPC reads, so keep this bounded
-/// and let less frequently visited accounts remain on-demand.
+/// Warm the most recently active leader profiles outside the request path. A
+/// profile may perform several venue-specific RPC reads, so keep concurrency
+/// bounded while covering enough accounts for the public Leader board.
 pub async fn warm_lp_profile_cache(state: AppState) {
     let limit = std::env::var("LP_PROFILE_WARM_LIMIT")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
         .map(|value| value.clamp(1, 50))
-        .unwrap_or(10);
-    let concurrency = 2;
+        .unwrap_or(25);
+    let concurrency = 4;
     let addresses = {
         let db = state.index_db.lock().unwrap();
         db.known_liquidity_actors(limit).unwrap_or_default()
