@@ -70,14 +70,24 @@ async fn main() -> Result<()> {
     let fee_state = state.clone();
     let app = Router::new().merge(handlers::router()).layer(cors).with_state(state);
 
-    tokio::spawn(async move {
-        handlers::warm_pool_list_cache(warm_state).await;
-        info!("pool list cache warmed");
+    std::thread::spawn(move || {
+        let Ok(runtime) = tokio::runtime::Builder::new_current_thread().enable_all().build() else {
+            return;
+        };
+        runtime.block_on(async move {
+            handlers::warm_pool_list_cache(warm_state).await;
+            info!("pool list cache warmed");
+        });
     });
 
-    tokio::spawn(async move {
-        handlers::warm_leader_list_cache(leader_warm_state).await;
-        info!("leaders caches warmed");
+    std::thread::spawn(move || {
+        let Ok(runtime) = tokio::runtime::Builder::new_current_thread().enable_all().build() else {
+            return;
+        };
+        runtime.block_on(async move {
+            handlers::warm_leader_list_cache(leader_warm_state).await;
+            info!("leaders caches warmed");
+        });
     });
 
     let fee_refresh_secs = std::env::var("LEADER_FEE_SNAPSHOT_SECS")
@@ -85,17 +95,22 @@ async fn main() -> Result<()> {
         .and_then(|value| value.parse::<u64>().ok())
         .filter(|value| *value >= 30)
         .unwrap_or(60);
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(fee_refresh_secs));
-        loop {
-            interval.tick().await;
-            let refresh_state = fee_state.clone();
-            handlers::refresh_leader_fee_snapshots(refresh_state.clone()).await;
-            // Snapshot refresh invalidates fee-dependent leader variants. Warm
-            // the default board again before the next user request arrives.
-            handlers::warm_leader_list_cache(refresh_state.clone()).await;
-            handlers::warm_lp_profile_cache(refresh_state).await;
-        }
+    std::thread::spawn(move || {
+        let Ok(runtime) = tokio::runtime::Builder::new_current_thread().enable_all().build() else {
+            return;
+        };
+        runtime.block_on(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(fee_refresh_secs));
+            loop {
+                interval.tick().await;
+                let refresh_state = fee_state.clone();
+                handlers::refresh_leader_fee_snapshots(refresh_state.clone()).await;
+                // Snapshot refresh invalidates fee-dependent leader variants. Warm
+                // the default board again before the next user request arrives.
+                handlers::warm_leader_list_cache(refresh_state.clone()).await;
+                handlers::warm_lp_profile_cache(refresh_state).await;
+            }
+        });
     });
 
     let copy_reconcile_secs = std::env::var("COPY_RECONCILE_SECS")
