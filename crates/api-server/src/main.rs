@@ -8,7 +8,7 @@ mod token_registry;
 
 use {
     anyhow::Result,
-    axum::{http::Response, Router},
+    axum::{http::{Request, Response}, Router},
     dex::{db::Db, SorobanRpc, MAINNET_PASSPHRASE},
     handlers::AppState,
     index_db::IndexDb,
@@ -22,7 +22,7 @@ use {
         },
     },
     tower_http::cors::{Any, CorsLayer},
-    tracing::{info, warn, Span},
+    tracing::{info, info_span, warn, Span},
     tower_http::trace::TraceLayer,
 };
 
@@ -69,7 +69,15 @@ async fn main() -> Result<()> {
     let warm_state = state.clone();
     let leader_warm_state = state.clone();
     let fee_state = state.clone();
-    let trace = TraceLayer::new_for_http().on_response(
+    let trace = TraceLayer::new_for_http()
+        .make_span_with(|request: &Request<_>| {
+            info_span!(
+                "http_request",
+                method = %request.method(),
+                path = %request.uri().path()
+            )
+        })
+        .on_response(
         |response: &Response<_>, latency: std::time::Duration, _span: &Span| {
             if latency >= std::time::Duration::from_millis(250) {
                 let cache = response
