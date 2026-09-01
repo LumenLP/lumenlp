@@ -460,25 +460,12 @@ export function fetchLpLeaders(limit = 25, windowDays = 30, sort: "fees" | "acti
   );
 }
 
-export function fetchPools() {
-  return getJson<PoolsResponse>("/v1/pools?limit=1000&page=1&compact=true").then(async (first) => {
-    const pages = first.pagination?.pages ?? 1;
-    if (pages <= 1) return first;
-
-    const rest = await Promise.all(
-      Array.from({ length: pages - 1 }, (_, index) =>
-        getJson<PoolsResponse>(`/v1/pools?limit=1000&page=${index + 2}&compact=true`),
-      ),
-    );
-    return {
-      ...first,
-      pools: [first, ...rest].flatMap((page) => page.pools ?? []),
-      pagination: {
-        ...first.pagination!,
-        page: 1,
-      },
-    };
-  });
+export function fetchPools(params: Record<string, string | number | undefined> = {}) {
+  const query = new URLSearchParams({ limit: "12", compact: "true" });
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && String(value).length > 0) query.set(key, String(value));
+  }
+  return getJson<PoolsResponse>(`/v1/pools?${query.toString()}`);
 }
 
 export function fetchVenues() {

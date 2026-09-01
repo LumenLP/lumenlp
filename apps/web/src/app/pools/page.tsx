@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { TokenPairMark, tokenVisualsFromMeta } from "@/components/TokenIdentity";
@@ -186,31 +186,15 @@ function PoolsPageInner() {
   const [feeTvlBucketFilter, setFeeTvlBucketFilter] = useState<(typeof feeTvlBuckets)[number]>("all");
   const [q, setQ] = useState("");
   const [page, setPage] = useState(1);
+  const [serverPageCount, setServerPageCount] = useState(1);
+  const [serverTotal, setServerTotal] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [urlReady, setUrlReady] = useState(false);
 
-  const poolTypes = useMemo(
-    () => ["all", ...Array.from(new Set(pools.map((pool) => pool.pool_type).filter(Boolean))).sort()],
-    [pools],
-  );
-  const venues = useMemo(
-    () => [
-      "all",
-      ...Array.from(
-        new Set(
-          pools
-            .map((pool) => pool.venue)
-            .filter((venue): venue is string => Boolean(venue)),
-        ),
-      ).sort(),
-    ],
-    [pools],
-  );
-  const feeTiers = useMemo(
-    () => ["all", ...Array.from(new Set(pools.map((pool) => String(pool.fee_bps)).filter(Boolean))).sort((a, b) => Number(a) - Number(b))],
-    [pools],
-  );
+  const poolTypes = ["all", "concentrated", "constant_product", "stable", "weighted"];
+  const venues = ["all", "aquarius", "comet", "phoenix", "soroswap_amm", "sushi_v3"];
+  const feeTiers = ["all", "1", "5", "10", "15", "22", "25", "30", "50", "100"];
 
   useEffect(() => {
     const nextWindow = searchParams.get("window");
@@ -245,13 +229,26 @@ function PoolsPageInner() {
     }
     const nextQuery = searchParams.get("q");
     if (nextQuery != null) setQ(nextQuery);
+    const nextPage = Number(searchParams.get("page"));
+    if (Number.isInteger(nextPage) && nextPage > 0) setPage(nextPage);
     setUrlReady(true);
   }, [searchParams]);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    fetchPools()
+    fetchPools({
+      page,
+      window: windowKey,
+      sort: sortKey,
+      dex: venueFilter === "all" ? undefined : venueFilter,
+      type: poolTypeFilter === "all" ? undefined : poolTypeFilter,
+      activity: activityFilter === "all" ? undefined : activityFilter,
+      feeTier: feeTierFilter === "all" ? undefined : feeTierFilter,
+      tvl: tvlBucketFilter === "all" ? undefined : tvlBucketFilter,
+      feeTvl: feeTvlBucketFilter === "all" ? undefined : feeTvlBucketFilter,
+      q: q.trim() || undefined,
+    })
       .then((r) => {
         if (cancelled) return;
         setPools(r.pools ?? []);
@@ -260,6 +257,8 @@ function PoolsPageInner() {
         setLastSnapshotAt(r.last_snapshot_at ?? null);
         setIndexerStatus(r.indexer_status ?? null);
         setNote(r.note ?? null);
+        setServerPageCount(r.pagination?.pages ?? 1);
+        setServerTotal(r.pagination?.total ?? r.pools?.length ?? 0);
         if (r.pools?.[0]) setSelected(r.pools[0].address);
       })
       .catch((e: Error) => {
@@ -271,7 +270,11 @@ function PoolsPageInner() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [activityFilter, feeTierFilter, feeTvlBucketFilter, page, poolTypeFilter, q, sortKey, tvlBucketFilter, venueFilter, windowKey]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [activityFilter, feeTierFilter, feeTvlBucketFilter, poolTypeFilter, q, sortKey, tvlBucketFilter, venueFilter, windowKey]);
 
   function buildCurrentQuery() {
     const params = new URLSearchParams();
@@ -285,6 +288,7 @@ function PoolsPageInner() {
     if (tvlBucketFilter !== "all") params.set("tvl", tvlBucketFilter);
     if (feeTvlBucketFilter !== "all") params.set("feeTvl", feeTvlBucketFilter);
     if (q.trim()) params.set("q", q.trim());
+    if (page > 1) params.set("page", String(page));
     return params.toString();
   }
 
@@ -319,116 +323,18 @@ function PoolsPageInner() {
     venueFilter,
     viewMode,
     windowKey,
+    page,
   ]);
 
-  const filtered = useMemo(() => {
-    const needle = q.trim().toLowerCase();
-    const base = !needle
-      ? pools
-      : pools.filter(
-      (p) =>
-        p.address.toLowerCase().includes(needle) ||
-        p.pool_type.toLowerCase().includes(needle) ||
-        poolTokenPairLabel(p).toLowerCase().includes(needle) ||
-        poolTokenSubtitle(p).toLowerCase().includes(needle) ||
-        (p.token_meta ?? []).some(
-          (token) =>
-            normalizedTokenLabel(token.symbol?.trim()).toLowerCase().includes(needle) ||
-            token.name?.trim().toLowerCase().includes(needle),
-        ) ||
-        (p.tokens ?? []).some((t) => t.toLowerCase().includes(needle)),
-    );
-    const filteredByType =
-      poolTypeFilter === "all"
-        ? base
-        : base.filter((pool) => pool.pool_type === poolTypeFilter);
-    const filteredByVenue =
-      venueFilter === "all"
-        ? filteredByType
-        : filteredByType.filter((pool) => pool.venue === venueFilter);
-    const nowUnix = Date.now() / 1000;
-    const filteredByActivity = filteredByVenue.filter((pool) => {
-      if (activityFilter === "all") return true;
-      if (activityFilter === "active") {
-        return (pool.activity_summary?.event_count_24h ?? 0) > 0;
-      }
-      if (activityFilter === "swaps") {
-        return (pool.activity_summary?.swap_count_24h ?? 0) > 0;
-      }
-      return pool.activity?.first_event_at != null && nowUnix - pool.activity.first_event_at <= 7 * 24 * 3600;
-    });
-    const filteredByFeeTier =
-      feeTierFilter === "all"
-        ? filteredByActivity
-        : filteredByActivity.filter((pool) => String(pool.fee_bps) === feeTierFilter);
-    const filteredByTvl = filteredByFeeTier.filter((pool) => {
-      if (tvlBucketFilter === "all") return true;
-      if (tvlBucketFilter === "micro") return (pool.tvl ?? 0) < 100_000;
-      if (tvlBucketFilter === "small") return (pool.tvl ?? 0) >= 100_000 && (pool.tvl ?? 0) < 1_000_000;
-      if (tvlBucketFilter === "mid") return (pool.tvl ?? 0) >= 1_000_000 && (pool.tvl ?? 0) < 10_000_000;
-      return (pool.tvl ?? 0) >= 10_000_000;
-    });
-    const filteredByFeeTvl = filteredByTvl.filter((pool) => {
-      const value = pool.window_metrics?.[windowKey]?.fee_tvl ?? 0;
-      if (feeTvlBucketFilter === "all") return true;
-      if (feeTvlBucketFilter === "high") return value >= 0.05;
-      if (feeTvlBucketFilter === "mid") return value >= 0.01 && value < 0.05;
-      if (feeTvlBucketFilter === "low") return value > 0 && value < 0.01;
-      return value <= 0;
-    });
-    return [...filteredByFeeTvl].sort((a, b) => {
-      const aWindow = a.window_metrics?.[windowKey];
-      const bWindow = b.window_metrics?.[windowKey];
-      const aValue =
-        sortKey === "score"
-          ? poolScore(a, windowKey)
-          : sortKey === "liquidity"
-          ? a.tvl
-          : sortKey === "activity_24h"
-            ? (a.activity_summary?.event_count_24h ?? 0)
-          : sortKey === "net_liq_24h"
-            ? (a.activity_summary?.net_liquidity_delta_quote_24h ?? 0)
-          : sortKey === "claim_quote_24h"
-            ? (a.activity_summary?.claim_quote_24h ?? 0)
-          : sortKey === "cadence_24h"
-            ? cadenceSortValue(a.activity_summary?.avg_update_interval_secs_24h)
-          : sortKey === "event_count"
-            ? (a.activity?.event_count ?? 0)
-          : sortKey === "tx_count"
-            ? (aWindow?.tx_count ?? 0)
-          : sortKey === "fee"
-            ? (aWindow?.fee ?? 0)
-            : (aWindow?.fee_tvl ?? 0);
-      const bValue =
-        sortKey === "score"
-          ? poolScore(b, windowKey)
-          : sortKey === "liquidity"
-          ? b.tvl
-          : sortKey === "activity_24h"
-            ? (b.activity_summary?.event_count_24h ?? 0)
-          : sortKey === "net_liq_24h"
-            ? (b.activity_summary?.net_liquidity_delta_quote_24h ?? 0)
-          : sortKey === "claim_quote_24h"
-            ? (b.activity_summary?.claim_quote_24h ?? 0)
-          : sortKey === "cadence_24h"
-            ? cadenceSortValue(b.activity_summary?.avg_update_interval_secs_24h)
-          : sortKey === "event_count"
-            ? (b.activity?.event_count ?? 0)
-          : sortKey === "tx_count"
-            ? (bWindow?.tx_count ?? 0)
-          : sortKey === "fee"
-            ? (bWindow?.fee ?? 0)
-            : (bWindow?.fee_tvl ?? 0);
-      return bValue - aValue;
-    });
-  }, [activityFilter, feeTierFilter, feeTvlBucketFilter, poolTypeFilter, pools, q, sortKey, tvlBucketFilter, venueFilter, windowKey]);
+  // Filtering and ordering happen in the API. The page only renders its 12 rows.
+  const filtered = pools;
 
   const maxSamples = Math.max(
     0,
     ...filtered.map((pool) => pool.window_metrics?.[windowKey]?.samples ?? 0),
   );
-  const pageCount = Math.max(1, Math.ceil(filtered.length / POOLS_PAGE_SIZE));
-  const visiblePools = filtered.slice((page - 1) * POOLS_PAGE_SIZE, page * POOLS_PAGE_SIZE);
+  const pageCount = serverPageCount;
+  const visiblePools = filtered;
   useEffect(() => {
     setPage((current) => Math.min(current, pageCount));
   }, [pageCount]);
@@ -487,7 +393,7 @@ function PoolsPageInner() {
         <div className="panel-head pools-head">
           <span>Pools</span>
           <span className="pools-head-meta">
-            {fmtNum(filtered.length, 0)} / {fmtNum(pools.length, 0)} shown · indexed{" "}
+            {fmtNum(serverTotal ? Math.min((page - 1) * POOLS_PAGE_SIZE + 1, serverTotal) : 0, 0)}–{fmtNum(Math.min(page * POOLS_PAGE_SIZE, serverTotal), 0)} / {fmtNum(serverTotal, 0)} shown · indexed{" "}
             {fmtNum(indexedPoolCount ?? pools.length, 0)} · latest {fmtTs(lastSnapshotAt)}
           </span>
         </div>
@@ -924,7 +830,7 @@ function PoolsPageInner() {
         {!loading && filtered.length > 0 ? (
           <div className="pool-pagination" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "1rem", padding: "0.8rem 1rem", borderTop: "1px solid var(--line)" }}>
             <span className="muted">
-              Showing {Math.min((page - 1) * POOLS_PAGE_SIZE + 1, filtered.length)}–{Math.min(page * POOLS_PAGE_SIZE, filtered.length)} of {filtered.length}
+              Showing {Math.min((page - 1) * POOLS_PAGE_SIZE + 1, serverTotal)}–{Math.min(page * POOLS_PAGE_SIZE, serverTotal)} of {serverTotal}
             </span>
             <div style={{ display: "flex", gap: "0.45rem" }}>
               <button className="btn-ghost" disabled={page === 1} onClick={() => setPage((current) => Math.max(1, current - 1))}>

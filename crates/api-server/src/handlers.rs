@@ -718,6 +718,16 @@ struct PoolListQuery {
     /// `dex` is the public UI spelling; `venue` is retained for API clients.
     dex: Option<String>,
     venue: Option<String>,
+    window: Option<String>,
+    sort: Option<String>,
+    #[serde(rename = "type")]
+    pool_type: Option<String>,
+    activity: Option<String>,
+    #[serde(rename = "feeTier")]
+    fee_tier: Option<String>,
+    tvl: Option<String>,
+    #[serde(rename = "feeTvl")]
+    fee_tvl: Option<String>,
     /// Omit expensive diagnostic fields that are only needed by pool detail.
     compact: Option<bool>,
     #[serde(rename = "refresh")]
@@ -763,13 +773,80 @@ fn paginate_pool_body(mut body: Value, query: &PoolListQuery) -> Value {
             }
         });
     }
+    if let Some(pool_type) = query
+        .pool_type
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && !value.eq_ignore_ascii_case("all"))
+    {
+        pools.retain(|pool| pool.get("pool_type").and_then(Value::as_str) == Some(pool_type));
+    }
+    if let Some(fee_tier) = query
+        .fee_tier
+        .as_deref()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+    {
+        pools.retain(|pool| pool.get("fee_bps").and_then(Value::as_u64) == Some(fee_tier));
+    }
+    if let Some(activity) = query.activity.as_deref() {
+        match activity {
+            "active" => pools.retain(|pool| pool["activity_summary"]["event_count_24h"].as_u64().unwrap_or(0) > 0),
+            "swaps" => pools.retain(|pool| pool["activity_summary"]["swap_count_24h"].as_u64().unwrap_or(0) > 0),
+            "fresh" => pools.retain(|pool| {
+                pool["activity"]["first_event_at"]
+                    .as_i64()
+                    .is_some_and(|ts| Utc::now().timestamp().saturating_sub(ts) <= 7 * 24 * 60 * 60)
+            }),
+            _ => {}
+        }
+    }
+    let tvl_value = |pool: &Value| pool.get("tvl").and_then(Value::as_f64).unwrap_or(0.0);
+    if let Some(bucket) = query.tvl.as_deref() {
+        pools.retain(|pool| match bucket {
+            "micro" => tvl_value(pool) < 100_000.0,
+            "small" => (100_000.0..1_000_000.0).contains(&tvl_value(pool)),
+            "mid" => (1_000_000.0..10_000_000.0).contains(&tvl_value(pool)),
+            "large" => tvl_value(pool) >= 10_000_000.0,
+            _ => true,
+        });
+    }
+    let window = query.window.as_deref().unwrap_or("24h");
+    if let Some(bucket) = query.fee_tvl.as_deref() {
+        pools.retain(|pool| {
+            let value = pool["window_metrics"][window]["fee_tvl"].as_f64().unwrap_or(0.0);
+            match bucket {
+                "high" => value >= 0.05,
+                "mid" => (0.01..0.05).contains(&value),
+                "low" => value > 0.0 && value < 0.01,
+                "zero" => value <= 0.0,
+                _ => true,
+            }
+        });
+    }
+    let metric = |pool: &Value| {
+        let metrics = &pool["window_metrics"][window];
+        let activity = &pool["activity_summary"];
+        match query.sort.as_deref().unwrap_or("fee_tvl") {
+            "score" => pool.get("score").and_then(Value::as_f64).unwrap_or(0.0),
+            "liquidity" => tvl_value(pool),
+            "fee" => metrics["fee"].as_f64().unwrap_or(0.0),
+            "tx_count" => metrics["tx_count"].as_f64().unwrap_or(0.0),
+            "event_count" => pool["activity"]["event_count"].as_f64().unwrap_or(0.0),
+            "activity_24h" => activity["event_count_24h"].as_f64().unwrap_or(0.0),
+            "net_liq_24h" => activity["net_liquidity_delta_quote_24h"].as_f64().unwrap_or(0.0),
+            "claim_quote_24h" => activity["claim_quote_24h"].as_f64().unwrap_or(0.0),
+            "cadence_24h" => activity["avg_update_interval_secs_24h"].as_f64().map(|v| if v > 0.0 { 1.0 / v } else { 0.0 }).unwrap_or(0.0),
+            _ => metrics["fee_tvl"].as_f64().unwrap_or(0.0),
+        }
+    };
+    pools.sort_by(|a, b| metric(b).partial_cmp(&metric(a)).unwrap_or(std::cmp::Ordering::Equal));
     let total = pools.len();
     // Keep the normal UI request to a single page while allowing clients to
     // fetch the full catalogue without opening one request per 100 pools.
     // The web client loads the catalogue once and applies filters locally. Keep
     // the ceiling above the current multi-venue catalogue so normal loads do
     // not require a second request, while retaining bounded response sizes.
-    let limit = query.limit.unwrap_or(total.max(1)).clamp(1, 1_000);
+    let limit = query.limit.unwrap_or(total.max(1)).clamp(1, 100);
     let page = query.page.unwrap_or(1).max(1);
     let start = page.saturating_sub(1).saturating_mul(limit).min(total);
     let end = start.saturating_add(limit).min(total);
@@ -3402,6 +3479,7 @@ mod tests {
             venue: None,
             compact: None,
             refresh: None,
+            ..PoolListQuery::default()
         };
         let filtered = paginate_pool_body(body, &query);
         assert_eq!(filtered["pagination"]["total"], 1);
@@ -3415,6 +3493,7 @@ mod tests {
             venue: None,
             compact: None,
             refresh: None,
+            ..PoolListQuery::default()
         };
         let filtered = paginate_pool_body(
             json!({
@@ -3437,6 +3516,7 @@ mod tests {
             venue: None,
             compact: None,
             refresh: None,
+            ..PoolListQuery::default()
         };
         let filtered = paginate_pool_body(json!({"pools": [{"address": "D", "venue": "sushi"}]}), &query);
         assert_eq!(filtered["pagination"]["total"], 1);
@@ -3458,6 +3538,7 @@ mod tests {
             venue: None,
             compact: Some(true),
             refresh: None,
+            ..PoolListQuery::default()
         };
         let filtered = paginate_pool_body(
             json!({"pools": [{"address": "A", "score_breakdown": {"score": 1}}]}),
@@ -3513,6 +3594,7 @@ mod tests {
             venue: None,
             compact: None,
             refresh: None,
+            ..PoolListQuery::default()
         };
         let filtered = paginate_pool_body(
             json!({

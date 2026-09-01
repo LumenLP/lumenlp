@@ -57,14 +57,14 @@ paths:
           schema:
             type: integer
             minimum: 1
-            maximum: 500
+            maximum: 100
         - in: query
           name: page_size
           description: Compatibility alias for limit.
           schema:
             type: integer
             minimum: 1
-            maximum: 500
+            maximum: 100
         - in: query
           name: page
           schema:
@@ -80,6 +80,46 @@ paths:
           description: Alias for dex.
           schema:
             type: string
+        - in: query
+          name: window
+          description: Activity window used by metric filters and sorting.
+          schema:
+            type: string
+            enum: [5m, 1h, 6h, 24h]
+            default: 24h
+        - in: query
+          name: sort
+          description: Server-side ranking metric.
+          schema:
+            type: string
+            enum: [score, fee_tvl, fee, tx_count, event_count, activity_24h, net_liq_24h, claim_quote_24h, cadence_24h, liquidity]
+            default: fee_tvl
+        - in: query
+          name: type
+          description: Pool type filter.
+          schema: { type: string }
+        - in: query
+          name: activity
+          description: Activity filter.
+          schema:
+            type: string
+            enum: [all, active, swaps, fresh]
+        - in: query
+          name: feeTier
+          description: Fee tier in basis points.
+          schema: { type: integer }
+        - in: query
+          name: tvl
+          description: TVL bucket filter.
+          schema:
+            type: string
+            enum: [all, micro, small, mid, large]
+        - in: query
+          name: feeTvl
+          description: Fee/TVL bucket filter.
+          schema:
+            type: string
+            enum: [all, high, mid, low, zero]
       responses:
         "200":
           description: Pool list
