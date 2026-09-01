@@ -839,14 +839,23 @@ fn paginate_pool_body(mut body: Value, query: &PoolListQuery) -> Value {
             _ => metrics["fee_tvl"].as_f64().unwrap_or(0.0),
         }
     };
-    pools.sort_by(|a, b| metric(b).partial_cmp(&metric(a)).unwrap_or(std::cmp::Ordering::Equal));
+    pools.sort_by(|a, b| {
+        metric(b)
+            .partial_cmp(&metric(a))
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| {
+                a.get("address")
+                    .and_then(Value::as_str)
+                    .cmp(&b.get("address").and_then(Value::as_str))
+            })
+    });
     let total = pools.len();
     // Keep the normal UI request to a single page while allowing clients to
     // fetch the full catalogue without opening one request per 100 pools.
     // The web client loads the catalogue once and applies filters locally. Keep
     // the ceiling above the current multi-venue catalogue so normal loads do
     // not require a second request, while retaining bounded response sizes.
-    let limit = query.limit.unwrap_or(total.max(1)).clamp(1, 100);
+    let limit = query.limit.unwrap_or(12).clamp(1, 100);
     let page = query.page.unwrap_or(1).max(1);
     let start = page.saturating_sub(1).saturating_mul(limit).min(total);
     let end = start.saturating_add(limit).min(total);
