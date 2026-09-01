@@ -35,6 +35,9 @@ pub fn source_event_id_bytes(source_event_id: &str) -> Option<[u8; 32]> {
 /// Soroban recorder. Events without complete integer amounts or quote data are
 /// withheld rather than recorded with invented values.
 pub fn canonical_event(event: &PoolEventRow, leader_address: &str) -> Option<RecorderEvent> {
+    // The contract recorder uses BytesN<32> as its replay key. Reject an
+    // event before building a payload that cannot be represented on-chain.
+    source_event_id_bytes(&event.event_id)?;
     let kind = match event.kind.as_str() {
         "deposit_liquidity" => "deposit",
         "withdraw_liquidity" => "withdraw",
@@ -144,6 +147,19 @@ mod tests {
             "GLEADER"
         )
         .is_none());
+    }
+
+    #[test]
+    fn rejects_event_ids_that_cannot_be_recorded_on_chain() {
+        let mut row = event(
+            "deposit_liquidity",
+            json!({
+                "token_amounts": [{"token": "CA", "amount": "100"}],
+                "total_quote_xlm": 1.0
+            }),
+        );
+        row.event_id = "x".repeat(33);
+        assert!(canonical_event(&row, "GLEADER").is_none());
     }
 
     #[test]
