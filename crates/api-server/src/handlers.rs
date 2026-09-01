@@ -1794,6 +1794,10 @@ async fn lp_leaders(State(state): State<AppState>, Query(q): Query<LeadersBoardQ
                 CACHE_CONTROL,
                 HeaderValue::from_static("public, max-age=30, s-maxage=30, stale-while-revalidate=30"),
             );
+            response.headers_mut().insert(
+                HeaderName::from_static("cdn-cache-control"),
+                HeaderValue::from_static("public, max-age=30, stale-while-revalidate=30"),
+            );
             return response;
         }
         if state
@@ -1829,6 +1833,10 @@ async fn lp_leaders(State(state): State<AppState>, Query(q): Query<LeadersBoardQ
         response.headers_mut().insert(
             CACHE_CONTROL,
             HeaderValue::from_static("public, max-age=15, s-maxage=30, stale-while-revalidate=30"),
+        );
+        response.headers_mut().insert(
+            HeaderName::from_static("cdn-cache-control"),
+            HeaderValue::from_static("public, max-age=15, stale-while-revalidate=30"),
         );
         return response;
     }
