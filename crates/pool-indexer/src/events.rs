@@ -1335,6 +1335,47 @@ mod tests {
     }
 
     #[test]
+    fn non_aquarius_claims_are_labeled_but_not_quoted_as_fees() {
+        let topic = vec![
+            json!({"type":"symbol","value":"claim_fees"}),
+            json!({"type":"address","value":"GCL5ZDPP4YWKBLFAYIQHZSHP63KHWPI6L4O2F7TQ5V27UKQDEWWKHZIU"}),
+            json!({"type":"address","value":"CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}),
+            json!({"type":"address","value":"CBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"}),
+        ];
+        let data = vec![
+            json!({"type":"i128","value":"999999999"}),
+            json!({"type":"i128","value":"888888888"}),
+        ];
+        let context = PoolIndexContext {
+            fee_bps_by_pool: HashMap::new(),
+            tokens_by_pool: HashMap::new(),
+            dex_by_pool: HashMap::new(),
+            price_book: PriceBook::default(),
+        };
+
+        for (venue, flags) in [
+            ("soroswap", (true, false, false)),
+            ("phoenix", (false, true, false)),
+            ("comet", (false, false, true)),
+        ] {
+            let derived = derive_event_fields(
+                &PoolEventKind::ClaimFees,
+                "CPOOL",
+                &topic,
+                &data,
+                &context,
+                None,
+                flags.0,
+                flags.1,
+                flags.2,
+                false,
+            );
+            assert_eq!(derived["venue"], venue);
+            assert!(derived["fee_quote_xlm"].is_null());
+        }
+    }
+
+    #[test]
     fn tx_source_lookup_error_does_not_cache() {
         let mut cache = HashMap::new();
         let tx_hash = "abc123";
