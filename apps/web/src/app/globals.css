@@ -2168,7 +2168,7 @@ th { color: var(--muted); font-weight: 500; }
 }
 .leaders-board-meta {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
   padding-top: 4px;
   border-top: 1px solid var(--line-soft);
@@ -2330,9 +2330,6 @@ th { color: var(--muted); font-weight: 500; }
 @media (max-width: 640px) {
   .leaders-board-meta {
     grid-template-columns: 1fr 1fr;
-  }
-  .leaders-board-meta > div:last-child {
-    grid-column: 1 / -1;
   }
   .leaders-search {
     flex-direction: column;

@@ -128,6 +128,33 @@ fn redis_lp_leaders_key(window_days: i64, page: usize, limit: usize, sort: &str)
     format!("lumenlp:lp-leaders:v3:{window_days}:{page}:{limit}:{sort}")
 }
 
+fn page_leader_response(mut value: Value, page: usize, limit: usize) -> Value {
+    let total = value
+        .pointer("/pagination/total")
+        .and_then(Value::as_u64)
+        .unwrap_or_else(|| value.get("leaders").and_then(Value::as_array).map_or(0, Vec::len) as u64)
+        as usize;
+    let rows = value
+        .get_mut("leaders")
+        .and_then(Value::as_array_mut)
+        .map(|rows| {
+            let start = page.saturating_sub(1).saturating_mul(limit).min(rows.len());
+            let end = start.saturating_add(limit).min(rows.len());
+            rows.drain(..start);
+            rows.truncate(end.saturating_sub(start));
+            rows.clone()
+        })
+        .unwrap_or_default();
+    value["leaders"] = Value::Array(rows);
+    value["pagination"] = json!({
+        "page": page,
+        "limit": limit,
+        "total": total,
+        "pages": total.div_ceil(limit),
+    });
+    value
+}
+
 async fn invalidate_lp_leaders_cache(redis: &redis::Client) {
     // The UI uses a small, bounded set of board variants. Delete them after
     // the background fee refresh so a successful refresh is visible at once.
@@ -930,7 +957,7 @@ async fn list_pools(State(state): State<AppState>, Query(query): Query<PoolListQ
                 HeaderValue::from_static("public, max-age=30, s-maxage=30, stale-while-revalidate=30"),
             );
             response.headers_mut().insert(
-                HeaderName::from_static("cloudflare-cdn-cache-control"),
+                HeaderName::from_static("cdn-cache-control"),
                 HeaderValue::from_static("public, max-age=30, stale-while-revalidate=30"),
             );
             return response;
@@ -975,7 +1002,7 @@ async fn list_pools(State(state): State<AppState>, Query(query): Query<PoolListQ
                 HeaderValue::from_static("public, max-age=30, s-maxage=30, stale-while-revalidate=30"),
             );
             response.headers_mut().insert(
-                HeaderName::from_static("cloudflare-cdn-cache-control"),
+                HeaderName::from_static("cdn-cache-control"),
                 HeaderValue::from_static("public, max-age=30, stale-while-revalidate=30"),
             );
             response.headers_mut().insert(
@@ -1004,7 +1031,7 @@ async fn list_pools(State(state): State<AppState>, Query(query): Query<PoolListQ
             HeaderValue::from_static("public, max-age=30, s-maxage=30, stale-while-revalidate=30"),
         );
         response.headers_mut().insert(
-            HeaderName::from_static("cloudflare-cdn-cache-control"),
+            HeaderName::from_static("cdn-cache-control"),
             HeaderValue::from_static("public, max-age=30, stale-while-revalidate=30"),
         );
         return response;
@@ -1031,7 +1058,7 @@ async fn list_pools(State(state): State<AppState>, Query(query): Query<PoolListQ
                         HeaderValue::from_static("public, max-age=30, s-maxage=30, stale-while-revalidate=30"),
                     );
                     response.headers_mut().insert(
-                        HeaderName::from_static("cloudflare-cdn-cache-control"),
+                        HeaderName::from_static("cdn-cache-control"),
                         HeaderValue::from_static("public, max-age=30, stale-while-revalidate=30"),
                     );
                     return response;
@@ -1224,7 +1251,7 @@ async fn list_pools(State(state): State<AppState>, Query(query): Query<PoolListQ
                 HeaderValue::from_static("public, max-age=30, s-maxage=30, stale-while-revalidate=30"),
             );
             response.headers_mut().insert(
-                HeaderName::from_static("cloudflare-cdn-cache-control"),
+                HeaderName::from_static("cdn-cache-control"),
                 HeaderValue::from_static("public, max-age=30, stale-while-revalidate=30"),
             );
             response
@@ -1265,6 +1292,7 @@ pub async fn warm_leader_list_cache(state: AppState) {
                         limit: Some(limit),
                         window_days: Some(window_days),
                         sort: Some(sort.to_owned()),
+                        refresh: None,
                     }),
                 )
                 .await;
@@ -1731,6 +1759,7 @@ struct LeadersBoardQuery {
     limit: Option<usize>,
     window_days: Option<i64>,
     sort: Option<String>,
+    refresh: Option<bool>,
 }
 
 /// Ranked Stellar LP actors by accrued fees / deposits (Copy scouting board).
@@ -1743,15 +1772,20 @@ async fn lp_leaders(State(state): State<AppState>, Query(q): Query<LeadersBoardQ
         Some("fee_cap") => "fee_cap",
         _ => "fees",
     };
-    let cache_key = redis_lp_leaders_key(window_days, page, limit, sort);
+    let force_refresh = q.refresh.unwrap_or(false);
+    // Store one canonical ranked catalogue per window/sort. Pagination is a
+    // cheap response shaping step and must not cause another full SQLite scan.
+    let cache_key = redis_lp_leaders_key(window_days, 1, 100, sort);
     let local_key = cache_key.clone();
-    let local_cached = {
+    let local_cached = if force_refresh {
+        None
+    } else {
         let cache = state.leader_list_cache.lock().unwrap();
         cache.get(&local_key).cloned()
     };
     if let Some((expires_at, value)) = local_cached {
         if expires_at > StdInstant::now() {
-            let mut response = Json(value).into_response();
+            let mut response = Json(page_leader_response(value, page, limit)).into_response();
             response.headers_mut().insert(
                 HeaderName::from_static("x-lumenlp-cache"),
                 HeaderValue::from_static("leaders-local-hit"),
@@ -1769,26 +1803,25 @@ async fn lp_leaders(State(state): State<AppState>, Query(q): Query<LeadersBoardQ
         {
             let refresh_state = state.clone();
             let refresh_flag = Arc::clone(&state.leader_list_refreshing);
-            let refresh_key = local_key.clone();
             let refresh_query = LeadersBoardQuery {
                 page: Some(page),
                 limit: Some(limit),
                 window_days: Some(window_days),
                 sort: Some(sort.to_string()),
+                refresh: Some(true),
             };
             std::thread::spawn(move || {
                 let Ok(runtime) = tokio::runtime::Builder::new_current_thread().enable_all().build() else {
                     refresh_flag.store(false, Ordering::Release);
                     return;
                 };
-                refresh_state.leader_list_cache.lock().unwrap().remove(&refresh_key);
                 runtime.block_on(async move {
                     let _ = lp_leaders(State(refresh_state), Query(refresh_query)).await;
                 });
                 refresh_flag.store(false, Ordering::Release);
             });
         }
-        let mut response = Json(value).into_response();
+        let mut response = Json(page_leader_response(value, page, limit)).into_response();
         response.headers_mut().insert(
             HeaderName::from_static("x-lumenlp-cache"),
             HeaderValue::from_static("leaders-local-stale"),
@@ -1811,7 +1844,7 @@ async fn lp_leaders(State(state): State<AppState>, Query(q): Query<LeadersBoardQ
                             value.clone(),
                         ),
                     );
-                    let mut response = Json(value).into_response();
+                    let mut response = Json(page_leader_response(value, page, limit)).into_response();
                     response.headers_mut().insert(
                         HeaderName::from_static("x-lumenlp-cache"),
                         HeaderValue::from_static("leaders-redis-hit"),
@@ -1821,7 +1854,7 @@ async fn lp_leaders(State(state): State<AppState>, Query(q): Query<LeadersBoardQ
                         HeaderValue::from_static("public, max-age=30, s-maxage=30, stale-while-revalidate=30"),
                     );
                     response.headers_mut().insert(
-                        HeaderName::from_static("cloudflare-cdn-cache-control"),
+                        HeaderName::from_static("cdn-cache-control"),
                         HeaderValue::from_static("public, max-age=30, stale-while-revalidate=30"),
                     );
                     return response;
@@ -1934,9 +1967,7 @@ async fn lp_leaders(State(state): State<AppState>, Query(q): Query<LeadersBoardQ
         });
     }
     let total = leaders.len();
-    let start = page.saturating_sub(1).saturating_mul(limit).min(total);
-    let end = start.saturating_add(limit).min(total);
-    let leaders = leaders.into_iter().skip(start).take(end.saturating_sub(start));
+    let leaders = leaders.into_iter().take(100);
 
     let rows: Vec<Value> = leaders
         .into_iter()
@@ -1996,12 +2027,7 @@ async fn lp_leaders(State(state): State<AppState>, Query(q): Query<LeadersBoardQ
     let response_body = json!({
         "window_days": window_days,
         "since_ts": since_ts,
-        "pagination": {
-            "page": page,
-            "limit": limit,
-            "total": total,
-            "pages": total.div_ceil(limit),
-        },
+        "pagination": { "page": 1, "limit": 100, "total": total, "pages": total.div_ceil(100) },
         "xlm_usd": xlm_usd,
         "leaders": rows,
         "sort": sort,
@@ -2043,7 +2069,7 @@ async fn lp_leaders(State(state): State<AppState>, Query(q): Query<LeadersBoardQ
             ),
         );
     }
-    let mut response = Json(response_body).into_response();
+    let mut response = Json(page_leader_response(response_body, page, limit)).into_response();
     response.headers_mut().insert(
         HeaderName::from_static("x-lumenlp-cache"),
         HeaderValue::from_static("leaders-origin"),
@@ -2056,7 +2082,7 @@ async fn lp_leaders(State(state): State<AppState>, Query(q): Query<LeadersBoardQ
         HeaderValue::from_static("public, max-age=30, s-maxage=30, stale-while-revalidate=30"),
     );
     response.headers_mut().insert(
-        HeaderName::from_static("cloudflare-cdn-cache-control"),
+        HeaderName::from_static("cdn-cache-control"),
         HeaderValue::from_static("public, max-age=30, stale-while-revalidate=30"),
     );
     response
@@ -2563,7 +2589,7 @@ async fn lp_profile_uncached(State(state): State<AppState>, Query(q): Query<Addr
                         HeaderValue::from_static("public, max-age=60, s-maxage=60, stale-while-revalidate=120"),
                     );
                     response.headers_mut().insert(
-                        HeaderName::from_static("cloudflare-cdn-cache-control"),
+                        HeaderName::from_static("cdn-cache-control"),
                         HeaderValue::from_static("public, max-age=60, stale-while-revalidate=120"),
                     );
                     return response;
@@ -2895,7 +2921,7 @@ async fn lp_profile_uncached(State(state): State<AppState>, Query(q): Query<Addr
         HeaderValue::from_static("public, max-age=60, s-maxage=60, stale-while-revalidate=120"),
     );
     response.headers_mut().insert(
-        HeaderName::from_static("cloudflare-cdn-cache-control"),
+        HeaderName::from_static("cdn-cache-control"),
         HeaderValue::from_static("public, max-age=60, stale-while-revalidate=120"),
     );
     response
@@ -3440,6 +3466,25 @@ mod tests {
         assert_eq!(bridge_tvl_usd(0.0, Some(0.17)), None);
         assert_eq!(bridge_tvl_usd(-1.0, Some(0.17)), None);
         assert!(bridge_tvl_usd(100.0, Some(0.17)).unwrap() > 0.0);
+    }
+
+    #[test]
+    fn leader_catalogue_is_sliced_without_changing_total() {
+        let value = json!({
+            "leaders": [
+                {"address": "GONE"},
+                {"address": "GTWO"},
+                {"address": "GTHREE"},
+                {"address": "GFOUR"}
+            ],
+            "pagination": {"page": 1, "limit": 100, "total": 4, "pages": 1}
+        });
+        let page = page_leader_response(value, 2, 2);
+        assert_eq!(page["leaders"].as_array().unwrap().len(), 2);
+        assert_eq!(page["leaders"][0]["address"], "GTHREE");
+        assert_eq!(page["pagination"]["page"], 2);
+        assert_eq!(page["pagination"]["total"], 4);
+        assert_eq!(page["pagination"]["pages"], 2);
     }
 
     #[test]

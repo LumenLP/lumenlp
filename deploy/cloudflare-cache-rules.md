@@ -6,7 +6,8 @@ responses with gzip. Configure the following Cloudflare Cache Rule for the
 
 ## Rule
 
-Create a rule under **Caching > Cache Rules**:
+In the Cloudflare dashboard, select the `lumenlp.xyz` zone and create a rule
+under **Caching > Cache Rules > Create rule**:
 
 ```text
 http.host eq "api.lumenlp.xyz"
@@ -50,7 +51,7 @@ Expected headers after the first request is stored at the edge:
 ```text
 cf-cache-status: HIT
 cache-control: public, max-age=30, s-maxage=30, stale-while-revalidate=30
-cloudflare-cdn-cache-control: public, max-age=30, stale-while-revalidate=30
+cdn-cache-control: public, max-age=30, stale-while-revalidate=30
 ```
 
 The first request may show `MISS`; a second request with the identical URL

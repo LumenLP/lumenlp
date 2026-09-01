@@ -270,6 +270,14 @@ function LeadersInner() {
                       <span className="leaders-meta-v">{row.distinct_pools}</span>
                     </div>
                     <div>
+                      <span className="leaders-meta-k">Current position</span>
+                      <span className="leaders-meta-v">
+                        {row.position_value_quote_xlm != null
+                          ? quoteLabel(null, row.position_value_quote_xlm)
+                          : "—"}
+                      </span>
+                    </div>
+                    <div>
                       <span className="leaders-meta-k">Deposits ({windowDays}d)</span>
                       <span className="leaders-meta-v">
                         {quoteLabel(row.deposit_quote_usd, row.deposit_quote_xlm)}
