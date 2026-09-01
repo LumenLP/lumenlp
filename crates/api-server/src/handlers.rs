@@ -64,6 +64,8 @@ pub struct AppState {
     /// Prevents several expired profile requests from starting the same RPC
     /// refresh at once.
     pub lp_profile_refreshing: Arc<AtomicBool>,
+    /// Coalesces concurrent cold profile requests by public wallet address.
+    pub lp_profile_inflight: Arc<Mutex<HashMap<String, Arc<tokio::sync::Notify>>>>,
     pub redis: Option<redis::Client>,
     pub leader_fee_scan_cursor: Arc<std::sync::atomic::AtomicUsize>,
 }
@@ -1719,7 +1721,7 @@ async fn pool_events(
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 struct AddressQuery {
     address: String,
 }
@@ -2443,6 +2445,32 @@ fn fee_capital_ratio(accrued_fee: Option<f64>, deposit: f64) -> Option<f64> {
 }
 
 async fn lp_profile(State(state): State<AppState>, Query(q): Query<AddressQuery>) -> impl IntoResponse {
+    loop {
+        let (notify, owner) = {
+            let mut inflight = state.lp_profile_inflight.lock().unwrap();
+            if let Some(notify) = inflight.get(&q.address) {
+                (notify.clone(), false)
+            } else {
+                let notify = Arc::new(tokio::sync::Notify::new());
+                inflight.insert(q.address.clone(), notify.clone());
+                (notify, true)
+            }
+        };
+        if !owner {
+            notify.notified().await;
+            continue;
+        }
+
+        let response = lp_profile_uncached(State(state.clone()), Query(q.clone())).await;
+        let completed = state.lp_profile_inflight.lock().unwrap().remove(&q.address);
+        if let Some(notify) = completed {
+            notify.notify_waiters();
+        }
+        return response;
+    }
+}
+
+async fn lp_profile_uncached(State(state): State<AppState>, Query(q): Query<AddressQuery>) -> impl IntoResponse {
     if !valid_stellar_address(&q.address) {
         return (
             StatusCode::BAD_REQUEST,

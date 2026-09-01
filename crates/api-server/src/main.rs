@@ -55,6 +55,7 @@ async fn main() -> Result<()> {
         leader_list_refreshing: Arc::new(AtomicBool::new(false)),
         lp_profile_cache: Arc::new(Mutex::new(HashMap::new())),
         lp_profile_refreshing: Arc::new(AtomicBool::new(false)),
+        lp_profile_inflight: Arc::new(Mutex::new(HashMap::new())),
         redis,
         leader_fee_scan_cursor: Arc::new(AtomicUsize::new(0)),
     };
