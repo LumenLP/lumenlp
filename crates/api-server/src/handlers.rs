@@ -109,8 +109,8 @@ const REDIS_TOKEN_META_TTL_SECS: u64 = 3_600;
 // workers do not repeat the same expensive scan every minute.
 const REDIS_LP_PROFILE_TTL_SECS: u64 = 300;
 const LP_PROFILE_STALE_GRACE_SECS: u64 = 300;
-const REDIS_LP_LEADERS_TTL_SECS: u64 = 60;
-const LEADER_LIST_CACHE_SECS: u64 = 60;
+const REDIS_LP_LEADERS_TTL_SECS: u64 = 30;
+const LEADER_LIST_CACHE_SECS: u64 = 30;
 
 fn redis_token_meta_key(address: &str) -> String {
     format!("lumenlp:token-meta:v1:{address}")
@@ -897,10 +897,10 @@ fn pool_matches_query(pool: &Value, query: &str) -> bool {
 }
 
 async fn list_pools(State(state): State<AppState>, Query(query): Query<PoolListQuery>) -> impl IntoResponse {
-    const POOL_LIST_CACHE_SECS: u64 = 60;
+    const POOL_LIST_CACHE_SECS: u64 = 30;
     // Keep a shared Redis copy beyond the local refresh interval so a request
     // does not synchronously rebuild the full multi-DEX ranking catalogue.
-    const REDIS_POOL_LIST_CACHE_SECS: u64 = 60;
+    const REDIS_POOL_LIST_CACHE_SECS: u64 = 30;
     // Bump this when derived pool metrics change so a deploy cannot serve an
     // older catalogue with incompatible score or Fee/TVL calculations.
     const REDIS_POOL_LIST_KEY: &str = "lumenlp:pools:v2";
@@ -918,11 +918,11 @@ async fn list_pools(State(state): State<AppState>, Query(query): Query<PoolListQ
             );
             response.headers_mut().insert(
                 CACHE_CONTROL,
-                HeaderValue::from_static("public, max-age=60, s-maxage=60, stale-while-revalidate=120"),
+                HeaderValue::from_static("public, max-age=30, s-maxage=30, stale-while-revalidate=30"),
             );
             response.headers_mut().insert(
                 HeaderName::from_static("cloudflare-cdn-cache-control"),
-                HeaderValue::from_static("public, max-age=60, stale-while-revalidate=120"),
+                HeaderValue::from_static("public, max-age=30, stale-while-revalidate=30"),
             );
             return response;
         }
@@ -963,11 +963,11 @@ async fn list_pools(State(state): State<AppState>, Query(query): Query<PoolListQ
             let mut response = Json(paginate_pool_body(body, &query)).into_response();
             response.headers_mut().insert(
                 CACHE_CONTROL,
-                HeaderValue::from_static("public, max-age=60, s-maxage=60, stale-while-revalidate=120"),
+                HeaderValue::from_static("public, max-age=30, s-maxage=30, stale-while-revalidate=30"),
             );
             response.headers_mut().insert(
                 HeaderName::from_static("cloudflare-cdn-cache-control"),
-                HeaderValue::from_static("public, max-age=60, stale-while-revalidate=120"),
+                HeaderValue::from_static("public, max-age=30, stale-while-revalidate=30"),
             );
             response.headers_mut().insert(
                 HeaderName::from_static("x-lumenlp-cache"),
@@ -992,11 +992,11 @@ async fn list_pools(State(state): State<AppState>, Query(query): Query<PoolListQ
         );
         response.headers_mut().insert(
             CACHE_CONTROL,
-            HeaderValue::from_static("public, max-age=60, s-maxage=60, stale-while-revalidate=120"),
+            HeaderValue::from_static("public, max-age=30, s-maxage=30, stale-while-revalidate=30"),
         );
         response.headers_mut().insert(
             HeaderName::from_static("cloudflare-cdn-cache-control"),
-            HeaderValue::from_static("public, max-age=60, stale-while-revalidate=120"),
+            HeaderValue::from_static("public, max-age=30, stale-while-revalidate=30"),
         );
         return response;
     }
@@ -1019,11 +1019,11 @@ async fn list_pools(State(state): State<AppState>, Query(query): Query<PoolListQ
                     );
                     response.headers_mut().insert(
                         CACHE_CONTROL,
-                        HeaderValue::from_static("public, max-age=60, s-maxage=60, stale-while-revalidate=120"),
+                        HeaderValue::from_static("public, max-age=30, s-maxage=30, stale-while-revalidate=30"),
                     );
                     response.headers_mut().insert(
                         HeaderName::from_static("cloudflare-cdn-cache-control"),
-                        HeaderValue::from_static("public, max-age=60, stale-while-revalidate=120"),
+                        HeaderValue::from_static("public, max-age=30, stale-while-revalidate=30"),
                     );
                     return response;
                 }
@@ -1212,11 +1212,11 @@ async fn list_pools(State(state): State<AppState>, Query(query): Query<PoolListQ
             );
             response.headers_mut().insert(
                 CACHE_CONTROL,
-                HeaderValue::from_static("public, max-age=60, s-maxage=60, stale-while-revalidate=120"),
+                HeaderValue::from_static("public, max-age=30, s-maxage=30, stale-while-revalidate=30"),
             );
             response.headers_mut().insert(
                 HeaderName::from_static("cloudflare-cdn-cache-control"),
-                HeaderValue::from_static("public, max-age=60, stale-while-revalidate=120"),
+                HeaderValue::from_static("public, max-age=30, stale-while-revalidate=30"),
             );
             response
         }
@@ -1744,7 +1744,7 @@ async fn lp_leaders(State(state): State<AppState>, Query(q): Query<LeadersBoardQ
             );
             response.headers_mut().insert(
                 CACHE_CONTROL,
-                HeaderValue::from_static("public, max-age=60, s-maxage=60, stale-while-revalidate=120"),
+            HeaderValue::from_static("public, max-age=30, s-maxage=30, stale-while-revalidate=30"),
             );
             return response;
         }
@@ -1780,7 +1780,7 @@ async fn lp_leaders(State(state): State<AppState>, Query(q): Query<LeadersBoardQ
         );
         response.headers_mut().insert(
             CACHE_CONTROL,
-            HeaderValue::from_static("public, max-age=15, s-maxage=60, stale-while-revalidate=120"),
+            HeaderValue::from_static("public, max-age=15, s-maxage=30, stale-while-revalidate=30"),
         );
         return response;
     }
@@ -1803,11 +1803,11 @@ async fn lp_leaders(State(state): State<AppState>, Query(q): Query<LeadersBoardQ
                     );
                     response.headers_mut().insert(
                         CACHE_CONTROL,
-                        HeaderValue::from_static("public, max-age=60, s-maxage=60, stale-while-revalidate=120"),
+                        HeaderValue::from_static("public, max-age=30, s-maxage=30, stale-while-revalidate=30"),
                     );
                     response.headers_mut().insert(
                         HeaderName::from_static("cloudflare-cdn-cache-control"),
-                        HeaderValue::from_static("public, max-age=60, stale-while-revalidate=120"),
+                        HeaderValue::from_static("public, max-age=30, stale-while-revalidate=30"),
                     );
                     return response;
                 }
@@ -2020,11 +2020,11 @@ async fn lp_leaders(State(state): State<AppState>, Query(q): Query<LeadersBoardQ
     // on the origin API and its RPC-backed refresh work.
     response.headers_mut().insert(
         CACHE_CONTROL,
-        HeaderValue::from_static("public, max-age=60, s-maxage=60, stale-while-revalidate=120"),
+                HeaderValue::from_static("public, max-age=30, s-maxage=30, stale-while-revalidate=30"),
     );
     response.headers_mut().insert(
         HeaderName::from_static("cloudflare-cdn-cache-control"),
-        HeaderValue::from_static("public, max-age=60, stale-while-revalidate=120"),
+                HeaderValue::from_static("public, max-age=30, stale-while-revalidate=30"),
     );
     response
 }
@@ -2515,7 +2515,7 @@ async fn lp_profile(State(state): State<AppState>, Query(q): Query<AddressQuery>
                     );
                     response.headers_mut().insert(
                         HeaderName::from_static("cloudflare-cdn-cache-control"),
-                        HeaderValue::from_static("public, max-age=60, stale-while-revalidate=120"),
+            HeaderValue::from_static("public, max-age=60, stale-while-revalidate=120"),
                     );
                     return response;
                 }

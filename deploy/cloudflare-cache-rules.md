@@ -21,7 +21,7 @@ and (
 Set:
 
 - **Cache eligibility:** Eligible for cache
-- **Edge TTL:** 60 seconds
+- **Edge TTL:** 30 seconds
 - **Browser TTL:** Respect existing headers
 - **Query string:** Include all query string parameters in the cache key
 
@@ -49,8 +49,8 @@ Expected headers after the first request is stored at the edge:
 
 ```text
 cf-cache-status: HIT
-cache-control: public, max-age=60, s-maxage=60, stale-while-revalidate=120
-cloudflare-cdn-cache-control: public, max-age=60, stale-while-revalidate=120
+cache-control: public, max-age=30, s-maxage=30, stale-while-revalidate=30
+cloudflare-cdn-cache-control: public, max-age=30, stale-while-revalidate=30
 ```
 
 The first request may show `MISS`; a second request with the identical URL
