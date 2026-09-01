@@ -35,8 +35,10 @@ use {
     serde_json::{json, Value},
     std::{
         collections::{HashMap, HashSet},
-        sync::atomic::{AtomicBool, Ordering},
-        sync::{Arc, Mutex},
+        sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc, Mutex,
+        },
         time::{Duration as StdDuration, Instant as StdInstant},
     },
     tokio::task::JoinSet,
@@ -122,8 +124,8 @@ fn redis_lp_profile_key(address: &str) -> String {
     format!("lumenlp:lp-profile:v3:{address}")
 }
 
-fn redis_lp_leaders_key(window_days: i64, limit: usize, sort: &str) -> String {
-    format!("lumenlp:lp-leaders:v2:{window_days}:{limit}:{sort}")
+fn redis_lp_leaders_key(window_days: i64, page: usize, limit: usize, sort: &str) -> String {
+    format!("lumenlp:lp-leaders:v3:{window_days}:{page}:{limit}:{sort}")
 }
 
 async fn invalidate_lp_leaders_cache(redis: &redis::Client) {
@@ -132,13 +134,11 @@ async fn invalidate_lp_leaders_cache(redis: &redis::Client) {
     let keys = [1_i64, 7, 30, 90]
         .into_iter()
         .flat_map(|window| {
-            [25_usize, 100, 500]
-                .into_iter()
-                .flat_map(move |limit| {
-                    ["fees", "activity"]
-                        .into_iter()
-                        .map(move |sort| redis_lp_leaders_key(window, limit, sort))
-                })
+            [24_usize, 100].into_iter().flat_map(move |limit| {
+                ["fees", "fee_cap", "activity"]
+                    .into_iter()
+                    .map(move |sort| redis_lp_leaders_key(window, 1, limit, sort))
+            })
         })
         .collect::<Vec<_>>();
     if let Ok(mut connection) = redis.get_multiplexed_async_connection().await {
@@ -754,12 +754,7 @@ fn paginate_pool_body(mut body: Value, query: &PoolListQuery) -> Value {
         }
         .to_string()
     });
-    if let Some(query_text) = query
-        .q
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
+    if let Some(query_text) = query.q.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
         let query_text = query_text.to_ascii_lowercase();
         pools.retain(|pool| pool_matches_query(pool, &query_text));
     }
@@ -837,7 +832,10 @@ fn paginate_pool_body(mut body: Value, query: &PoolListQuery) -> Value {
             "activity_24h" => activity["event_count_24h"].as_f64().unwrap_or(0.0),
             "net_liq_24h" => activity["net_liquidity_delta_quote_24h"].as_f64().unwrap_or(0.0),
             "claim_quote_24h" => activity["claim_quote_24h"].as_f64().unwrap_or(0.0),
-            "cadence_24h" => activity["avg_update_interval_secs_24h"].as_f64().map(|v| if v > 0.0 { 1.0 / v } else { 0.0 }).unwrap_or(0.0),
+            "cadence_24h" => activity["avg_update_interval_secs_24h"]
+                .as_f64()
+                .map(|v| if v > 0.0 { 1.0 / v } else { 0.0 })
+                .unwrap_or(0.0),
             _ => metrics["fee_tvl"].as_f64().unwrap_or(0.0),
         }
     };
@@ -1258,11 +1256,12 @@ pub async fn warm_pool_list_cache(state: AppState) {
 /// API restart or fee refresh does not pay the full ranking query and join.
 pub async fn warm_leader_list_cache(state: AppState) {
     for window_days in [1_i64, 7, 30] {
-        for sort in ["fees", "activity"] {
-            for limit in [25_usize, 500] {
+        for sort in ["fees", "fee_cap", "activity"] {
+            for limit in [24_usize, 100] {
                 let _ = lp_leaders(
                     State(state.clone()),
                     Query(LeadersBoardQuery {
+                        page: Some(1),
                         limit: Some(limit),
                         window_days: Some(window_days),
                         sort: Some(sort.to_owned()),
@@ -1728,6 +1727,7 @@ struct AddressQuery {
 
 #[derive(Deserialize)]
 struct LeadersBoardQuery {
+    page: Option<usize>,
     limit: Option<usize>,
     window_days: Option<i64>,
     sort: Option<String>,
@@ -1735,12 +1735,15 @@ struct LeadersBoardQuery {
 
 /// Ranked Stellar LP actors by accrued fees / deposits (Copy scouting board).
 async fn lp_leaders(State(state): State<AppState>, Query(q): Query<LeadersBoardQuery>) -> impl IntoResponse {
-    let limit = q.limit.unwrap_or(25).clamp(1, 500);
+    let page = q.page.unwrap_or(1).max(1);
+    let limit = q.limit.unwrap_or(24).clamp(1, 100);
     let window_days = q.window_days.unwrap_or(30).clamp(1, 90);
-    let sort = (q.sort.as_deref() == Some("activity"))
-        .then_some("activity")
-        .unwrap_or("fees");
-    let cache_key = redis_lp_leaders_key(window_days, limit, sort);
+    let sort = match q.sort.as_deref() {
+        Some("activity") => "activity",
+        Some("fee_cap") => "fee_cap",
+        _ => "fees",
+    };
+    let cache_key = redis_lp_leaders_key(window_days, page, limit, sort);
     let local_key = cache_key.clone();
     let local_cached = {
         let cache = state.leader_list_cache.lock().unwrap();
@@ -1755,7 +1758,7 @@ async fn lp_leaders(State(state): State<AppState>, Query(q): Query<LeadersBoardQ
             );
             response.headers_mut().insert(
                 CACHE_CONTROL,
-            HeaderValue::from_static("public, max-age=30, s-maxage=30, stale-while-revalidate=30"),
+                HeaderValue::from_static("public, max-age=30, s-maxage=30, stale-while-revalidate=30"),
             );
             return response;
         }
@@ -1768,6 +1771,7 @@ async fn lp_leaders(State(state): State<AppState>, Query(q): Query<LeadersBoardQ
             let refresh_flag = Arc::clone(&state.leader_list_refreshing);
             let refresh_key = local_key.clone();
             let refresh_query = LeadersBoardQuery {
+                page: Some(page),
                 limit: Some(limit),
                 window_days: Some(window_days),
                 sort: Some(sort.to_string()),
@@ -1892,17 +1896,26 @@ async fn lp_leaders(State(state): State<AppState>, Query(q): Query<LeadersBoardQ
     };
     let unclaimed_fee_deltas = {
         let index_db = state.index_db.lock().unwrap();
-        index_db
-            .actor_fee_snapshot_deltas(since_ts)
-            .unwrap_or_default()
+        index_db.actor_fee_snapshot_deltas(since_ts).unwrap_or_default()
     };
-    if sort == "fees" {
+    if sort == "fees" || sort == "fee_cap" {
         leaders.sort_by(|a, b| {
-            let total = |leader: &crate::index_db::TopLiquidityActor| {
-                leader.claim_quote_xlm
-                    + unclaimed_fee_deltas.get(&leader.address).copied().unwrap_or(0.0)
+            let metric = |leader: &crate::index_db::TopLiquidityActor| {
+                let accrued =
+                    leader.claim_quote_xlm + unclaimed_fee_deltas.get(&leader.address).copied().unwrap_or(0.0);
+                if sort == "fee_cap" {
+                    if leader.deposit_quote_xlm > 0.0 {
+                        accrued / leader.deposit_quote_xlm
+                    } else {
+                        -1.0
+                    }
+                } else {
+                    accrued
+                }
             };
-            total(b).partial_cmp(&total(a)).unwrap_or(std::cmp::Ordering::Equal)
+            metric(b)
+                .partial_cmp(&metric(a))
+                .unwrap_or(std::cmp::Ordering::Equal)
                 // Keep equal/zero-fee rows stable. HashMap iteration order is
                 // intentionally unspecified and otherwise makes the board
                 // appear to reshuffle on every cache refresh.
@@ -1920,7 +1933,10 @@ async fn lp_leaders(State(state): State<AppState>, Query(q): Query<LeadersBoardQ
                 .then_with(|| a.address.cmp(&b.address))
         });
     }
-    leaders.truncate(limit);
+    let total = leaders.len();
+    let start = page.saturating_sub(1).saturating_mul(limit).min(total);
+    let end = start.saturating_add(limit).min(total);
+    let leaders = leaders.into_iter().skip(start).take(end.saturating_sub(start));
 
     let rows: Vec<Value> = leaders
         .into_iter()
@@ -1980,6 +1996,12 @@ async fn lp_leaders(State(state): State<AppState>, Query(q): Query<LeadersBoardQ
     let response_body = json!({
         "window_days": window_days,
         "since_ts": since_ts,
+        "pagination": {
+            "page": page,
+            "limit": limit,
+            "total": total,
+            "pages": total.div_ceil(limit),
+        },
         "xlm_usd": xlm_usd,
         "leaders": rows,
         "sort": sort,
@@ -2031,11 +2053,11 @@ async fn lp_leaders(State(state): State<AppState>, Query(q): Query<LeadersBoardQ
     // on the origin API and its RPC-backed refresh work.
     response.headers_mut().insert(
         CACHE_CONTROL,
-                HeaderValue::from_static("public, max-age=30, s-maxage=30, stale-while-revalidate=30"),
+        HeaderValue::from_static("public, max-age=30, s-maxage=30, stale-while-revalidate=30"),
     );
     response.headers_mut().insert(
         HeaderName::from_static("cloudflare-cdn-cache-control"),
-                HeaderValue::from_static("public, max-age=30, stale-while-revalidate=30"),
+        HeaderValue::from_static("public, max-age=30, stale-while-revalidate=30"),
     );
     response
 }
@@ -2082,8 +2104,8 @@ pub async fn refresh_leader_fee_snapshots(state: AppState) {
     } else {
         state
             .leader_fee_scan_cursor
-            .fetch_add(rotating_count.max(1), std::sync::atomic::Ordering::Relaxed)
-            % tail_len
+            .fetch_add(rotating_count.max(1), std::sync::atomic::Ordering::Relaxed) %
+            tail_len
     };
     let mut selected = actors[..hot_count].to_vec();
     selected.extend((0..rotating_count).map(|offset| actors[hot_count + (start + offset) % tail_len].clone()));
@@ -2191,12 +2213,7 @@ async fn refresh_one_actor(
         let db = state.db.lock().unwrap();
         let mut grouped: HashMap<String, Vec<String>> = HashMap::new();
         for pool in pools {
-            let Some(venue) = db
-                .pool_meta(&pool)
-                .ok()
-                .flatten()
-                .map(|(_, _, _, venue)| venue)
-            else {
+            let Some(venue) = db.pool_meta(&pool).ok().flatten().map(|(_, _, _, venue)| venue) else {
                 continue;
             };
             grouped.entry(venue).or_default().push(pool);
@@ -2266,12 +2283,7 @@ async fn load_actor_positions(
         let db = state.db.lock().unwrap();
         let mut grouped: HashMap<String, Vec<String>> = HashMap::new();
         for pool in pools {
-            let Some(venue) = db
-                .pool_meta(pool)
-                .ok()
-                .flatten()
-                .map(|(_, _, _, venue)| venue)
-            else {
+            let Some(venue) = db.pool_meta(pool).ok().flatten().map(|(_, _, _, venue)| venue) else {
                 continue;
             };
             grouped.entry(venue).or_default().push(pool.clone());
@@ -2424,10 +2436,7 @@ fn cache_lp_profile(state: &AppState, address: &str, value: &Value) {
             cache.remove(&oldest_key);
         }
     }
-    cache.insert(
-        address.to_owned(),
-        (now + StdDuration::from_secs(30), value.clone()),
-    );
+    cache.insert(address.to_owned(), (now + StdDuration::from_secs(30), value.clone()));
 }
 
 /// Compare accrued fees with capital committed during the same window.
@@ -2486,8 +2495,9 @@ async fn lp_profile_uncached(State(state): State<AppState>, Query(q): Query<Addr
             .map(|(expires_at, value)| (*expires_at, value.clone()))
     } {
         let now = StdInstant::now();
-        if expires_at <= now && expires_at + StdDuration::from_secs(LP_PROFILE_STALE_GRACE_SECS) > now
-            && state
+        if expires_at <= now &&
+            expires_at + StdDuration::from_secs(LP_PROFILE_STALE_GRACE_SECS) > now &&
+            state
                 .lp_profile_refreshing
                 .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
                 .is_ok()
@@ -2504,7 +2514,9 @@ async fn lp_profile_uncached(State(state): State<AppState>, Query(q): Query<Addr
                 runtime.block_on(async move {
                     let _ = lp_profile(
                         State(refresh_state),
-                        Query(AddressQuery { address: refresh_address }),
+                        Query(AddressQuery {
+                            address: refresh_address,
+                        }),
                     )
                     .await;
                 });
@@ -2552,7 +2564,7 @@ async fn lp_profile_uncached(State(state): State<AppState>, Query(q): Query<Addr
                     );
                     response.headers_mut().insert(
                         HeaderName::from_static("cloudflare-cdn-cache-control"),
-            HeaderValue::from_static("public, max-age=60, stale-while-revalidate=120"),
+                        HeaderValue::from_static("public, max-age=60, stale-while-revalidate=120"),
                     );
                     return response;
                 }
@@ -2708,14 +2720,8 @@ async fn lp_profile_uncached(State(state): State<AppState>, Query(q): Query<Addr
     let unclaimed_deltas = {
         let index_db = state.index_db.lock().unwrap();
         (
-            index_db
-                .actor_fee_snapshot_delta(&q.address, since_7d)
-                .ok()
-                .flatten(),
-            index_db
-                .actor_fee_snapshot_delta(&q.address, since_30d)
-                .ok()
-                .flatten(),
+            index_db.actor_fee_snapshot_delta(&q.address, since_7d).ok().flatten(),
+            index_db.actor_fee_snapshot_delta(&q.address, since_30d).ok().flatten(),
         )
     };
 
@@ -2757,12 +2763,8 @@ async fn lp_profile_uncached(State(state): State<AppState>, Query(q): Query<Addr
     let activity_30d_json = window_json(&activity_30d, unclaimed_deltas.1);
     let activity_7d_json = window_json(&activity_7d, unclaimed_deltas.0);
 
-    let accrued_7d = unclaimed_deltas
-        .0
-        .map(|delta| activity_7d.claim_quote_xlm + delta);
-    let accrued_30d = unclaimed_deltas
-        .1
-        .map(|delta| activity_30d.claim_quote_xlm + delta);
+    let accrued_7d = unclaimed_deltas.0.map(|delta| activity_7d.claim_quote_xlm + delta);
+    let accrued_30d = unclaimed_deltas.1.map(|delta| activity_30d.claim_quote_xlm + delta);
     let accrued_lifetime = Some(lifetime.claim_quote_xlm);
     let months_active = match (first_activity_at, last_activity_at) {
         (Some(first), Some(last)) if last >= first => ((last - first) as f64 / (30.0 * 86_400.0)).max(1.0 / 30.0),
@@ -3614,10 +3616,7 @@ mod tests {
         assert_eq!(recorder_health(&status, 1_000), ("ok", Some(300)));
         assert_eq!(recorder_health(&status, 1_001), ("degraded", Some(301)));
 
-        let failed = RecorderOutboxStatus {
-            failed: 1,
-            ..status
-        };
+        let failed = RecorderOutboxStatus { failed: 1, ..status };
         assert_eq!(recorder_health(&failed, 1_000), ("degraded", Some(300)));
     }
 

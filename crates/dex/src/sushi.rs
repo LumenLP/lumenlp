@@ -295,9 +295,9 @@ pub async fn positions_for_managed_pools(
             state
         };
         for position in managed.iter().filter(|position| {
-            position.token0 == state.tokens[0]
-                && position.token1 == state.tokens[1]
-                && (position.fee / 100 == state.fee_bps || position.fee == state.fee_bps)
+            position.token0 == state.tokens[0] &&
+                position.token1 == state.tokens[1] &&
+                (position.fee / 100 == state.fee_bps || position.fee == state.fee_bps)
         }) {
             candidates.push(SushiPositionRangeCandidate {
                 pool_address: pool_address.clone(),
@@ -329,10 +329,10 @@ pub async fn positions_for_candidates(
         let mut position = managed
             .iter()
             .find(|position| {
-                position.tick_lower == candidate.tick_lower
-                    && position.tick_upper == candidate.tick_upper
-                    && position.token0 == state.tokens[0]
-                    && position.token1 == state.tokens[1]
+                position.tick_lower == candidate.tick_lower &&
+                    position.tick_upper == candidate.tick_upper &&
+                    position.token0 == state.tokens[0] &&
+                    position.token1 == state.tokens[1]
             })
             .map(|position| SushiPositionState {
                 liquidity: position.liquidity,
@@ -518,8 +518,8 @@ fn parse_u256(value: &xdr::ScVal) -> Option<xdr::UInt256Parts> {
 }
 
 fn u256_to_f64(value: &xdr::UInt256Parts) -> f64 {
-    (((value.hi_hi as f64 * 2f64.powi(64) + value.hi_lo as f64) * 2f64.powi(64) + value.lo_hi as f64) * 2f64.powi(64))
-        + value.lo_lo as f64
+    (((value.hi_hi as f64 * 2f64.powi(64) + value.hi_lo as f64) * 2f64.powi(64) + value.lo_hi as f64) * 2f64.powi(64)) +
+        value.lo_lo as f64
 }
 
 #[cfg(test)]

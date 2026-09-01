@@ -245,8 +245,7 @@ fn parse_freighter_prices(env: &FreighterEnvelope) -> HashMap<String, f64> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::pricing::asset_id::NATIVE_SAC_MAINNET;
+    use {super::*, crate::pricing::asset_id::NATIVE_SAC_MAINNET};
 
     #[test]
     fn parse_freighter_fixture() {
@@ -258,10 +257,10 @@ mod tests {
                 .unwrap()
                 .current_price
                 .parse::<f64>()
-                .unwrap()
-                - 0.17)
-                .abs()
-                < 1e-9
+                .unwrap() -
+                0.17)
+                .abs() <
+                1e-9
         );
         let prices = parse_freighter_prices(&env);
         assert!((prices["native"] - 0.17).abs() < 1e-9);

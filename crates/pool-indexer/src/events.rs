@@ -520,15 +520,17 @@ fn derive_event_fields(
             let token1 = topic.get(3).and_then(value_address_string);
             let amount0 = data.get(0).and_then(value_amount_string);
             let amount1 = data.get(1).and_then(value_amount_string);
-            let fee_quote_xlm = (venue == "aquarius").then(|| {
-                estimate_two_token_amounts_xlm(
-                    &context.price_book,
-                    token0.as_deref(),
-                    amount0.as_deref(),
-                    token1.as_deref(),
-                    amount1.as_deref(),
-                )
-            }).flatten();
+            let fee_quote_xlm = (venue == "aquarius")
+                .then(|| {
+                    estimate_two_token_amounts_xlm(
+                        &context.price_book,
+                        token0.as_deref(),
+                        amount0.as_deref(),
+                        token1.as_deref(),
+                        amount1.as_deref(),
+                    )
+                })
+                .flatten();
             derived_with_actor(
                 json!({
                     "venue": venue,
@@ -649,23 +651,23 @@ fn pool_swap_from_event(event: &PoolEvent) -> Option<PoolSwap> {
     let soroswap = topic
         .first()
         .and_then(|value| value.get("value"))
-        .and_then(Value::as_str)
-        == Some("SoroswapPair");
+        .and_then(Value::as_str) ==
+        Some("SoroswapPair");
     let phoenix = topic
         .first()
         .and_then(|value| value.get("value"))
-        .and_then(Value::as_str)
-        == Some("swap");
+        .and_then(Value::as_str) ==
+        Some("swap");
     let comet = topic
         .first()
         .and_then(|value| value.get("value"))
-        .and_then(Value::as_str)
-        == Some("POOL")
-        && topic
+        .and_then(Value::as_str) ==
+        Some("POOL") &&
+        topic
             .get(1)
             .and_then(|value| value.get("value"))
-            .and_then(Value::as_str)
-            == Some("swap");
+            .and_then(Value::as_str) ==
+            Some("swap");
     let derived_venue = derived.get("venue").and_then(Value::as_str);
     let sushi = derived_venue == Some("sushi_v3");
     let token_in = derived

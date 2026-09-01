@@ -49,6 +49,7 @@ function LeadersInner() {
     verified_actor_count?: number;
     actor_count?: number;
   }>({});
+  const [boardPageCount, setBoardPageCount] = useState(1);
   const [windowDays, setWindowDays] = useState(1);
   const [boardSort, setBoardSort] = useState<"fees" | "fee_cap" | "activity">("fees");
   const [boardPage, setBoardPage] = useState(1);
@@ -84,9 +85,15 @@ function LeadersInner() {
       const initialLoad = firstBoardLoad.current;
       if (initialLoad) setBoardLoading(true);
       try {
-        const data = await fetchLpLeaders(500, windowDays, boardSort === "activity" ? "activity" : "fees");
+        const data = await fetchLpLeaders(
+          boardPage,
+          BOARD_PAGE_SIZE,
+          windowDays,
+          boardSort,
+        );
         if (!cancelled) {
           setBoard(data.leaders);
+          setBoardPageCount(Math.max(1, data.pagination?.pages ?? 1));
           setBoardHonesty(data.honesty ?? null);
           setFeeData(data.fee_data ?? {});
           setError(null);
@@ -107,29 +114,13 @@ function LeadersInner() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [windowDays, boardSort]);
+  }, [boardPage, windowDays, boardSort]);
 
   useEffect(() => {
     setBoardPage(1);
   }, [windowDays, boardSort]);
 
-  const sortedBoard = [...board].sort((a, b) => {
-    if (boardSort === "activity") return 0;
-    if (boardSort === "fee_cap") {
-      const score = (row: LeaderBoardRow) => {
-        if (row.fee_capital_ratio != null && Number.isFinite(row.fee_capital_ratio)) {
-          return row.fee_capital_ratio;
-        }
-        const fee = row.accrued_fee_quote_xlm ?? row.claim_quote_xlm;
-        if (row.deposit_quote_xlm > 0) return fee / row.deposit_quote_xlm;
-        return -1;
-      };
-      return score(b) - score(a);
-    }
-    return (b.accrued_fee_quote_xlm ?? b.claim_quote_xlm) - (a.accrued_fee_quote_xlm ?? a.claim_quote_xlm);
-  });
-  const boardPageCount = Math.max(1, Math.ceil(sortedBoard.length / BOARD_PAGE_SIZE));
-  const visibleBoard = sortedBoard.slice((boardPage - 1) * BOARD_PAGE_SIZE, boardPage * BOARD_PAGE_SIZE);
+  const visibleBoard = board;
 
   function ratioPct(ratio?: number | null) {
     if (ratio == null || !Number.isFinite(ratio)) return null;
@@ -219,7 +210,7 @@ function LeadersInner() {
         </div>
         {boardLoading ? (
           <div className="empty">Loading board…</div>
-        ) : sortedBoard.length === 0 ? (
+        ) : visibleBoard.length === 0 ? (
           <div className="empty">No LP activity or verified fee snapshots in this window yet.</div>
         ) : (
           <div className="leaders-card-grid">
@@ -279,7 +270,7 @@ function LeadersInner() {
                       <span className="leaders-meta-v">{row.distinct_pools}</span>
                     </div>
                     <div>
-                      <span className="leaders-meta-k">Deposits</span>
+                      <span className="leaders-meta-k">Deposits ({windowDays}d)</span>
                       <span className="leaders-meta-v">
                         {quoteLabel(row.deposit_quote_usd, row.deposit_quote_xlm)}
                       </span>

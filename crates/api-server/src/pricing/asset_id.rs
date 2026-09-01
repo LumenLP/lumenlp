@@ -25,9 +25,9 @@ pub fn resolve_freighter_asset_id(
     name: Option<&str>,
     issuer: Option<&str>,
 ) -> Option<FreighterAssetId> {
-    if contract.eq_ignore_ascii_case(NATIVE_SAC_MAINNET)
-        || symbol.is_some_and(|s| s.eq_ignore_ascii_case("native"))
-        || name.is_some_and(|n| n.eq_ignore_ascii_case("native"))
+    if contract.eq_ignore_ascii_case(NATIVE_SAC_MAINNET) ||
+        symbol.is_some_and(|s| s.eq_ignore_ascii_case("native")) ||
+        name.is_some_and(|n| n.eq_ignore_ascii_case("native"))
     {
         return Some(FreighterAssetId::Native);
     }

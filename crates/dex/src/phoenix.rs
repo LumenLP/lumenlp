@@ -271,8 +271,8 @@ fn map_value<'a>(map: &'a xdr::ScMap, name: &str) -> Result<&'a xdr::ScVal> {
     map.0
         .iter()
         .find(|entry| {
-            matches!(&entry.key, xdr::ScVal::Symbol(symbol) if symbol.to_string() == name)
-                || matches!(&entry.key, xdr::ScVal::String(string) if string.to_string() == name)
+            matches!(&entry.key, xdr::ScVal::Symbol(symbol) if symbol.to_string() == name) ||
+                matches!(&entry.key, xdr::ScVal::String(string) if string.to_string() == name)
         })
         .map(|entry| &entry.val)
         .ok_or_else(|| anyhow!("Phoenix query result missing field {name}"))

@@ -768,7 +768,9 @@ impl IndexDb {
     pub fn update_copy_op_status(&self, id: &str, status: &str, note: Option<&str>) -> Result<()> {
         let current: String = self
             .conn
-            .query_row("SELECT status FROM copy_ops WHERE id = ?1", params![id], |row| row.get(0))
+            .query_row("SELECT status FROM copy_ops WHERE id = ?1", params![id], |row| {
+                row.get(0)
+            })
             .optional()?
             .ok_or_else(|| anyhow::anyhow!("copy op not found: {id}"))?;
         if !copy_status_transition_allowed(&current, status) {
@@ -881,10 +883,15 @@ impl IndexDb {
                 .body
                 .pointer("/derived/venue")
                 .and_then(Value::as_str)
-                .is_some_and(|venue| venue != "aquarius")
-                && matches!(event.kind.as_str(), "claim_fees" | "claim_protocol_fee");
+                .is_some_and(|venue| venue != "aquarius") &&
+                matches!(event.kind.as_str(), "claim_fees" | "claim_protocol_fee");
             let quote = (!unsupported_claim)
-                .then(|| event.body.pointer(&format!("/derived/{quote_key}")).and_then(|v| v.as_f64()))
+                .then(|| {
+                    event
+                        .body
+                        .pointer(&format!("/derived/{quote_key}"))
+                        .and_then(|v| v.as_f64())
+                })
                 .flatten()
                 .or_else(|| {
                     (quote_key == "total_quote_xlm")
@@ -1255,9 +1262,9 @@ impl IndexDb {
             baseline.insert(pool, value.unwrap_or_default());
         }
 
-        let mut current_stmt = self.conn.prepare(
-            "SELECT pool_address, unclaimed_quote_xlm, status FROM actor_fee_snapshots WHERE actor = ?1",
-        )?;
+        let mut current_stmt = self
+            .conn
+            .prepare("SELECT pool_address, unclaimed_quote_xlm, status FROM actor_fee_snapshots WHERE actor = ?1")?;
         let current_rows = current_stmt.query_map(params![actor], |row| {
             Ok((
                 row.get::<_, String>(0)?,
@@ -1371,16 +1378,16 @@ impl IndexDb {
             // Older rows may have recorded the Sushi position manager contract
             // as actor. Accept the wallet in the event sender/recipient so
             // those rows remain discoverable without a full historical replay.
-            let actor_matches = derived.get("actor").and_then(Value::as_str) == Some(actor)
-                || event
+            let actor_matches = derived.get("actor").and_then(Value::as_str) == Some(actor) ||
+                event
                     .body
                     .get("data")
                     .and_then(Value::as_array)
                     .and_then(|data| data.first())
                     .and_then(|item| item.get("sender").or_else(|| item.get("recipient")))
                     .and_then(|value| value.get("value").and_then(Value::as_str))
-                    .as_deref()
-                    == Some(actor);
+                    .as_deref() ==
+                    Some(actor);
             if !actor_matches {
                 continue;
             }
@@ -2369,7 +2376,10 @@ mod tests {
         db.enqueue_recorder_event(&event).unwrap();
         db.claim_recorder_events(1, 30).unwrap();
         db.conn
-            .execute("UPDATE recorder_outbox SET updated_at = 1 WHERE source_event_id = 'evt-lease'", [])
+            .execute(
+                "UPDATE recorder_outbox SET updated_at = 1 WHERE source_event_id = 'evt-lease'",
+                [],
+            )
             .unwrap();
         let retry = db.claim_recorder_events(1, 30).unwrap();
         assert_eq!(retry.len(), 1);
@@ -2438,8 +2448,16 @@ mod tests {
     #[test]
     fn fee_snapshot_delta_is_unavailable_for_unverified_fee_legs() {
         let db = test_db();
-        db.insert_actor_fee_snapshot_history("GLEADER", "CPOOL", "soroswap", None, Some(100.0), "fee_unavailable", 100)
-            .unwrap();
+        db.insert_actor_fee_snapshot_history(
+            "GLEADER",
+            "CPOOL",
+            "soroswap",
+            None,
+            Some(100.0),
+            "fee_unavailable",
+            100,
+        )
+        .unwrap();
         db.upsert_actor_fee_snapshot("GLEADER", "CPOOL", "soroswap", Some(14.0), Some(110.0), "ok", 200)
             .unwrap();
 
@@ -2478,8 +2496,16 @@ mod tests {
     #[test]
     fn zeroed_history_preserves_unverified_fee_status() {
         let db = test_db();
-        db.upsert_actor_fee_snapshot("GLEADER", "CPOOL", "soroswap", None, Some(100.0), "fee_unavailable", 100)
-            .unwrap();
+        db.upsert_actor_fee_snapshot(
+            "GLEADER",
+            "CPOOL",
+            "soroswap",
+            None,
+            Some(100.0),
+            "fee_unavailable",
+            100,
+        )
+        .unwrap();
         db.record_actor_fee_snapshot_history_zeroed("GLEADER", 200).unwrap();
         db.clear_actor_fee_snapshots("GLEADER").unwrap();
         db.upsert_actor_fee_snapshot("GLEADER", "CPOOL", "soroswap", Some(4.0), Some(90.0), "ok", 300)
@@ -2594,9 +2620,7 @@ mod tests {
             "evt-sushi-claim",
             200,
             "claim_fees",
-            &format!(
-                r#"{{"derived":{{"actor":"{actor}","venue":"sushi","total_quote_xlm":999999.0}}}}"#
-            ),
+            &format!(r#"{{"derived":{{"actor":"{actor}","venue":"sushi","total_quote_xlm":999999.0}}}}"#),
         )
         .unwrap();
 

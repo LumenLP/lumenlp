@@ -166,6 +166,12 @@ export type LeadersBoardResponse = {
   since_ts: number;
   xlm_usd?: number | null;
   leaders: LeaderBoardRow[];
+  pagination?: {
+    page: number;
+    limit: number;
+    total: number;
+    pages: number;
+  };
   sort?: string;
   fee_data?: {
     latest_snapshot_at?: number | null;
@@ -454,9 +460,14 @@ export function fetchLpProfile(address: string) {
   return getJson<LpProfile>(`/v1/lp/profile?address=${encodeURIComponent(address)}`);
 }
 
-export function fetchLpLeaders(limit = 25, windowDays = 30, sort: "fees" | "activity" = "fees") {
+export function fetchLpLeaders(
+  page = 1,
+  limit = 24,
+  windowDays = 30,
+  sort: "fees" | "fee_cap" | "activity" = "fees",
+) {
   return getJson<LeadersBoardResponse>(
-    `/v1/lp/leaders?limit=${limit}&window_days=${windowDays}&sort=${sort}`,
+    `/v1/lp/leaders?page=${page}&limit=${limit}&window_days=${windowDays}&sort=${sort}`,
   );
 }
 

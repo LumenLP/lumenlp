@@ -1,5 +1,7 @@
-use crate::index_db::CopySessionRow;
-use dex::{support_matrix, DraftOpKind, VenueId};
+use {
+    crate::index_db::CopySessionRow,
+    dex::{support_matrix, DraftOpKind, VenueId},
+};
 
 pub const COEFFICIENT_SCALE: f64 = 1_000_000.0;
 pub const MAX_COEFFICIENT_PPM: u32 = 10_000_000;

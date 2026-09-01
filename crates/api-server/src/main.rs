@@ -16,8 +16,10 @@ use {
     std::{
         collections::HashMap,
         net::SocketAddr,
-        sync::atomic::{AtomicBool, AtomicUsize},
-        sync::{Arc, Mutex},
+        sync::{
+            atomic::{AtomicBool, AtomicUsize},
+            Arc, Mutex,
+        },
     },
     tower_http::cors::{Any, CorsLayer},
     tracing::info,

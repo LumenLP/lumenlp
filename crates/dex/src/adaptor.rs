@@ -314,10 +314,10 @@ pub trait DexAdaptor: Send + Sync {
             venue_id: self.venue_id(),
             name: self.name(),
             status: self.status(),
-            copy_execution_enabled: self.status() == VenueStatus::Production
-                && capabilities.copy_scale
-                && capabilities.deposit
-                && capabilities.withdraw,
+            copy_execution_enabled: self.status() == VenueStatus::Production &&
+                capabilities.copy_scale &&
+                capabilities.deposit &&
+                capabilities.withdraw,
             capabilities,
             notes: self.notes(),
         }

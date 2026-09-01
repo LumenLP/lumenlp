@@ -185,10 +185,18 @@ paths:
       summary: Ranked LP actors by accrued fees (Copy scouting board)
       parameters:
         - in: query
+          name: page
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - in: query
           name: limit
           schema:
             type: integer
-            default: 25
+            minimum: 1
+            maximum: 100
+            default: 24
         - in: query
           name: window_days
           schema:
@@ -204,6 +212,13 @@ paths:
 
                 properties:
                   window_days: { type: integer }
+                  pagination:
+                    type: object
+                    properties:
+                      page: { type: integer }
+                      limit: { type: integer }
+                      total: { type: integer }
+                      pages: { type: integer }
                   leaders:
                     type: array
                     items:

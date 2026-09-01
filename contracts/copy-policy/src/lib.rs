@@ -3,8 +3,7 @@
 use soroban_sdk::{
     auth::{ContractContext, InvokerContractAuthEntry, SubContractInvocation},
     contract, contracterror, contractevent, contractimpl, contracttype, symbol_short, Address, BytesN, Env, IntoVal,
-    Symbol, Vec,
-    U256,
+    Symbol, Vec, U256,
 };
 
 const MAX_POOLS: u32 = 32;
@@ -281,11 +280,11 @@ impl CopyPolicy {
         if allowed_pools.len() > MAX_POOLS {
             return Err(Error::TooManyPools);
         }
-        if coefficient_ppm == 0
-            || coefficient_ppm > MAX_COEFFICIENT_PPM
-            || max_per_op_quote <= 0
-            || max_daily_quote <= 0
-            || expires_at <= env.ledger().timestamp()
+        if coefficient_ppm == 0 ||
+            coefficient_ppm > MAX_COEFFICIENT_PPM ||
+            max_per_op_quote <= 0 ||
+            max_daily_quote <= 0 ||
+            expires_at <= env.ledger().timestamp()
         {
             return Err(Error::InvalidLimit);
         }
@@ -474,8 +473,8 @@ impl CopyPolicy {
         if scale_i128(event.quote, session.coefficient_ppm)? != quote {
             return Err(Error::EventMismatch);
         }
-        if kind == symbol_short!("deposit")
-            && scale_amounts(&env, &event.amounts, session.coefficient_ppm) != desired_amounts
+        if kind == symbol_short!("deposit") &&
+            scale_amounts(&env, &event.amounts, session.coefficient_ppm) != desired_amounts
         {
             return Err(Error::EventMismatch);
         }
@@ -615,8 +614,8 @@ impl CopyPolicy {
             if scale_amounts(&env, &event.amounts, session.coefficient_ppm) != desired_amounts {
                 return Err(Error::EventMismatch);
             }
-            if min_amounts.get(0).unwrap() > desired_amounts.get(0).unwrap()
-                || min_amounts.get(1).unwrap() > desired_amounts.get(1).unwrap()
+            if min_amounts.get(0).unwrap() > desired_amounts.get(0).unwrap() ||
+                min_amounts.get(1).unwrap() > desired_amounts.get(1).unwrap()
             {
                 return Err(Error::InvalidLimit);
             }
@@ -866,8 +865,8 @@ impl CopyPolicy {
         if scale_i128(event.quote, session.coefficient_ppm)? != quote {
             return Err(Error::EventMismatch);
         }
-        if kind == symbol_short!("deposit")
-            && scale_amounts(&env, &event.amounts, session.coefficient_ppm) != desired_amounts
+        if kind == symbol_short!("deposit") &&
+            scale_amounts(&env, &event.amounts, session.coefficient_ppm) != desired_amounts
         {
             return Err(Error::EventMismatch);
         }
@@ -1155,8 +1154,10 @@ fn proportional_floor(env: &Env, reserve: u128, shares: u128, total_shares: u128
 mod test {
     use {
         super::*,
-        soroban_sdk::{vec, Val},
-        soroban_sdk::testutils::{Address as _, Events as _, Ledger as _},
+        soroban_sdk::{
+            testutils::{Address as _, Events as _, Ledger as _},
+            vec, Val,
+        },
     };
 
     #[contract]
