@@ -8,7 +8,7 @@ mod token_registry;
 
 use {
     anyhow::Result,
-    axum::Router,
+    axum::{http::Response, Router},
     dex::{db::Db, SorobanRpc, MAINNET_PASSPHRASE},
     handlers::AppState,
     index_db::IndexDb,
@@ -22,7 +22,8 @@ use {
         },
     },
     tower_http::cors::{Any, CorsLayer},
-    tracing::info,
+    tracing::{info, warn, Span},
+    tower_http::trace::TraceLayer,
 };
 
 #[tokio::main]
@@ -68,7 +69,28 @@ async fn main() -> Result<()> {
     let warm_state = state.clone();
     let leader_warm_state = state.clone();
     let fee_state = state.clone();
-    let app = Router::new().merge(handlers::router()).layer(cors).with_state(state);
+    let trace = TraceLayer::new_for_http().on_response(
+        |response: &Response<_>, latency: std::time::Duration, _span: &Span| {
+            if latency >= std::time::Duration::from_millis(250) {
+                let cache = response
+                    .headers()
+                    .get("x-lumenlp-cache")
+                    .and_then(|value| value.to_str().ok())
+                    .unwrap_or("none");
+                warn!(
+                    status = %response.status(),
+                    latency_ms = latency.as_secs_f64() * 1_000.0,
+                    cache,
+                    "slow http response"
+                );
+            }
+        },
+    );
+    let app = Router::new()
+        .merge(handlers::router())
+        .layer(trace)
+        .layer(cors)
+        .with_state(state);
 
     std::thread::spawn(move || {
         let Ok(runtime) = tokio::runtime::Builder::new_current_thread().enable_all().build() else {
