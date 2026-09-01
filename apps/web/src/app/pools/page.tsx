@@ -185,12 +185,18 @@ function PoolsPageInner() {
   const [tvlBucketFilter, setTvlBucketFilter] = useState<(typeof tvlBuckets)[number]>("all");
   const [feeTvlBucketFilter, setFeeTvlBucketFilter] = useState<(typeof feeTvlBuckets)[number]>("all");
   const [q, setQ] = useState("");
+  const [debouncedQ, setDebouncedQ] = useState("");
   const [page, setPage] = useState(1);
   const [serverPageCount, setServerPageCount] = useState(1);
   const [serverTotal, setServerTotal] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [urlReady, setUrlReady] = useState(false);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedQ(q.trim()), 250);
+    return () => window.clearTimeout(timer);
+  }, [q]);
 
   const poolTypes = ["all", "concentrated", "constant_product", "stable", "weighted"];
   const venues = ["all", "aquarius", "comet", "phoenix", "soroswap_amm", "sushi_v3"];
@@ -247,7 +253,7 @@ function PoolsPageInner() {
       feeTier: feeTierFilter === "all" ? undefined : feeTierFilter,
       tvl: tvlBucketFilter === "all" ? undefined : tvlBucketFilter,
       feeTvl: feeTvlBucketFilter === "all" ? undefined : feeTvlBucketFilter,
-      q: q.trim() || undefined,
+      q: debouncedQ || undefined,
     })
       .then((r) => {
         if (cancelled) return;
@@ -270,7 +276,7 @@ function PoolsPageInner() {
     return () => {
       cancelled = true;
     };
-  }, [activityFilter, feeTierFilter, feeTvlBucketFilter, page, poolTypeFilter, q, sortKey, tvlBucketFilter, venueFilter, windowKey]);
+  }, [activityFilter, debouncedQ, feeTierFilter, feeTvlBucketFilter, page, poolTypeFilter, sortKey, tvlBucketFilter, venueFilter, windowKey]);
 
   useEffect(() => {
     setPage(1);
