@@ -52,6 +52,11 @@ paths:
       summary: Ranked pools
       parameters:
         - in: query
+          name: q
+          description: Search pool addresses, venue ids, token symbols, names, issuers, and domains.
+          schema:
+            type: string
+        - in: query
           name: limit
           description: Page size. `page_size` is accepted as a compatibility alias.
           schema:
@@ -122,6 +127,18 @@ paths:
           schema:
             type: string
             enum: [all, high, mid, low, zero]
+        - in: query
+          name: compact
+          description: Omit expensive score diagnostics from catalogue rows.
+          schema:
+            type: boolean
+            default: false
+        - in: query
+          name: refresh
+          description: Force a synchronous catalogue refresh. Prefer the normal stale-while-revalidate path for public clients.
+          schema:
+            type: boolean
+            default: false
       responses:
         "200":
           description: Pool list
@@ -183,6 +200,12 @@ paths:
   /v1/lp/leaders:
     get:
       summary: Ranked LP actors by accrued fees (Copy scouting board)
+      description: |
+        Returns a server-paginated leaderboard. Accrued fees combine indexed
+        claimed fees with the change in verified unclaimed position fees at
+        the requested window boundary. Rows with unavailable venue coverage
+        are not estimated. Results are observable activity signals, not a
+        profitability or investment guarantee.
       parameters:
         - in: query
           name: page
@@ -199,9 +222,25 @@ paths:
             default: 24
         - in: query
           name: window_days
+          description: Activity and fee comparison window in days.
           schema:
             type: integer
+            minimum: 1
+            maximum: 90
             default: 30
+        - in: query
+          name: sort
+          description: Ranking metric.
+          schema:
+            type: string
+            enum: [fees, fee_cap, activity]
+            default: fees
+        - in: query
+          name: refresh
+          description: Force a synchronous catalogue refresh. Prefer the normal stale-while-revalidate path for public clients.
+          schema:
+            type: boolean
+            default: false
       responses:
         "200":
           description: Leader board
@@ -224,6 +263,12 @@ paths:
                     items:
                       $ref: "#/components/schemas/LeaderBoardRow"
                   honesty: { type: string }
+                  sort:
+                    type: string
+                    enum: [fees, fee_cap, activity]
+                  fee_data:
+                    type: object
+                    description: Snapshot coverage and refresh metadata.
   /v1/copy/recorder/status:
     get:
       summary: Recorder outbox status
