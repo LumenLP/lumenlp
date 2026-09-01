@@ -2567,6 +2567,10 @@ async fn lp_profile_uncached(State(state): State<AppState>, Query(q): Query<Addr
                 CACHE_CONTROL,
                 HeaderValue::from_static("public, max-age=15, s-maxage=60, stale-while-revalidate=300"),
             );
+            response.headers_mut().insert(
+                HeaderName::from_static("cdn-cache-control"),
+                HeaderValue::from_static("public, max-age=15, stale-while-revalidate=60"),
+            );
             return response;
         }
         let mut response = Json(value).into_response();
@@ -2577,6 +2581,10 @@ async fn lp_profile_uncached(State(state): State<AppState>, Query(q): Query<Addr
         response.headers_mut().insert(
             CACHE_CONTROL,
             HeaderValue::from_static("public, max-age=30, s-maxage=60, stale-while-revalidate=120"),
+        );
+        response.headers_mut().insert(
+            HeaderName::from_static("cdn-cache-control"),
+            HeaderValue::from_static("public, max-age=30, stale-while-revalidate=120"),
         );
         return response;
     }
