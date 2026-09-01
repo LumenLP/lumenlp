@@ -726,12 +726,21 @@ fn indexer_status_json(status: &IndexerStatus) -> serde_json::Value {
 }
 
 async fn indexer_status(State(state): State<AppState>) -> impl IntoResponse {
-    let index_db = state.index_db.lock().unwrap();
-    match index_db.status() {
-        Ok(status) => Json(indexer_status_json(&status)).into_response(),
-        Err(error) => (
+    let status = tokio::task::spawn_blocking(move || {
+        let index_db = state.index_db.lock().unwrap();
+        index_db.status()
+    })
+    .await;
+    match status {
+        Ok(Ok(status)) => Json(indexer_status_json(&status)).into_response(),
+        Ok(Err(error)) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": error.to_string(), "code": "db_error" })),
+        )
+            .into_response(),
+        Err(error) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": error.to_string(), "code": "status_worker_failed" })),
         )
             .into_response(),
     }
