@@ -10,7 +10,7 @@
 
 ## Project Summary
 
-LumenLP Copy LP Studio is a non-custodial automation product for Stellar liquidity providers. It helps users discover active Aquarius LPs, inspect observable on-chain activity, select a Leader to follow, and automatically mirror approved liquidity actions under user-defined policy limits.
+LumenLP Copy LP Studio is a non-custodial automation product for Stellar liquidity providers. It helps users discover active Aquarius LPs, inspect observable on-chain activity, select a Leader to follow, and move from reviewed copy intents toward automated liquidity actions under user-defined policy limits.
 
 The product starts with Aquarius and focuses on the complete LP workflow:
 
@@ -97,9 +97,7 @@ The project is running on Stellar mainnet:
 - production server and monitoring runbook;
 - architecture and metric methodology documentation.
 
-The current Copy LP flow is intentionally user-reviewed. The grant will fund
-the transition from event-driven copy drafts to policy-constrained,
-testnet-validated and limited-mainnet automation.
+The current Copy LP flow is intentionally user-reviewed, and the indexing and analytics foundation remains under active testing and optimization. The grant will fund the transition from event-driven copy drafts to policy-constrained, testnet-validated, and limited-mainnet Aquarius automation.
 
 ## Why Stellar
 
@@ -184,21 +182,21 @@ The system fails closed when actor attribution, source event metadata, token pri
 
 ## Scope of This Award
 
-The current Aquarius analytics, event indexer, snapshots, Leader profiles, and user-reviewed Copy LP queue are the working MVP and are not counted as new grant deliverables. The milestones below describe the work that remains to turn that MVP into an automated, multi-venue Stellar product.
+The current Aquarius analytics, event indexer, snapshots, Leader profiles, and user-reviewed Copy LP queue are the working foundation and are not counted as new grant deliverables. These components are still being tested and optimized for the reliability required by automation. The milestones below describe the new work that remains for policy-controlled Aquarius automation, external validation, and a measured path toward broader Stellar DEX support.
 
-### Milestone 1: DEX expansion and automation foundation
+### Milestone 1: Aquarius automation foundation
 
 **Deliverables**
 
-- Define a reusable adapter boundary for pool discovery, LP state, liquidity events, and deposit, withdrawal, and claim operations.
-- Cover the target Stellar DEX pool venues through the common adapter boundary: Aquarius, Phoenix, Sushi V3, Soroswap AMM, and Comet. Soroswap AMM is a pool venue and is separate from any DEX aggregator integration. Stellar Classic DEX is outside the current Copy LP scope because its order-book model does not expose the same LP pool operations.
+- Define the reusable adapter and policy boundary for Aquarius pool discovery, LP state, liquidity events, and deposit, withdrawal, and claim operations.
+- Keep Phoenix, Sushi V3, Soroswap AMM, and Comet behind the same boundary as future expansion candidates, gated by demonstrated Aquarius usage and venue-specific validation.
 - Define the Soroban policy account interface, limits, pause/disarm behavior, and manual fallback for automated Copy LP.
 - Add cross-venue fixtures and safety tests for scaling, unsupported operations, expired intents, duplicate events, and ambiguous source activity.
 
 **Completion criteria**
 
-- All target venues are represented in the adapter registry and support matrix, with documented capabilities, contract entrypoints, event models, and validation gates.
-- Each venue is exposed through the pool API only for the operations that have passed validation; unsupported or unverified operations fail closed.
+- Aquarius is represented in the adapter registry and support matrix, with documented capabilities, contract entrypoints, event models, and validation gates.
+- The adapter boundary can report unsupported or unverified operations and fail closed.
 - The policy prototype can be created, inspected, paused, and disarmed on testnet.
 - Invalid, ambiguous, expired, or duplicated source activity cannot create an executable operation.
 - The adapter and policy specifications, fixtures, and test results are public.
@@ -207,44 +205,44 @@ The current Aquarius analytics, event indexer, snapshots, Leader profiles, and u
 
 **Deliverables**
 
-- Implement Soroban Copy Policy / Smart Account integration for supported DEX adapters.
+- Implement Soroban Copy Policy / Smart Account integration for the Aquarius adapter.
 - Add venue, pool, and entrypoint allowlists.
 - Add per-operation and daily limits.
 - Add nonce, expiry, and replay protection.
 - Add pause, resume, and disarm.
-- Implement LumenLP Relayer for policy-approved operations across supported venues.
-- Deploy and validate the cross-venue flow on testnet.
+- Implement the LumenLP Relayer for policy-approved Aquarius operations.
+- Deploy and validate the Aquarius flow on testnet.
 
 **Completion criteria**
 
 - A user can configure and arm a copy policy on testnet.
-- A permitted Leader deposit or withdrawal is executed automatically within configured limits on supported venues.
+- A permitted Leader deposit, withdrawal, or claim is executed automatically within configured limits for Aquarius.
 - An operation exceeding a limit is rejected on-chain.
 - A user can pause or disarm the policy and prevent new execution.
 - The manual user-signed path remains available as a fallback.
 
-### Milestone 3: Multi-venue mainnet launch and aggregator boundary
+### Milestone 3: Aquarius launch, adoption, and demand-gated expansion
 
 **Deliverables**
 
-- Limited mainnet deployment for Aquarius and at least one additional Stellar DEX.
+- Limited mainnet deployment for Aquarius with conservative policy limits and a staged rollout.
 - Execution history with transaction links and failure reasons.
-- Concentrated-liquidity action support where event and position mapping are reliable.
-- Optional, separately authorized fee-token conversion through a DEX aggregator such as Soroswap or LumAgg.
-- Security review, operational runbook, and public documentation.
-- External user walkthrough and feedback cycle.
+- Indexer reliability, relayer health, lag visibility, and safe recovery paths required by automated execution.
+- Adoption measurement for policy arms and repeated automated Copy LP operations.
+- A demand-gated decision on whether to enable one additional venue. Phoenix, Sushi V3, Soroswap AMM, and Comet remain future candidates rather than guaranteed deliverables in this award.
+- Security review, operational runbook, public documentation, and an external user walkthrough.
 
 **Completion criteria**
 
-- Mainnet copy flow works for supported actions on each production-enabled venue.
+- Mainnet copy flow works for supported Aquarius actions under conservative limits.
 - No unrestricted server-side wallet custody is introduced.
 - Every automatic action is policy-checked and traceable.
-- Aggregator-based fee-token conversion cannot expand Copy LP permissions into arbitrary swaps.
+- Any future aggregator-based fee-token conversion cannot expand Copy LP permissions into arbitrary swaps.
 - Public documentation explains limitations, data coverage, and trust boundaries.
 
 ## Success Metrics
 
-The following metrics should be finalized before submission:
+The following metrics will be tracked during the grant:
 
 - `[N]` indexed Aquarius pools with current snapshots;
 - `[N]` indexed LP events with actor attribution;
@@ -252,8 +250,8 @@ The following metrics should be finalized before submission:
 - `[N]` Copy LP sessions created during the grant;
 - `[N]` successful testnet Copy LP operations;
 - `[N]` successful mainnet Copy LP operations after limited rollout;
-- `>= [N]` external testers;
-- `>= [N]` Stellar ecosystem integrations or pilot users;
+- at least `10` external users who arm an Aquarius policy;
+- at least `5` of those users completing two or more automated Copy LP operations;
 - `>= [99.x]%` API / relayer availability after mainnet launch;
 - `0` incidents involving unrestricted custody or policy bypass.
 
@@ -312,18 +310,19 @@ Leader pages show observable fees and activity as labeled signals. They do not c
 
 ## Budget and Tranches
 
-**Requested amount:** `[USD/XLM AMOUNT TO CONFIRM]`
+**Requested amount:** **$80,000 USD-equivalent in XLM**
 
 Suggested allocation structure:
 
 | Tranche | Scope | Amount |
 |---|---|---:|
-| Tranche 1 | Unified Stellar DEX adapter coverage, policy prototype, and safety tests | `[AMOUNT]` |
-| Tranche 2 | Soroban Policy, testnet automation, relayer, safety limits | `[AMOUNT]` |
-| Tranche 3 | Limited multi-venue mainnet launch, DEX aggregator boundary, reliability, security, and docs | `[AMOUNT]` |
-| **Total** |  | **`[TOTAL]`** |
+| Tranche 0 | Project startup and grant execution setup | $8,000 |
+| Tranche 1 | Aquarius automation boundary, policy prototype, data reliability, and safety tests | $16,000 |
+| Tranche 2 | Aquarius testnet automation, relayer, monitoring, and external pilot | $24,000 |
+| Tranche 3 | Aquarius mainnet rollout, adoption validation, reliability, and demand-gated expansion | $32,000 |
+| **Total** |  | **$80,000** |
 
-The budget should be tied to completed, verifiable deliverables rather than general operating costs.
+The budget should be tied to completed, verifiable deliverables rather than general operating costs. The two-person team allocation covers approximately 144-160 combined engineering days across the paid tranches, including protocol architecture, Soroban policy work, backend execution, data reliability, testing, and release operations.
 
 ## Team
 
@@ -350,11 +349,11 @@ The first production venue is Aquarius. The immediate grant outcome is a safe an
 ## Submission Checklist
 
 - [ ] Confirm Build Award track in the SCF Dashboard.
-- [ ] Confirm requested amount and tranche budgets.
+- [ ] Confirm requested amount and tranche budgets: $80,000 total, with 10% / 20% / 30% / 40% tranche allocation.
 - [ ] Add team names, roles, and contact information.
 - [ ] Add public repository URL.
 - [ ] Add current usage / tester numbers.
 - [ ] Confirm whether the project is an individual or entity submission.
 - [ ] Verify website, API, and demo links.
 - [ ] Attach a short Copy LP walkthrough or screen recording if allowed.
-- [ ] Submit before August 16, 2026.
+- [ ] Submit the revised application before the SCF revision deadline.
