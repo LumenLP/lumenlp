@@ -820,6 +820,7 @@ fn derive_sushi_liquidity(
     derived_with_actor(
         json!({
             "venue": "sushi_v3",
+            "pool_type": "concentrated",
             "pool_fee_bps": pool_fee_bps,
             "action": if *kind == PoolEventKind::DepositLiquidity { "mint" } else { "burn" },
             "share_amount": sushi_field(data, "amount").and_then(value_amount_string),
@@ -1620,6 +1621,7 @@ mod tests {
                 assert!(parsed.body_json.contains("CBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"));
                 assert!(parsed.body_json.contains("tick_lower"));
                 assert!(parsed.body_json.contains("tick_upper"));
+                assert!(parsed.body_json.contains("concentrated"));
             }
         }
     }
