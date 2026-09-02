@@ -1532,6 +1532,44 @@ mod tests {
             derived["actor"],
             "GBBO4ZDDZTSM2IUKQYBAST3CFHNPFXECGEFTGWTA3FXZASUBSONBDN3XL"
         );
+
+        let liquidity = derive_comet_liquidity(
+            &PoolEventKind::DepositLiquidity,
+            Some(30),
+            &[json!({
+                "token_in": {"type": "address", "value": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},
+                "token_amount_in": {"type": "i128", "value": "1000"},
+                "pool_amount_in": {"type": "i128", "value": "900"}
+            })],
+            &context,
+            None,
+        );
+        assert_eq!(liquidity["venue"], "comet");
+        assert_eq!(liquidity["pool_type"], "weighted");
+    }
+
+    #[test]
+    fn soroswap_liquidity_events_include_venue_and_pool_type() {
+        let context = PoolIndexContext {
+            fee_bps_by_pool: HashMap::new(),
+            tokens_by_pool: HashMap::new(),
+            dex_by_pool: HashMap::new(),
+            price_book: PriceBook::default(),
+        };
+        let derived = derive_soroswap_liquidity(
+            &PoolEventKind::DepositLiquidity,
+            Some(30),
+            &["CA".into(), "CB".into()],
+            &[json!({
+                "liquidity": {"type": "i128", "value": "10"},
+                "amount_0": {"type": "i128", "value": "20"},
+                "amount_1": {"type": "i128", "value": "30"}
+            })],
+            &context,
+            None,
+        );
+        assert_eq!(derived["venue"], "soroswap_amm");
+        assert_eq!(derived["pool_type"], "constant_product");
     }
 
     #[test]
