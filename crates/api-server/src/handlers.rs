@@ -667,9 +667,13 @@ fn recorder_health(status: &RecorderOutboxStatus, now: i64) -> (&'static str, Op
 }
 
 async fn recorder_status(State(state): State<AppState>) -> impl IntoResponse {
-    let index_db = state.index_db.lock().unwrap();
-    match index_db.recorder_outbox_status() {
-        Ok(status) => {
+    let status = tokio::task::spawn_blocking(move || {
+        let index_db = state.index_db.lock().unwrap();
+        index_db.recorder_outbox_status()
+    })
+    .await;
+    match status {
+        Ok(Ok(status)) => {
             let now = Utc::now().timestamp();
             let (health, pending_age_seconds) = recorder_health(&status, now);
             Json(json!({
@@ -683,9 +687,14 @@ async fn recorder_status(State(state): State<AppState>) -> impl IntoResponse {
             }))
             .into_response()
         }
-        Err(error) => (
+        Ok(Err(error)) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": error.to_string(), "code": "db_error" })),
+        )
+            .into_response(),
+        Err(error) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": error.to_string(), "code": "status_worker_failed" })),
         )
             .into_response(),
     }
