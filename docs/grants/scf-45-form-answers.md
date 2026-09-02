@@ -10,7 +10,7 @@ This document maps the current SCF Build Award form to suggested answers for Lum
 
 ### Project Type
 
-**End User Application**
+**Other Application**
 
 This is a user-facing Stellar DeFi product. It is not only an analytics API and is not a custodial vault.
 
@@ -159,7 +159,7 @@ The two-person team allocation is based on approximately 288 combined engineerin
 
 ## Tranche #1 Deliverables
 
-**Target completion date:** `06/10/2026` (5 weeks after the planned project start; shift this date if the award start date changes)
+**Target completion date:** `05/10/2026` (Monday; approximately 5 weeks after the planned project start)
 
 The existing Aquarius pool analytics, event indexer, snapshots, Leader profiles, and user-reviewed Copy LP queue are the starting product and are not counted as new tranche deliverables.
 
@@ -185,7 +185,7 @@ Add privacy-preserving product instrumentation for policy arms, repeated automat
 
 ## Tranche #2 Deliverables
 
-**Target completion date:** `10/11/2026` (5 weeks after Tranche #1; shift this date if the award start date changes)
+**Target completion date:** `09/11/2026` (Monday; approximately 5 weeks after Tranche #1)
 
 ### 1. Soroban Copy Policy and account authorization — $8,000 (approximately 32 combined engineering days)
 
@@ -215,7 +215,7 @@ Run end-to-end scenarios with real testnet accounts, including permitted actions
 
 ## Tranche #3 Deliverables
 
-**Target completion date:** `22/12/2026` (6 weeks after Tranche #2; shift this date if the award start date changes)
+**Target completion date:** `21/12/2026` (Monday; approximately 6 weeks after Tranche #2)
 
 ### 1. Limited Aquarius mainnet launch — $12,000 (approximately 48 combined engineering days)
 
@@ -245,15 +245,15 @@ Publish the architecture, policy model, data methodology, API usage, limitations
 
 ## Completion Dates
 
-The form requires dates in `DD/MM/YYYY` format. These dates assume the award project starts on **01/09/2026**, after SCF approval and Tranche #0. If the official award start date is different, shift all three dates by the same number of days.
+The form requires dates in `DD/MM/YYYY` format. The submitted dates are Mondays and represent approximately 5 weeks, 5 weeks, and 6 weeks for the three deliverable tranches. If the official award start date changes, the dates should be shifted consistently.
 
-- **Tranche #1:** `06/10/2026` — Aquarius automation boundary, policy prototype, safety tests, and adoption instrumentation (5 weeks).
-- **Tranche #2:** `10/11/2026` — Aquarius testnet automation, monitoring, threat model, and external pilot validation (5 weeks).
-- **Tranche #3:** `22/12/2026` — limited Aquarius mainnet launch, reliability, adoption reporting, and demand-gated venue expansion (6 weeks).
+- **Tranche #1:** `05/10/2026` — Aquarius automation boundary, policy prototype, safety tests, and adoption instrumentation (approximately 5 weeks).
+- **Tranche #2:** `09/11/2026` — Aquarius testnet automation, monitoring, threat model, and external pilot validation (approximately 5 weeks).
+- **Tranche #3:** `21/12/2026` — limited Aquarius mainnet launch, reliability, adoption reporting, and demand-gated venue expansion (approximately 6 weeks).
 
 ## Important Submission Decisions
 
-- Select **End User Application**.
+- Select **Other Application**; the project is a user-facing Stellar DeFi application rather than an analytics-only API or custodial vault.
 - Submit both confirmed team members, with their roles and relevant experience stated separately.
 - Treat Aquarius as the first funded venue; gate Phoenix, Sushi V3, Soroswap AMM, and Comet expansion on demonstrated external usage and venue-specific validation.
 - Track a grant-period adoption target of 10 external users arming an Aquarius policy, with at least 5 completing two or more automated Copy LP operations. Report the result honestly; user adoption is a product success metric, not a claim about existing traction or the sole technical acceptance condition.
