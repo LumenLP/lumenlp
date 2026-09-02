@@ -85,7 +85,16 @@ These numbers should be refreshed immediately before submission and accompanied 
 
 ## Resubmission Feedback
 
-Panel-requested revision. We have narrowed the funded scope to Aquarius-first automated Copy LP, reduced the budget, added measurable external-user adoption targets, clarified how policy limits preserve risk boundaries, separated the existing analytics foundation from new grant-funded automation, and added a two-person engineering-day cost breakdown.
+Following the panel's feedback, we made the following revisions:
+
+1. Reduced the requested budget from $100,000 to $80,000 and reallocated it across the required tranche structure.
+2. Narrowed the funded scope to Aquarius-first automated Copy LP, including the Soroban policy, relayer, safety controls, testnet validation, and a limited mainnet rollout.
+3. Added an adoption milestone targeting at least 10 external users who arm an Aquarius policy, with at least 5 completing two or more automated Copy LP operations during the grant period.
+4. Clarified that copied LP actions are bounded by user-defined coefficients, pool and entrypoint allowlists, amount limits, slippage, expiry, replay protection, pause, and disarm controls. We also clarified why copied actions cannot reproduce a Leader's complete portfolio return, particularly for concentrated liquidity.
+5. Distinguished the deployed indexer, API, analytics, and user-reviewed Copy LP foundation from the new grant-funded automation layer. The existing data foundation remains under active testing and optimization.
+6. Added a two-person engineering effort and per-deliverable budget breakdown.
+7. Clarified that Phoenix, Sushi V3, Soroswap AMM, and Comet are future expansion candidates gated by demonstrated Aquarius usage and venue-specific validation, rather than guaranteed deliverables in this award.
+8. Clarified the capability LumenLP adds beyond existing DEX tooling: event attribution, bounded copy-intent creation, policy-controlled execution, and traceable non-custodial automation.
 
 ## Ambassador Affiliation
 
