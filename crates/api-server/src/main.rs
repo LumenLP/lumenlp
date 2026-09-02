@@ -8,13 +8,16 @@ mod token_registry;
 
 use {
     anyhow::Result,
-    axum::{http::{Request, Response}, Router},
+    axum::{
+        http::{Request, Response},
+        Router,
+    },
     dex::{db::Db, SorobanRpc, MAINNET_PASSPHRASE},
     handlers::AppState,
     index_db::IndexDb,
     pricing::service::PriceService,
     std::{
-        collections::HashMap,
+        collections::{HashMap, HashSet},
         net::SocketAddr,
         sync::{
             atomic::{AtomicBool, AtomicUsize},
@@ -22,8 +25,8 @@ use {
         },
     },
     tower_http::cors::{Any, CorsLayer},
-    tracing::{info, info_span, warn, Span},
     tower_http::trace::TraceLayer,
+    tracing::{info, info_span, warn, Span},
 };
 
 #[tokio::main]
@@ -57,7 +60,7 @@ async fn main() -> Result<()> {
         leader_list_cache: Arc::new(Mutex::new(HashMap::new())),
         leader_list_refreshing: Arc::new(AtomicBool::new(false)),
         lp_profile_cache: Arc::new(Mutex::new(HashMap::new())),
-        lp_profile_refreshing: Arc::new(AtomicBool::new(false)),
+        lp_profile_refreshing: Arc::new(Mutex::new(HashSet::new())),
         lp_profile_inflight: Arc::new(Mutex::new(HashMap::new())),
         redis,
         leader_fee_scan_cursor: Arc::new(AtomicUsize::new(0)),
@@ -78,8 +81,7 @@ async fn main() -> Result<()> {
                 path = %request.uri().path()
             )
         })
-        .on_response(
-        |response: &Response<_>, latency: std::time::Duration, _span: &Span| {
+        .on_response(|response: &Response<_>, latency: std::time::Duration, _span: &Span| {
             if latency >= std::time::Duration::from_millis(250) {
                 let cache = response
                     .headers()
@@ -93,8 +95,7 @@ async fn main() -> Result<()> {
                     "slow http response"
                 );
             }
-        },
-    );
+        });
     let app = Router::new()
         .merge(handlers::router())
         .layer(trace)

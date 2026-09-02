@@ -65,7 +65,9 @@ pub struct AppState {
     pub lp_profile_cache: Arc<Mutex<HashMap<String, (StdInstant, Value)>>>,
     /// Prevents several expired profile requests from starting the same RPC
     /// refresh at once.
-    pub lp_profile_refreshing: Arc<AtomicBool>,
+    /// Addresses currently undergoing stale-cache refresh. Keeping this per
+    /// address avoids serializing unrelated Leader profile RPC scans.
+    pub lp_profile_refreshing: Arc<Mutex<HashSet<String>>>,
     /// Coalesces concurrent cold profile requests by public wallet address.
     pub lp_profile_inflight: Arc<Mutex<HashMap<String, Arc<tokio::sync::Notify>>>>,
     pub redis: Option<redis::Client>,
@@ -2184,8 +2186,8 @@ pub async fn refresh_leader_fee_snapshots(state: AppState) {
     } else {
         state
             .leader_fee_scan_cursor
-            .fetch_add(rotating_count.max(1), std::sync::atomic::Ordering::Relaxed) %
-            tail_len
+            .fetch_add(rotating_count.max(1), std::sync::atomic::Ordering::Relaxed)
+            % tail_len
     };
     let mut selected = actors[..hot_count].to_vec();
     selected.extend((0..rotating_count).map(|offset| actors[hot_count + (start + offset) % tail_len].clone()));
@@ -2575,19 +2577,17 @@ async fn lp_profile_uncached(State(state): State<AppState>, Query(q): Query<Addr
             .map(|(expires_at, value)| (*expires_at, value.clone()))
     } {
         let now = StdInstant::now();
-        if expires_at <= now &&
-            expires_at + StdDuration::from_secs(LP_PROFILE_STALE_GRACE_SECS) > now &&
-            state
-                .lp_profile_refreshing
-                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-                .is_ok()
+        if expires_at <= now
+            && expires_at + StdDuration::from_secs(LP_PROFILE_STALE_GRACE_SECS) > now
+            && state.lp_profile_refreshing.lock().unwrap().insert(q.address.clone())
         {
             let refresh_state = state.clone();
             let refresh_address = q.address.clone();
-            let refresh_flag = Arc::clone(&state.lp_profile_refreshing);
+            let cleanup_address = refresh_address.clone();
+            let refresh_addresses = Arc::clone(&state.lp_profile_refreshing);
             std::thread::spawn(move || {
                 let Ok(runtime) = tokio::runtime::Builder::new_current_thread().enable_all().build() else {
-                    refresh_flag.store(false, Ordering::Release);
+                    refresh_addresses.lock().unwrap().remove(&cleanup_address);
                     return;
                 };
                 refresh_state.lp_profile_cache.lock().unwrap().remove(&refresh_address);
@@ -2595,12 +2595,12 @@ async fn lp_profile_uncached(State(state): State<AppState>, Query(q): Query<Addr
                     let _ = lp_profile(
                         State(refresh_state),
                         Query(AddressQuery {
-                            address: refresh_address,
+                            address: refresh_address.clone(),
                         }),
                     )
                     .await;
                 });
-                refresh_flag.store(false, Ordering::Release);
+                refresh_addresses.lock().unwrap().remove(&cleanup_address);
             });
         }
         if expires_at <= now {
