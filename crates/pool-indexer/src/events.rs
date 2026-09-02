@@ -491,6 +491,7 @@ fn derive_event_fields(
                 });
             derived_with_actor(
                 json!({
+                    "venue": "aquarius",
                     "pool_fee_bps": pool_fee_bps,
                     "token_in": token_in,
                     "token_out": token_out,
@@ -553,6 +554,7 @@ fn derive_event_fields(
                 .and_then(|(token, amount)| estimate_amount_xlm(&context.price_book, token, amount));
             derived_with_actor(
                 json!({
+                    "venue": "aquarius",
                     "pool_fee_bps": pool_fee_bps,
                     "token": token,
                     "amount": amount,
@@ -596,6 +598,7 @@ fn derive_event_fields(
                 .sum::<f64>();
             derived_with_actor(
                 json!({
+                    "venue": "aquarius",
                     "pool_fee_bps": pool_fee_bps,
                     "share_amount": share_amount,
                     "token_amounts": token_amounts,
@@ -1397,6 +1400,37 @@ mod tests {
     fn derived_with_actor_injects_field() {
         let derived = derived_with_actor(json!({"share_amount": "1000"}), Some("GABC"));
         assert_eq!(derived.get("actor").and_then(Value::as_str), Some("GABC"));
+    }
+
+    #[test]
+    fn aquarius_events_include_explicit_venue_label() {
+        let context = PoolIndexContext {
+            fee_bps_by_pool: HashMap::new(),
+            tokens_by_pool: HashMap::new(),
+            dex_by_pool: HashMap::new(),
+            price_book: PriceBook::default(),
+        };
+        let derived = derive_event_fields(
+            &PoolEventKind::Trade,
+            "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            &[
+                json!({"type": "symbol", "value": "trade"}),
+                json!({"type": "address", "value": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}),
+                json!({"type": "address", "value": "CBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"}),
+            ],
+            &[
+                json!({"type": "i128", "value": "100"}),
+                json!({"type": "i128", "value": "90"}),
+                json!({"type": "i128", "value": "1"}),
+            ],
+            &context,
+            None,
+            false,
+            false,
+            false,
+            false,
+        );
+        assert_eq!(derived["venue"], "aquarius");
     }
 
     #[test]
