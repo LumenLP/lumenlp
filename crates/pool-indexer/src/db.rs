@@ -196,32 +196,50 @@ impl IndexDb {
         if inserted > 0 {
             return Ok(true);
         }
-        // If a prior insert omitted derived.actor (RPC blip), patch when we now have
-        // one.
-        let Ok(body) = serde_json::from_str::<serde_json::Value>(&event.body_json) else {
+        // A discovery overlap can replay an existing event with newer derived
+        // fields. Merge only fields that were missing in the stored JSON so an
+        // actor or venue label is never lost on a duplicate insert.
+        let Ok(incoming) = serde_json::from_str::<Value>(&event.body_json) else {
             return Ok(false);
         };
-        let Some(actor) = body
-            .pointer("/derived/actor")
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())
-        else {
+        let Ok(existing_json) = self.conn.query_row(
+            "SELECT body_json FROM pool_events WHERE event_id = ?1",
+            params![event.event_id],
+            |row| row.get::<_, String>(0),
+        ) else {
             return Ok(false);
         };
-        let _ = actor;
-        let updated = self.conn.execute(
-            r#"
-            UPDATE pool_events
-            SET body_json = ?1
-            WHERE event_id = ?2
-              AND (
-                json_extract(body_json, '$.derived.actor') IS NULL
-                OR json_extract(body_json, '$.derived.actor') = ''
-              )
-            "#,
-            params![event.body_json, event.event_id],
+        let Ok(mut existing) = serde_json::from_str::<Value>(&existing_json) else {
+            return Ok(false);
+        };
+        let Some(incoming_derived) = incoming.get("derived").and_then(Value::as_object) else {
+            return Ok(false);
+        };
+        let Some(existing_derived) = existing.get_mut("derived").and_then(Value::as_object_mut) else {
+            return Ok(false);
+        };
+        let mut changed = false;
+        for key in ["actor", "venue", "pool_type"] {
+            let Some(value) = incoming_derived.get(key).filter(|value| !value.is_null()) else {
+                continue;
+            };
+            let missing = existing_derived
+                .get(key)
+                .is_none_or(|current| current.is_null() || current.as_str() == Some(""));
+            if missing {
+                existing_derived.insert(key.into(), value.clone());
+                changed = true;
+            }
+        }
+        if !changed {
+            return Ok(false);
+        }
+        let normalized = serde_json::to_string(&existing)?;
+        self.conn.execute(
+            "UPDATE pool_events SET body_json = ?1 WHERE event_id = ?2",
+            params![normalized, event.event_id],
         )?;
-        Ok(updated > 0)
+        Ok(true)
     }
 
     pub fn list_liquidity_events_missing_actor(&self, limit: usize) -> Result<Vec<(String, String, String)>> {
@@ -739,5 +757,32 @@ mod tests {
         ).unwrap();
         assert!(body.contains("\"venue\":\"soroswap_amm\""));
         assert!(body.contains("\"pool_type\":\"constant_product\""));
+    }
+
+    #[test]
+    fn duplicate_event_merge_preserves_existing_actor() {
+        let db = IndexDb::open_with_snapshot_path(":memory:", None).unwrap();
+        let base = PoolEvent {
+            event_id: "duplicate-trade".into(),
+            tx_hash: Some("tx".into()),
+            ledger: 1,
+            created_at: 1,
+            pool_address: "CPool".into(),
+            kind: PoolEventKind::Trade,
+            body_json: r#"{"topic":[{"value":"trade"}],"derived":{"actor":"GACTOR"}}"#.into(),
+        };
+        assert!(db.insert_event(&base).unwrap());
+        let replay = PoolEvent {
+            body_json: r#"{"topic":[{"value":"trade"}],"derived":{"venue":"aquarius"}}"#.into(),
+            ..base
+        };
+        assert!(db.insert_event(&replay).unwrap());
+        let body: String = db.conn.query_row(
+            "SELECT body_json FROM pool_events WHERE event_id = 'duplicate-trade'",
+            [],
+            |row| row.get(0),
+        ).unwrap();
+        assert!(body.contains("\"actor\":\"GACTOR\""));
+        assert!(body.contains("\"venue\":\"aquarius\""));
     }
 }
