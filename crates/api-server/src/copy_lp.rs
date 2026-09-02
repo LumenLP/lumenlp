@@ -131,6 +131,15 @@ fn leader_quote_for_kind(event_kind: &str, derived: &Value) -> Option<f64> {
     }
 }
 
+fn is_copyable_pool_type(derived: &Value) -> bool {
+    // CL operations require position/range-specific ABI handling. Do not
+    // turn an explicitly identified CLMM event into a fungible-share draft.
+    !matches!(
+        derived.get("pool_type").and_then(Value::as_str),
+        Some("concentrated" | "clmm")
+    )
+}
+
 /// Build a scaled CopyOp draft from an indexed pool event body.
 ///
 /// Actor filtering is the caller's responsibility; events without usable token
@@ -144,6 +153,9 @@ pub fn build_scaled_op_payload(
     let event_kind = event_kind_from_body(event_body)?;
     let copy_kind = copy_kind_from_event(event_kind, include_claims)?;
     let derived = event_body.get("derived")?;
+    if !is_copyable_pool_type(derived) {
+        return None;
+    }
 
     let leader_amounts = leader_amounts_for_kind(event_kind, derived)?;
     let scaled_amounts = scale_token_amounts_json(&leader_amounts, coefficient)?;
@@ -229,5 +241,18 @@ mod tests {
             }
         });
         assert!(build_scaled_op_payload(&body, "CPOOL", 0.5, false).is_none());
+    }
+
+    #[test]
+    fn build_scaled_op_payload_skips_explicit_clmm_event() {
+        let body = json!({
+            "topic": [{"type":"symbol","value":"deposit_liquidity"}],
+            "derived": {
+                "pool_type": "concentrated",
+                "token_amounts": [{"token": "CA", "amount": "100"}],
+                "total_quote_xlm": 1.0
+            }
+        });
+        assert!(build_scaled_op_payload(&body, "CPOOL", 0.1, false).is_none());
     }
 }
