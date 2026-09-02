@@ -3,6 +3,7 @@ use {
     anyhow::{Context, Result},
     chrono::{TimeZone, Utc},
     rusqlite::{params, Connection},
+    serde_json::Value,
     std::collections::HashSet,
 };
 
@@ -268,6 +269,63 @@ impl IndexDb {
             params![body_json, event_id],
         )?;
         Ok(updated > 0)
+    }
+
+    /// Add stable venue labels to older trade rows written before event
+    /// derivation became explicitly multi-DEX. This is local JSON migration:
+    /// it does not rescan RPC history or move the indexer cursor.
+    pub fn backfill_event_venue_labels(&self) -> Result<usize> {
+        let mut stmt = self.conn.prepare(
+            "SELECT event_id, body_json FROM pool_events WHERE kind = 'trade'",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut patches = Vec::new();
+        for row in rows {
+            let (event_id, body_json) = row?;
+            let Ok(mut body) = serde_json::from_str::<Value>(&body_json) else {
+                continue;
+            };
+            let Some(topic) = body.get("topic").and_then(Value::as_array) else {
+                continue;
+            };
+            let symbol = |index: usize| {
+                topic
+                    .get(index)
+                    .and_then(|value| value.get("value"))
+                    .and_then(Value::as_str)
+            };
+            let (venue, pool_type) = if symbol(0) == Some("SoroswapPair") {
+                ("soroswap_amm", Some("constant_product"))
+            } else if symbol(0) == Some("POOL") && symbol(1) == Some("swap") {
+                ("comet", Some("weighted"))
+            } else if symbol(0) == Some("swap") {
+                ("phoenix", None)
+            } else {
+                ("aquarius", None)
+            };
+            let Some(derived) = body.get_mut("derived").and_then(Value::as_object_mut) else {
+                continue;
+            };
+            if derived.get("venue").and_then(Value::as_str).is_some() {
+                continue;
+            }
+            derived.insert("venue".into(), Value::String(venue.into()));
+            if let Some(pool_type) = pool_type {
+                derived.insert("pool_type".into(), Value::String(pool_type.into()));
+            }
+            patches.push((event_id, serde_json::to_string(&body)?));
+        }
+        drop(stmt);
+        let mut patched = 0;
+        for (event_id, body_json) in patches {
+            patched += self.conn.execute(
+                "UPDATE pool_events SET body_json = ?1 WHERE event_id = ?2",
+                params![body_json, event_id],
+            )?;
+        }
+        Ok(patched)
     }
 
     pub fn cursor_ledger(&self) -> Result<Option<u32>> {
@@ -641,5 +699,29 @@ mod tests {
         let ts = "2026-07-26T10:07:49Z";
         let bucket = IndexDb::bucket_from_rfc3339(ts).unwrap();
         assert_eq!(bucket_to_rfc3339(bucket), "2026-07-26T10:05:00+00:00");
+    }
+
+    #[test]
+    fn historical_trade_venue_labels_are_idempotent() {
+        let db = IndexDb::open_with_snapshot_path(":memory:", None).unwrap();
+        db.insert_event(&PoolEvent {
+            event_id: "legacy-soroswap-trade".into(),
+            tx_hash: Some("tx".into()),
+            ledger: 1,
+            created_at: 1,
+            pool_address: "CPool".into(),
+            kind: PoolEventKind::Trade,
+            body_json: r#"{"topic":[{"value":"SoroswapPair"}],"derived":{"amount_in":"10"}}"#.into(),
+        }).unwrap();
+
+        assert_eq!(db.backfill_event_venue_labels().unwrap(), 1);
+        assert_eq!(db.backfill_event_venue_labels().unwrap(), 0);
+        let body: String = db.conn.query_row(
+            "SELECT body_json FROM pool_events WHERE event_id = 'legacy-soroswap-trade'",
+            [],
+            |row| row.get(0),
+        ).unwrap();
+        assert!(body.contains("\"venue\":\"soroswap_amm\""));
+        assert!(body.contains("\"pool_type\":\"constant_product\""));
     }
 }

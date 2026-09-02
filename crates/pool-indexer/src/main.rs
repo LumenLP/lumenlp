@@ -47,6 +47,10 @@ async fn run(rpc: &SorobanRpc, db: &IndexDb, poll_secs: u64) -> Result<()> {
     const DISCOVERY_REFRESH_SECS: u64 = 300;
     const DISCOVERY_LOOKBACK_LEDGERS: u32 = 360; // ~30 minutes at ~5s/ledger
     sync_derived_tables(db)?;
+    let patched = db.backfill_event_venue_labels()?;
+    if patched > 0 {
+        info!(patched, "backfilled historical event venue labels");
+    }
     let mut scanner = PoolEventScanner::discover(rpc, db).await?;
     let mut last_discovery = Instant::now();
     let health = rpc.get_health().await?;
@@ -143,6 +147,10 @@ fn persist_scan(db: &IndexDb, scan: &EventScanResult) -> Result<()> {
 
 async fn backfill(rpc: &SorobanRpc, db: &IndexDb) -> Result<()> {
     sync_derived_tables(db)?;
+    let patched = db.backfill_event_venue_labels()?;
+    if patched > 0 {
+        info!(patched, "backfilled historical event venue labels");
+    }
     let scanner = PoolEventScanner::discover(rpc, db).await?;
     let health = rpc.get_health().await?;
     let requested_start = std::env::var("INDEXER_START_LEDGER")
