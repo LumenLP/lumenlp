@@ -359,6 +359,17 @@ impl IndexDb {
                 )?;
             }
         }
+        // Keep a SQL fallback for the compact legacy Aquarius trade shape.
+        // It is both faster and more robust if an old JSON row has an unusual
+        // field ordering or representation that the decoder cannot traverse.
+        patched += self.conn.execute(
+            "UPDATE pool_events
+             SET body_json = json_set(body_json, '$.derived.venue', 'aquarius')
+             WHERE kind = 'trade'
+               AND json_extract(body_json, '$.derived.venue') IS NULL
+               AND json_extract(body_json, '$.topic[0].value') = 'trade'",
+            [],
+        )?;
         Ok(patched)
     }
 
