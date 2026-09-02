@@ -1884,32 +1884,34 @@ async fn lp_leaders(State(state): State<AppState>, Query(q): Query<LeadersBoardQ
         );
         return response;
     }
-    if let Some(client) = state.redis.clone() {
-        if let Ok(mut connection) = client.get_multiplexed_async_connection().await {
-            let cached: redis::RedisResult<Option<String>> = connection.get(&cache_key).await;
-            if let Ok(Some(serialized)) = cached {
-                if let Ok(value) = serde_json::from_str::<Value>(&serialized) {
-                    state.leader_list_cache.lock().unwrap().insert(
-                        local_key.clone(),
-                        (
-                            StdInstant::now() + StdDuration::from_secs(LEADER_LIST_CACHE_SECS),
-                            value.clone(),
-                        ),
-                    );
-                    let mut response = Json(page_leader_response(value, page, limit)).into_response();
-                    response.headers_mut().insert(
-                        HeaderName::from_static("x-lumenlp-cache"),
-                        HeaderValue::from_static("leaders-redis-hit"),
-                    );
-                    response.headers_mut().insert(
-                        CACHE_CONTROL,
-                        HeaderValue::from_static("public, max-age=30, s-maxage=30, stale-while-revalidate=30"),
-                    );
-                    response.headers_mut().insert(
-                        HeaderName::from_static("cdn-cache-control"),
-                        HeaderValue::from_static("public, max-age=30, stale-while-revalidate=30"),
-                    );
-                    return response;
+    if !force_refresh {
+        if let Some(client) = state.redis.clone() {
+            if let Ok(mut connection) = client.get_multiplexed_async_connection().await {
+                let cached: redis::RedisResult<Option<String>> = connection.get(&cache_key).await;
+                if let Ok(Some(serialized)) = cached {
+                    if let Ok(value) = serde_json::from_str::<Value>(&serialized) {
+                        state.leader_list_cache.lock().unwrap().insert(
+                            local_key.clone(),
+                            (
+                                StdInstant::now() + StdDuration::from_secs(LEADER_LIST_CACHE_SECS),
+                                value.clone(),
+                            ),
+                        );
+                        let mut response = Json(page_leader_response(value, page, limit)).into_response();
+                        response.headers_mut().insert(
+                            HeaderName::from_static("x-lumenlp-cache"),
+                            HeaderValue::from_static("leaders-redis-hit"),
+                        );
+                        response.headers_mut().insert(
+                            CACHE_CONTROL,
+                            HeaderValue::from_static("public, max-age=30, s-maxage=30, stale-while-revalidate=30"),
+                        );
+                        response.headers_mut().insert(
+                            HeaderName::from_static("cdn-cache-control"),
+                            HeaderValue::from_static("public, max-age=30, stale-while-revalidate=30"),
+                        );
+                        return response;
+                    }
                 }
             }
         }
