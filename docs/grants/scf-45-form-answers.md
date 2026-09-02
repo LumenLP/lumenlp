@@ -72,14 +72,16 @@ LumenLP is deployed and processing Stellar mainnet data.
 
 The current product is intentionally honest about its data coverage. Claimed fees and activity are shown as observable signals, not as complete profitability claims. The existing user-reviewed Copy LP flow provides the validation base for the grant milestone: policy-controlled automatic execution under strict limits.
 
-Current API evidence (checked August 14, 2026):
+Current API evidence (checked September 2, 2026 UTC):
 
-- `183` distinct pools with indexed events;
-- `53` pools with rollup metrics;
-- `179,519` indexed events;
-- `87,472` indexed swaps;
-- `100` Leader profiles returned for the 30-day ranking endpoint;
-- latest indexer cursor: ledger `63,945,510`.
+- `365` distinct pools with indexed events;
+- `585` pools with rollup metrics;
+- `819,750` indexed events;
+- `410,943` indexed swaps;
+- `381` Leader profiles returned for the 30-day ranking endpoint;
+- latest indexer cursor: ledger `64,235,861`.
+
+The earliest publicly observable indexed pool event is dated `July 26, 2026 04:12:38 UTC`. This is the earliest event currently exposed by the API, not a claim that every Stellar DEX event before that time is covered. Coverage starts at different times for different venues and pools, and the indexer continues to advance incrementally.
 
 These numbers should be refreshed immediately before submission and accompanied by links to the public API endpoints.
 
