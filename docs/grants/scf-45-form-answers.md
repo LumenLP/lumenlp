@@ -44,7 +44,7 @@ Do not present the future automatic execution as already live. Label the current
 
 ## Products & Services
 
-LumenLP Copy LP Studio is a non-custodial automation product for Stellar liquidity providers. It connects pool discovery, observable LP behavior, and policy-controlled liquidity operations in one workflow. The first funded product focus is reliable automated Copy LP for Aquarius. The architecture also supports additional Stellar DEX pool venues, including Phoenix, Sushi V3, Soroswap AMM, and Comet, but those integrations will be gated by validated contract behavior and demonstrated user demand rather than treated as a coverage target by themselves.
+LumenLP Copy LP Studio is a non-custodial automation product for Stellar liquidity providers. It connects pool discovery, observable LP behavior, and policy-controlled liquidity operations in one workflow. The first funded product focus is reliable automated Copy LP for Aquarius. The architecture is designed to extend to additional Stellar DEX pool venues, including Phoenix, Sushi V3, Soroswap AMM, and Comet, but those venues are expansion candidates gated by validated contract behavior, safety evidence, and demonstrated user demand rather than guaranteed deliverables in this award.
 
 Users can compare Stellar DEX pools using TVL, liquidity, fees, Fee/TVL, and recent activity. They can then inspect Leader profiles showing claimed fees, deposits, withdrawals, pools touched, current exposure, and source on-chain events. These metrics are presented as observable data signals rather than guaranteed profit or complete PnL.
 
@@ -52,7 +52,7 @@ After selecting a Leader, a user configures a copy coefficient and safety limits
 
 Leader swaps are not mirrored because a swap may be a fee exit, a position adjustment, or an unrelated trade. Copy LP focuses on verifiable liquidity actions rather than arbitrary wallet activity.
 
-The deployed foundation is the pool indexer, snapshots, analytics API, Leader profiles, and user-reviewed scaled Copy LP workflow. These components remain under active testing and optimization and are not presented as the funded automation outcome. The Build Award will fund the new policy-controlled execution layer, testnet validation, monitored Aquarius launch, and adoption measurement. Additional DEX execution will proceed only when the core Aquarius flow is used repeatedly by external LPs and the venue-specific safety checks pass.
+The existing product foundation includes the pool indexer, snapshots, analytics API, Leader profiles, and user-reviewed scaled Copy LP workflow. This foundation remains under active testing and optimization. The Build Award will fund the policy-controlled execution layer, testnet validation, monitored Aquarius launch, and adoption measurement. Additional DEX execution will be considered only after the core Aquarius flow demonstrates repeated external use and the relevant venue-specific safety checks pass.
 
 Existing Stellar DEX tools generally expose swaps, quotes, or pool statistics. LumenLP adds an end-to-end LP action workflow: it attributes observable liquidity events to a Leader, converts them into bounded copy intents, and routes them through a user-controlled Soroban policy with explicit allowlists, limits, replay protection, pause, and disarm. This makes LP strategy following an auditable, non-custodial operation rather than only a data or routing experience.
 
@@ -89,7 +89,7 @@ Following the panel's feedback, we made the following revisions:
 
 1. Reduced the requested budget from $100,000 to $80,000 and reallocated it across the required tranche structure.
 2. Narrowed the funded scope to Aquarius-first automated Copy LP, including the Soroban policy, relayer, safety controls, testnet validation, and a limited mainnet rollout.
-3. Added an adoption milestone targeting at least 10 external users who arm an Aquarius policy, with at least 5 completing two or more automated Copy LP operations during the grant period.
+3. Added an adoption milestone and measurement plan. During the grant period, we will target at least 10 external users arming an Aquarius policy, with at least 5 completing two or more automated Copy LP operations. This is a product success target that will be tracked and reported; technical tranche completion also depends on the specified implementation, safety, and reproducible execution evidence.
 4. Clarified that copied LP actions are bounded by user-defined coefficients, pool and entrypoint allowlists, amount limits, slippage, expiry, replay protection, pause, and disarm controls. We also clarified why copied actions cannot reproduce a Leader's complete portfolio return, particularly for concentrated liquidity.
 5. Distinguished the deployed indexer, API, analytics, and user-reviewed Copy LP foundation from the new grant-funded automation layer. The existing data foundation remains under active testing and optimization.
 6. Added a two-person engineering effort and per-deliverable budget breakdown.
@@ -155,7 +155,7 @@ Do not include marketing, promotion, or external security audit costs in the bud
 
 Tranche #0 is the 10% payment released upon approval. The three deliverable fields in the submission correspond to Tranche #1 ($16,000), Tranche #2 ($24,000), and Tranche #3 ($32,000).
 
-The two-person team allocation is based on approximately 144-160 combined engineering days across the paid tranches, covering protocol architecture, Soroban policy work, backend execution, data reliability, testing, and release operations. The tranche sections provide a per-deliverable budget and estimated engineering effort rather than a request for general operating costs.
+The two-person team allocation is based on approximately 288 combined engineering days across the paid tranches, covering protocol architecture, Soroban policy work, backend execution, data reliability, testing, adoption validation, and release operations. This is an effort allocation across the two contributors, not a request for general operating costs. Each deliverable below includes its own budget and estimated combined engineering days.
 
 ## Tranche #1 Deliverables
 
@@ -179,7 +179,7 @@ Turn the current user-reviewed Copy LP flow into an implementation-ready Aquariu
 
 Add privacy-preserving product instrumentation for policy arms, repeated automated Copy LP executions, failures, pauses, and manual fallback. Use the existing public application and an external pilot group to validate whether users understand the policy and repeat the workflow.
 
-**Completion:** a public or reproducible usage report defines the adoption funnel and records external pilot feedback; the test suite demonstrates that invalid, ambiguous, expired, or duplicated source activity cannot create an executable operation.
+**Completion:** a public or reproducible usage report defines the adoption funnel and records external pilot feedback; the test suite demonstrates that invalid, ambiguous, expired, or duplicated source activity cannot create an executable operation. Adoption is measured as a grant-period product target and is not the sole technical acceptance condition for this tranche.
 
 **Tranche #1 total: $16,000**
 
@@ -209,7 +209,7 @@ Document and implement monitoring for policy state, relayer actions, source even
 
 Run end-to-end scenarios with real testnet accounts, including permitted actions, insufficient balances, expired intents, daily-limit exhaustion, pause, disarm, and relayer downtime with manual fallback. Recruit and support the first external pilot users without counting speculative future demand as traction.
 
-**Completion:** testnet walkthrough is reproducible and evidence includes transaction hashes, rejected-operation examples, execution logs, and pilot feedback. The adoption target is at least **10 external users who arm an Aquarius policy, with at least 5 of them completing two or more automated Copy LP operations**.
+**Completion:** the testnet walkthrough is reproducible and evidence includes transaction hashes, rejected-operation examples, execution logs, and pilot feedback. The project will track and report the adoption target of at least **10 external users arming an Aquarius policy, with at least 5 of them completing two or more automated Copy LP operations** during the grant period. The target validates usefulness but is not the sole technical acceptance condition.
 
 **Tranche #2 total: $24,000**
 
@@ -239,7 +239,7 @@ Prepare the next venue adapter using the common boundary only if the Aquarius pi
 
 Publish the architecture, policy model, data methodology, API usage, limitations, operational runbook, and a short public walkthrough. Include evidence of external testing and known limitations.
 
-**Completion:** documentation is accessible from the website and repository; the mainnet demo can be independently followed; adoption results, limitations, execution history, and all grant deliverables and links are public. The project reports the target of 10 armed external users and 5 repeat users, whether achieved or not.
+**Completion:** documentation is accessible from the website and repository; the mainnet demo can be independently followed; adoption results, limitations, execution history, and all grant deliverables and links are public. The project reports the target of 10 external users who armed an Aquarius policy and 5 repeat users, whether achieved or not, together with the measurement period and methodology.
 
 **Tranche #3 total: $32,000**
 
@@ -256,7 +256,7 @@ The form requires dates in `DD/MM/YYYY` format. These dates assume the award pro
 - Select **End User Application**.
 - Submit both confirmed team members, with their roles and relevant experience stated separately.
 - Treat Aquarius as the first funded venue; gate Phoenix, Sushi V3, Soroswap AMM, and Comet expansion on demonstrated external usage and venue-specific validation.
-- Commit to an adoption target of 10 external users arming an Aquarius policy, with at least 5 completing two or more automated Copy LP operations.
+- Track a grant-period adoption target of 10 external users arming an Aquarius policy, with at least 5 completing two or more automated Copy LP operations. Report the result honestly; user adoption is a product success metric, not a claim about existing traction or the sole technical acceptance condition.
 - Present automatic execution as the grant outcome, not as an already-live feature.
 - Include the required on-chain monitoring plan and threat model in Tranche #2.
 - Keep the manual user-signed path as a fallback.
