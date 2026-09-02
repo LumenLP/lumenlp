@@ -31,7 +31,8 @@ pub async fn positions_for_address(
     let mut out = Vec::new();
     // Profile requests are already narrowed to actor-touched pools. A larger
     // batch avoids serial round-trip gaps without probing the full catalogue.
-    for batch in pool_addresses.chunks(16) {
+    const POSITION_BATCH_SIZE: usize = 24;
+    for batch in pool_addresses.chunks(POSITION_BATCH_SIZE) {
         let mut tasks = JoinSet::new();
         for addr in batch {
             let rpc = rpc.clone();

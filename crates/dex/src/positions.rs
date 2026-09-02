@@ -47,7 +47,8 @@ async fn share_positions(
     let mut out = Vec::new();
     // These pools are already narrowed by indexed actor activity; use a wider
     // batch to keep profile cold reads responsive across multiple venues.
-    for batch in pools.chunks(16) {
+    const POSITION_BATCH_SIZE: usize = 24;
+    for batch in pools.chunks(POSITION_BATCH_SIZE) {
         let mut tasks = JoinSet::new();
         for pool in batch {
             let rpc = rpc.clone();
