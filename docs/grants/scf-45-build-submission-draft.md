@@ -324,6 +324,8 @@ Suggested allocation structure:
 
 The budget should be tied to completed, verifiable deliverables rather than general operating costs. The two-person team allocation covers approximately 144-160 combined engineering days across the paid tranches, including protocol architecture, Soroban policy work, backend execution, data reliability, testing, and release operations.
 
+Tranche 0 is the 10% payment released upon approval. The three deliverable fields correspond to Tranche 1 ($16,000), Tranche 2 ($24,000), and Tranche 3 ($32,000).
+
 ## Team
 
 - **Project lead:** `[NAME / ROLE]`

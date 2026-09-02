@@ -153,6 +153,8 @@ The required payment structure is:
 
 Do not include marketing, promotion, or external security audit costs in the budget. Security audit support is handled separately by SCF according to the form guidance.
 
+Tranche #0 is the 10% payment released upon approval. The three deliverable fields in the submission correspond to Tranche #1 ($16,000), Tranche #2 ($24,000), and Tranche #3 ($32,000).
+
 The two-person team allocation is based on approximately 144-160 combined engineering days across the paid tranches, covering protocol architecture, Soroban policy work, backend execution, data reliability, testing, and release operations. The tranche sections provide a per-deliverable budget and estimated engineering effort rather than a request for general operating costs.
 
 ## Tranche #1 Deliverables
