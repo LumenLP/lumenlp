@@ -15,16 +15,29 @@ pub struct CopyOpDraft {
 
 /// Scale a raw token amount string by `coefficient`.
 ///
-/// Token amounts are non-negative integer strings in base units. We multiply as
-/// f64 and truncate toward zero (floor for positives) so withdraw/copy scaling
-/// never rounds up and over-allocates follower capital.
+/// Token amounts are non-negative integer strings in base units. Convert the
+/// human-facing coefficient to the same fixed-point ppm representation used by
+/// the Soroban policy, then multiply with checked integer arithmetic. This
+/// preserves truncation toward zero without losing precision for large amounts.
 pub fn scale_amount_str(amount: &str, coefficient: f64) -> Option<String> {
     let parsed = amount.parse::<u128>().ok()?;
-    let scaled = (parsed as f64) * coefficient;
-    if !scaled.is_finite() || scaled < 0.0 {
+    if !coefficient.is_finite() || coefficient <= 0.0 {
         return None;
     }
-    Some(format!("{}", scaled.trunc() as u128))
+    const SCALE: u128 = 1_000_000;
+    let ppm = (coefficient * SCALE as f64).round();
+    if !ppm.is_finite() || ppm < 1.0 || ppm > 10_000_000.0 {
+        return None;
+    }
+    let ppm = ppm as u128;
+    // Divide first so a valid result does not overflow an intermediate
+    // `parsed * ppm` multiplication near the u128 boundary.
+    let whole = parsed / SCALE;
+    let remainder = parsed % SCALE;
+    let scaled = whole
+        .checked_mul(ppm)?
+        .checked_add(remainder.checked_mul(ppm)?.checked_div(SCALE)?)?;
+    Some(scaled.to_string())
 }
 
 /// Scale each `{ token, amount }` entry in a token-amounts JSON array.
@@ -156,6 +169,14 @@ mod tests {
     fn scale_amount_str_by_coefficient() {
         assert_eq!(scale_amount_str("1000", 0.1).as_deref(), Some("100"));
         assert_eq!(scale_amount_str("1000", 2.0).as_deref(), Some("2000"));
+        assert_eq!(scale_amount_str("999", 0.3333339).as_deref(), Some("333"));
+    }
+
+    #[test]
+    fn scale_amount_str_preserves_large_integer_precision_and_fails_on_overflow() {
+        let amount = u128::MAX - 1;
+        assert_eq!(scale_amount_str(&amount.to_string(), 1.0), Some(amount.to_string()));
+        assert!(scale_amount_str(&u128::MAX.to_string(), 10.0).is_none());
     }
 
     #[test]
