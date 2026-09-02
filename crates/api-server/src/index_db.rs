@@ -1166,18 +1166,17 @@ impl IndexDb {
         let mut unavailable = HashSet::<String>::new();
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT h.actor, h.pool_address, h.unclaimed_quote_xlm, h.status
-            FROM actor_fee_snapshot_history h
-            WHERE h.observed_at <= ?1
-              AND h.id = (
-                SELECT h2.id
-                FROM actor_fee_snapshot_history h2
-                WHERE h2.actor = h.actor
-                  AND h2.pool_address = h.pool_address
-                  AND h2.observed_at <= ?1
-                ORDER BY h2.observed_at DESC, h2.id DESC
-                LIMIT 1
-              )
+            SELECT actor, pool_address, unclaimed_quote_xlm, status
+            FROM (
+              SELECT actor, pool_address, unclaimed_quote_xlm, status,
+                     ROW_NUMBER() OVER (
+                       PARTITION BY actor, pool_address
+                       ORDER BY observed_at DESC, id DESC
+                     ) AS row_number
+              FROM actor_fee_snapshot_history
+              WHERE observed_at <= ?1
+            )
+            WHERE row_number = 1
             "#,
         )?;
         let rows = stmt.query_map(params![since_ts], |row| {
