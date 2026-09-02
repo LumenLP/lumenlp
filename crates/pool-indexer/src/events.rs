@@ -890,6 +890,8 @@ fn derive_comet_swap(
     let fee_quote_xlm = pool_fee_bps.and_then(|bps| volume_quote_xlm.map(|volume| volume * bps as f64 / 10_000.0));
     derived_with_actor(
         json!({
+            "venue": "comet",
+            "pool_type": "weighted",
             "pool_fee_bps": pool_fee_bps,
             "token_in": token_in,
             "token_out": token_out,
@@ -973,6 +975,8 @@ fn derive_soroswap_swap(
     let fee_quote_xlm = pool_fee_bps.and_then(|bps| volume_quote_xlm.map(|volume| volume * bps as f64 / 10_000.0));
     derived_with_actor(
         json!({
+            "venue": "soroswap_amm",
+            "pool_type": "constant_product",
             "pool_fee_bps": pool_fee_bps,
             "token_in": token_in,
             "token_out": token_out,
@@ -1011,6 +1015,7 @@ fn derive_phoenix_swap(
     });
     derived_with_actor(
         json!({
+            "venue": "phoenix",
             "pool_fee_bps": pool_fee_bps,
             "token_in": token_in,
             "token_out": token_out,
@@ -1544,6 +1549,8 @@ mod tests {
             .expect("Soroswap swap should be indexed");
         assert_eq!(parsed.kind, PoolEventKind::Trade);
         assert!(parsed.body_json.contains("amount_in"));
+        assert!(parsed.body_json.contains("\"venue\":\"soroswap_amm\""));
+        assert!(parsed.body_json.contains("\"pool_type\":\"constant_product\""));
         assert!(pool_swap_from_event(&parsed).is_some());
     }
 
@@ -1579,6 +1586,7 @@ mod tests {
             .expect("Phoenix swap should be indexed");
         assert_eq!(parsed.kind, PoolEventKind::Trade);
         assert!(parsed.body_json.contains("actual_received_amount"));
+        assert!(parsed.body_json.contains("\"venue\":\"phoenix\""));
         assert_eq!(pool_swap_from_event(&parsed).unwrap().dex, "phoenix");
     }
 
@@ -1608,6 +1616,8 @@ mod tests {
             .expect("event should decode")
             .expect("Comet swap should be indexed");
         assert_eq!(parsed.kind, PoolEventKind::Trade);
+        assert!(parsed.body_json.contains("\"venue\":\"comet\""));
+        assert!(parsed.body_json.contains("\"pool_type\":\"weighted\""));
         assert_eq!(pool_swap_from_event(&parsed).unwrap().dex, "comet");
 
         let derived = derive_comet_swap(
