@@ -275,55 +275,71 @@ impl IndexDb {
     /// derivation became explicitly multi-DEX. This is local JSON migration:
     /// it does not rescan RPC history or move the indexer cursor.
     pub fn backfill_event_venue_labels(&self) -> Result<usize> {
-        let mut stmt = self.conn.prepare(
-            "SELECT event_id, body_json FROM pool_events WHERE kind = 'trade'",
-        )?;
-        let rows = stmt.query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })?;
-        let mut patches = Vec::new();
-        for row in rows {
-            let (event_id, body_json) = row?;
-            let Ok(mut body) = serde_json::from_str::<Value>(&body_json) else {
-                continue;
-            };
-            let Some(topic) = body.get("topic").and_then(Value::as_array) else {
-                continue;
-            };
-            let symbol = |index: usize| {
-                topic
-                    .get(index)
-                    .and_then(|value| value.get("value"))
-                    .and_then(Value::as_str)
-            };
-            let (venue, pool_type) = if symbol(0) == Some("SoroswapPair") {
-                ("soroswap_amm", Some("constant_product"))
-            } else if symbol(0) == Some("POOL") && symbol(1) == Some("swap") {
-                ("comet", Some("weighted"))
-            } else if symbol(0) == Some("swap") {
-                ("phoenix", None)
-            } else {
-                ("aquarius", None)
-            };
-            let Some(derived) = body.get_mut("derived").and_then(Value::as_object_mut) else {
-                continue;
-            };
-            if derived.get("venue").and_then(Value::as_str).is_some() {
-                continue;
-            }
-            derived.insert("venue".into(), Value::String(venue.into()));
-            if let Some(pool_type) = pool_type {
-                derived.insert("pool_type".into(), Value::String(pool_type.into()));
-            }
-            patches.push((event_id, serde_json::to_string(&body)?));
-        }
-        drop(stmt);
-        let mut patched = 0;
-        for (event_id, body_json) in patches {
-            patched += self.conn.execute(
-                "UPDATE pool_events SET body_json = ?1 WHERE event_id = ?2",
-                params![body_json, event_id],
+        const BATCH_SIZE: i64 = 500;
+        let mut last_id = 0i64;
+        let mut patched = 0usize;
+        loop {
+            let mut stmt = self.conn.prepare(
+                "SELECT id, event_id, body_json
+                 FROM pool_events
+                 WHERE kind = 'trade' AND id > ?1
+                 ORDER BY id ASC LIMIT ?2",
             )?;
+            let rows = stmt.query_map(params![last_id, BATCH_SIZE], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?;
+            let mut batch = Vec::new();
+            for row in rows {
+                batch.push(row?);
+            }
+            drop(stmt);
+            if batch.is_empty() {
+                break;
+            }
+            last_id = batch.last().map(|row| row.0).unwrap_or(last_id);
+
+            for (_, event_id, body_json) in batch {
+                let Ok(mut body) = serde_json::from_str::<Value>(&body_json) else {
+                    continue;
+                };
+                let Some(topic) = body.get("topic").and_then(Value::as_array) else {
+                    continue;
+                };
+                let symbol = |index: usize| {
+                    topic
+                        .get(index)
+                        .and_then(|value| value.get("value"))
+                        .and_then(Value::as_str)
+                };
+                let (venue, pool_type) = if symbol(0) == Some("SoroswapPair") {
+                    ("soroswap_amm", Some("constant_product"))
+                } else if symbol(0) == Some("POOL") && symbol(1) == Some("swap") {
+                    ("comet", Some("weighted"))
+                } else if symbol(0) == Some("swap") {
+                    ("phoenix", None)
+                } else {
+                    ("aquarius", None)
+                };
+                let Some(derived) = body.get_mut("derived").and_then(Value::as_object_mut) else {
+                    continue;
+                };
+                if derived.get("venue").and_then(Value::as_str).is_some() {
+                    continue;
+                }
+                derived.insert("venue".into(), Value::String(venue.into()));
+                if let Some(pool_type) = pool_type {
+                    derived.insert("pool_type".into(), Value::String(pool_type.into()));
+                }
+                let normalized = serde_json::to_string(&body)?;
+                patched += self.conn.execute(
+                    "UPDATE pool_events SET body_json = ?1 WHERE event_id = ?2",
+                    params![normalized, event_id],
+                )?;
+            }
         }
         Ok(patched)
     }
