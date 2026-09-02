@@ -336,6 +336,15 @@ impl IndexDb {
                 "CREATE INDEX IF NOT EXISTS idx_pool_events_lp_actor_time ON pool_events(json_extract(body_json, '$.derived.actor'), created_at DESC, kind, pool_address)",
                 [],
             )?;
+            // Leader boards group lifecycle events by actor and pool before
+            // applying the requested time window. Keep this narrower index
+            // separate from the general actor-time index used by event feeds.
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_pool_events_lp_actor_pool_time
+                 ON pool_events(json_extract(body_json, '$.derived.actor'), pool_address, created_at DESC, kind)
+                 WHERE kind IN ('deposit_liquidity', 'withdraw_liquidity', 'claim_fees', 'claim_protocol_fee')",
+                [],
+            )?;
         }
         self.ensure_column("copy_sessions", "watermark_event_id", "TEXT NOT NULL DEFAULT ''")?;
         self.ensure_column("copy_sessions", "contract_session_id", "INTEGER")?;
