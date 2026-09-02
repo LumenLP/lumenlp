@@ -571,6 +571,9 @@ fn derive_event_fields(
             if is_sushi {
                 return derive_sushi_liquidity(kind, pool_fee_bps, &pool_tokens, data, context, actor);
             }
+            if is_phoenix {
+                return derive_phoenix_liquidity(kind, pool_fee_bps, &pool_tokens, data, context, actor);
+            }
             let share_amount = data.first().and_then(value_amount_string);
             let token_amounts = pool_tokens
                 .iter()
@@ -1020,6 +1023,56 @@ fn derive_phoenix_swap(
     )
 }
 
+fn phoenix_amount(data: &[Value], names: &[&str]) -> Option<String> {
+    names
+        .iter()
+        .find_map(|name| phoenix_field(data, name).and_then(value_amount_string))
+}
+
+fn derive_phoenix_liquidity(
+    kind: &PoolEventKind,
+    pool_fee_bps: Option<u32>,
+    pool_tokens: &[String],
+    data: &[Value],
+    context: &PoolIndexContext,
+    actor: Option<&str>,
+) -> Value {
+    let (share_amount, amount0, amount1) = match kind {
+        PoolEventKind::DepositLiquidity => (
+            None,
+            phoenix_amount(data, &["token_a_amount", "token-a-amount"]),
+            phoenix_amount(data, &["token_b_amount", "token-b-amount"]),
+        ),
+        PoolEventKind::WithdrawLiquidity => (
+            phoenix_amount(data, &["shares_amount", "shares-amount"]),
+            phoenix_amount(data, &["return_amount_a", "return-amount-a"]),
+            phoenix_amount(data, &["return_amount_b", "return-amount-b"]),
+        ),
+        _ => return Value::Null,
+    };
+    let total_quote_xlm = estimate_two_token_amounts_xlm(
+        &context.price_book,
+        pool_tokens.first().map(String::as_str),
+        amount0.as_deref(),
+        pool_tokens.get(1).map(String::as_str),
+        amount1.as_deref(),
+    );
+    derived_with_actor(
+        json!({
+            "venue": "phoenix",
+            "pool_fee_bps": pool_fee_bps,
+            "action": if *kind == PoolEventKind::DepositLiquidity { "provide_liquidity" } else { "withdraw_liquidity" },
+            "share_amount": share_amount,
+            "token_amounts": [
+                {"token": pool_tokens.first(), "amount": amount0},
+                {"token": pool_tokens.get(1), "amount": amount1}
+            ],
+            "total_quote_xlm": total_quote_xlm,
+        }),
+        actor,
+    )
+}
+
 fn phoenix_field<'a>(data: &'a [Value], name: &str) -> Option<&'a Value> {
     data.first()?.get(name)
 }
@@ -1380,6 +1433,49 @@ mod tests {
             assert_eq!(derived["venue"], venue);
             assert!(derived["fee_quote_xlm"].is_null());
         }
+    }
+
+    #[test]
+    fn phoenix_liquidity_events_normalize_token_amounts() {
+        let context = PoolIndexContext {
+            fee_bps_by_pool: HashMap::new(),
+            tokens_by_pool: HashMap::new(),
+            dex_by_pool: HashMap::new(),
+            price_book: PriceBook::default(),
+        };
+        let tokens = vec!["CA".into(), "CB".into()];
+        let deposit = derive_phoenix_liquidity(
+            &PoolEventKind::DepositLiquidity,
+            Some(30),
+            &tokens,
+            &[json!({
+                "token_a_amount": {"type": "i128", "value": "100"},
+                "token_b_amount": {"type": "i128", "value": "200"}
+            })],
+            &context,
+            None,
+        );
+        assert_eq!(deposit["venue"], "phoenix");
+        assert_eq!(deposit["action"], "provide_liquidity");
+        assert_eq!(deposit["token_amounts"][0]["amount"], "100");
+        assert_eq!(deposit["token_amounts"][1]["amount"], "200");
+
+        let withdraw = derive_phoenix_liquidity(
+            &PoolEventKind::WithdrawLiquidity,
+            Some(30),
+            &tokens,
+            &[json!({
+                "shares_amount": {"type": "i128", "value": "50"},
+                "return_amount_a": {"type": "i128", "value": "40"},
+                "return_amount_b": {"type": "i128", "value": "80"}
+            })],
+            &context,
+            None,
+        );
+        assert_eq!(withdraw["action"], "withdraw_liquidity");
+        assert_eq!(withdraw["share_amount"], "50");
+        assert_eq!(withdraw["token_amounts"][0]["amount"], "40");
+        assert_eq!(withdraw["token_amounts"][1]["amount"], "80");
     }
 
     #[test]
