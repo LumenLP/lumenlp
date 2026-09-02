@@ -294,8 +294,18 @@ impl IndexDb {
     /// it does not rescan RPC history or move the indexer cursor.
     pub fn backfill_event_venue_labels(&self) -> Result<usize> {
         const BATCH_SIZE: i64 = 500;
+        // Patch the compact legacy Aquarius shape first. This is the common
+        // case and avoids making startup depend on a full JSON decode pass.
+        let mut patched = self.conn.execute(
+            "UPDATE pool_events
+             SET body_json = json_set(body_json, '$.derived.venue', 'aquarius')
+             WHERE kind = 'trade'
+               AND json_extract(body_json, '$.derived.venue') IS NULL
+               AND json_extract(body_json, '$.topic[0].value') = 'trade'",
+            [],
+        )?;
+
         let mut last_id = 0i64;
-        let mut patched = 0usize;
         loop {
             let mut stmt = self.conn.prepare(
                 "SELECT id, event_id, body_json
@@ -359,17 +369,6 @@ impl IndexDb {
                 )?;
             }
         }
-        // Keep a SQL fallback for the compact legacy Aquarius trade shape.
-        // It is both faster and more robust if an old JSON row has an unusual
-        // field ordering or representation that the decoder cannot traverse.
-        patched += self.conn.execute(
-            "UPDATE pool_events
-             SET body_json = json_set(body_json, '$.derived.venue', 'aquarius')
-             WHERE kind = 'trade'
-               AND json_extract(body_json, '$.derived.venue') IS NULL
-               AND json_extract(body_json, '$.topic[0].value') = 'trade'",
-            [],
-        )?;
         Ok(patched)
     }
 
