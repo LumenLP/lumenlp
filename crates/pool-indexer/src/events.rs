@@ -919,6 +919,8 @@ fn derive_comet_liquidity(
         .and_then(|(token, amount)| estimate_amount_xlm(&context.price_book, token, amount));
     derived_with_actor(
         json!({
+            "venue": "comet",
+            "pool_type": "weighted",
             "pool_fee_bps": pool_fee_bps,
             "share_amount": comet_field(data, "pool_amount_in").and_then(value_amount_string),
             "token_amounts": [{"token": token, "amount": amount}],
@@ -1051,6 +1053,8 @@ fn derive_soroswap_liquidity(
     );
     derived_with_actor(
         json!({
+            "venue": "soroswap_amm",
+            "pool_type": "constant_product",
             "pool_fee_bps": pool_fee_bps,
             "share_amount": share_amount,
             "token_amounts": [
