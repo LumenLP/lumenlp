@@ -1164,20 +1164,19 @@ impl IndexDb {
     pub fn actor_fee_snapshot_deltas(&self, since_ts: i64) -> Result<HashMap<String, f64>> {
         let mut baseline = HashMap::<(String, String), f64>::new();
         let mut unavailable = HashSet::<String>::new();
+        // Snapshot history is append-only and observed_at is assigned at
+        // insertion time, so the largest id per actor/pool is the latest
+        // boundary row. This avoids a correlated lookup over millions of rows.
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT h.actor, h.pool_address, h.unclaimed_quote_xlm, h.status
-            FROM actor_fee_snapshot_history h
-            WHERE h.observed_at <= ?1
-              AND h.id = (
-                SELECT h2.id
-                FROM actor_fee_snapshot_history h2
-                WHERE h2.actor = h.actor
-                  AND h2.pool_address = h.pool_address
-                  AND h2.observed_at <= ?1
-                ORDER BY h2.observed_at DESC, h2.id DESC
-                LIMIT 1
-              )
+            SELECT actor, pool_address, unclaimed_quote_xlm, status
+            FROM actor_fee_snapshot_history
+            WHERE id IN (
+              SELECT MAX(id)
+              FROM actor_fee_snapshot_history
+              WHERE observed_at <= ?1
+              GROUP BY actor, pool_address
+            )
             "#,
         )?;
         let rows = stmt.query_map(params![since_ts], |row| {
