@@ -13,6 +13,7 @@ pub struct RecorderEvent {
     pub leader_address: String,
     pub pool_address: String,
     pub kind: String,
+    pub claim_token: Option<String>,
     pub amounts: Vec<u128>,
     pub quote_stroops: i128,
     pub ledger: u32,
@@ -49,6 +50,11 @@ pub fn canonical_event(event: &PoolEventRow, leader_address: &str) -> Option<Rec
         .get("token_amounts")
         .and_then(parse_token_amounts)
         .or_else(|| claim_amounts(&event.kind, derived))?;
+    let claim_token = if kind == "claim" {
+        Some(claim_token(&event.kind, derived)?)
+    } else {
+        None
+    };
     let quote = derived
         .get("total_quote_xlm")
         .or_else(|| derived.get("fee_quote_xlm"))
@@ -65,6 +71,7 @@ pub fn canonical_event(event: &PoolEventRow, leader_address: &str) -> Option<Rec
         leader_address: leader_address.to_string(),
         pool_address: event.pool_address.clone(),
         kind: kind.to_string(),
+        claim_token,
         amounts,
         quote_stroops,
         ledger: event.ledger,
@@ -93,6 +100,20 @@ fn claim_amounts(kind: &str, derived: &Value) -> Option<Vec<u128>> {
         }
     }
     (!amounts.is_empty()).then_some(amounts)
+}
+
+fn claim_token(kind: &str, derived: &Value) -> Option<String> {
+    if kind == "claim_protocol_fee" {
+        return derived.get("token").and_then(Value::as_str).map(str::to_owned);
+    }
+    let mut tokens = Vec::new();
+    for (token_key, amount_key) in [("token0", "amount0"), ("token1", "amount1")] {
+        let amount = derived.get(amount_key).and_then(Value::as_str)?.parse::<u128>().ok()?;
+        if amount > 0 {
+            tokens.push(derived.get(token_key).and_then(Value::as_str)?.to_owned());
+        }
+    }
+    (tokens.len() == 1).then(|| tokens.remove(0))
 }
 
 #[cfg(test)]
@@ -129,6 +150,7 @@ mod tests {
         .unwrap();
         assert_eq!(row.kind, "deposit");
         assert_eq!(row.amounts, vec![100, 200]);
+        assert_eq!(row.claim_token, None);
         assert_eq!(row.quote_stroops, 129_000_000);
         assert_eq!(row.ledger, 123);
     }
@@ -159,6 +181,32 @@ mod tests {
             }),
         );
         row.event_id = "x".repeat(33);
+        assert!(canonical_event(&row, "GLEADER").is_none());
+    }
+
+    #[test]
+    fn carries_a_single_claim_reward_token() {
+        let row = canonical_event(
+            &event(
+                "claim_protocol_fee",
+                json!({"token": "CREWARD", "amount": "12", "fee_quote_xlm": 1.0}),
+            ),
+            "GLEADER",
+        )
+        .unwrap();
+        assert_eq!(row.claim_token.as_deref(), Some("CREWARD"));
+    }
+
+    #[test]
+    fn rejects_multi_token_claims_without_a_single_reward_token() {
+        let row = event(
+            "claim_fees",
+            json!({
+                "token0": "CA", "amount0": "10",
+                "token1": "CB", "amount1": "20",
+                "fee_quote_xlm": 1.0
+            }),
+        );
         assert!(canonical_event(&row, "GLEADER").is_none());
     }
 

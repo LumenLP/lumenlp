@@ -9,13 +9,15 @@ authority, and DEX operation fixtures have been validated together.
 The API and indexer create durable `recorder_outbox` and `copy_ops` rows. They
 do not hold signing keys. The relayer reads one pending operation, records its
 canonical source event on the Copy Policy contract, and submits the
-policy-gated Copy operation. Soroban remains the final authority for replay,
-session, pool, action, expiry, and quote-limit checks.
+Aquarius-specific `execute_aquarius_standard_op` entry point. Soroban remains
+the final authority for replay, session, pool, action, expiry, and quote-limit
+checks.
 
-The current helper only invokes `execute_copy_op`, which validates and records
-the policy-approved intent. It does not call a DEX pool. Venue-specific
-execution remains behind the adapter and policy entry points until the
-corresponding testnet fixtures are enabled.
+The helper executes Aquarius deposits, withdrawals, and claims. A claim is
+accepted only when the recorder payload contains one unambiguous reward-token
+address; multi-token or incomplete claim events remain fail-closed. The
+execution call uses coefficient-scaled amounts from `copy_ops`,
+not the raw Leader amounts stored in `recorder_outbox`.
 
 ## Dry run
 
@@ -93,12 +95,15 @@ command submits no mainnet transaction and has no fallback to generic
 ## Testnet write
 
 Only after the isolated testnet policy and accounts are configured, add
-`RUN_WRITE=1` to the same command. The script refuses any network value other
-than `testnet`. Confirm the selected pool, session, event kind, and quote in
-the dry-run output before enabling writes.
+`RUN_WRITE=1` to the same command. Because session-level slippage limits are
+not yet persisted, the script also requires
+`COPY_ALLOW_ZERO_MIN_OUTPUTS=1`; use this only with an isolated Testnet
+fixture. The script refuses any network value other than `testnet`. Confirm
+the selected pool, session, event kind, scaled amounts, and quote in the
+dry-run output before enabling writes.
 
 ```sh
-RUN_WRITE=1 STELLAR_NETWORK=testnet \
+RUN_WRITE=1 COPY_ALLOW_ZERO_MIN_OUTPUTS=1 STELLAR_NETWORK=testnet \
 COPY_CONTRACT_SESSION_ID=<registered-u32-session-id> \
 COPY_POLICY=<testnet-policy-contract> \
 COPY_RECORDER_ACCOUNT=<recorder-signer> \

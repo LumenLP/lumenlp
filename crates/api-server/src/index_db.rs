@@ -94,6 +94,7 @@ pub struct RecorderOutboxRow {
     pub leader_address: String,
     pub pool_address: String,
     pub kind: String,
+    pub claim_token: Option<String>,
     pub amounts: Vec<u128>,
     pub quote_stroops: i128,
     pub ledger: u32,
@@ -279,6 +280,7 @@ impl IndexDb {
               leader_address TEXT NOT NULL,
               pool_address TEXT NOT NULL,
               kind TEXT NOT NULL,
+              claim_token TEXT,
               amounts_json TEXT NOT NULL,
               quote_stroops TEXT NOT NULL,
               ledger INTEGER NOT NULL,
@@ -354,6 +356,7 @@ impl IndexDb {
         self.ensure_column("copy_sessions", "max_per_op_quote_xlm", "REAL NOT NULL DEFAULT 0")?;
         self.ensure_column("copy_sessions", "max_daily_quote_xlm", "REAL NOT NULL DEFAULT 0")?;
         self.ensure_column("copy_sessions", "expires_at", "INTEGER")?;
+        self.ensure_column("recorder_outbox", "claim_token", "TEXT")?;
         Ok(())
     }
 
@@ -609,15 +612,16 @@ impl IndexDb {
         let rows = self.conn.execute(
             r#"
             INSERT OR IGNORE INTO recorder_outbox (
-              source_event_id, leader_address, pool_address, kind, amounts_json,
+              source_event_id, leader_address, pool_address, kind, claim_token, amounts_json,
               quote_stroops, ledger, status, attempts, last_error, created_at, updated_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'pending', 0, NULL, ?8, ?9)
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'pending', 0, NULL, ?9, ?10)
             "#,
             params![
                 event.source_event_id,
                 event.leader_address,
                 event.pool_address,
                 event.kind,
+                event.claim_token,
                 amounts_json,
                 event.quote_stroops.to_string(),
                 event.ledger,
@@ -633,7 +637,7 @@ impl IndexDb {
         let limit = limit.clamp(1, 1_000) as i64;
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT source_event_id, leader_address, pool_address, kind, amounts_json,
+            SELECT source_event_id, leader_address, pool_address, kind, claim_token, amounts_json,
                    quote_stroops, ledger, status, attempts, last_error, created_at, updated_at
             FROM recorder_outbox
             WHERE status = 'pending'
@@ -642,25 +646,26 @@ impl IndexDb {
             "#,
         )?;
         let rows = stmt.query_map(params![limit], |row| {
-            let amounts_json: String = row.get(4)?;
-            let quote_stroops: String = row.get(5)?;
+            let amounts_json: String = row.get(5)?;
+            let quote_stroops: String = row.get(6)?;
             Ok(RecorderOutboxRow {
                 source_event_id: row.get(0)?,
                 leader_address: row.get(1)?,
                 pool_address: row.get(2)?,
                 kind: row.get(3)?,
+                claim_token: row.get(4)?,
                 amounts: serde_json::from_str(&amounts_json).map_err(|error| {
-                    rusqlite::Error::FromSqlConversionFailure(4, rusqlite::types::Type::Text, Box::new(error))
-                })?,
-                quote_stroops: quote_stroops.parse().map_err(|error| {
                     rusqlite::Error::FromSqlConversionFailure(5, rusqlite::types::Type::Text, Box::new(error))
                 })?,
-                ledger: row.get(6)?,
-                status: row.get(7)?,
-                attempts: row.get(8)?,
-                last_error: row.get(9)?,
-                created_at: row.get(10)?,
-                updated_at: row.get(11)?,
+                quote_stroops: quote_stroops.parse().map_err(|error| {
+                    rusqlite::Error::FromSqlConversionFailure(6, rusqlite::types::Type::Text, Box::new(error))
+                })?,
+                ledger: row.get(7)?,
+                status: row.get(8)?,
+                attempts: row.get(9)?,
+                last_error: row.get(10)?,
+                created_at: row.get(11)?,
+                updated_at: row.get(12)?,
             })
         })?;
         rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
@@ -2350,6 +2355,7 @@ mod tests {
             leader_address: "GLEADER".into(),
             pool_address: "CPOOL".into(),
             kind: "deposit".into(),
+            claim_token: None,
             amounts: vec![100, 200],
             quote_stroops: 129_000_000,
             ledger: 123,
@@ -2377,6 +2383,7 @@ mod tests {
             leader_address: "GLEADER".into(),
             pool_address: "CPOOL".into(),
             kind: "deposit".into(),
+            claim_token: None,
             amounts: vec![1],
             quote_stroops: 1,
             ledger: 1,

@@ -373,6 +373,12 @@
                   },
                   {
                     "key": {
+                      "symbol": "claim_token"
+                    },
+                    "val": "void"
+                  },
+                  {
+                    "key": {
                       "symbol": "kind"
                     },
                     "val": {
@@ -458,6 +464,12 @@
                         }
                       ]
                     }
+                  },
+                  {
+                    "key": {
+                      "symbol": "claim_token"
+                    },
+                    "val": "void"
                   },
                   {
                     "key": {

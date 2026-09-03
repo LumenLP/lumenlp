@@ -279,7 +279,7 @@
           "function": {
             "contract_fn": {
               "contract_address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
-              "function_name": "record_leader_event",
+              "function_name": "record_claim_event",
               "args": [
                 {
                   "bytes": "0303030303030303030303030303030303030303030303030303030303030303"
@@ -289,9 +289,6 @@
                 },
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
-                },
-                {
-                  "symbol": "claim"
                 },
                 {
                   "vec": [
@@ -305,6 +302,9 @@
                 },
                 {
                   "u32": 3
+                },
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
                 }
               ]
             }
@@ -408,6 +408,12 @@
                   },
                   {
                     "key": {
+                      "symbol": "claim_token"
+                    },
+                    "val": "void"
+                  },
+                  {
+                    "key": {
                       "symbol": "kind"
                     },
                     "val": {
@@ -496,6 +502,12 @@
                   },
                   {
                     "key": {
+                      "symbol": "claim_token"
+                    },
+                    "val": "void"
+                  },
+                  {
+                    "key": {
                       "symbol": "kind"
                     },
                     "val": {
@@ -580,6 +592,14 @@
                           "u128": "7"
                         }
                       ]
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "claim_token"
+                    },
+                    "val": {
+                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
                     }
                   },
                   {

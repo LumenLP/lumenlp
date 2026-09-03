@@ -56,6 +56,7 @@ pub struct LeaderEvent {
     pub leader: Address,
     pub pool: Address,
     pub kind: Symbol,
+    pub claim_token: Option<Address>,
     pub amounts: Vec<u128>,
     pub quote: i128,
     pub ledger: u32,
@@ -198,12 +199,55 @@ impl CopyPolicy {
             leader,
             pool,
             kind,
+            claim_token: None,
             amounts,
             quote,
             ledger,
             recorded_at: env.ledger().timestamp(),
         };
         env.storage().persistent().set(&key, &event);
+        Ok(())
+    }
+
+    /// Record a claim event together with the exact reward token authorized by
+    /// the source event. Claims are kept separate so legacy event producers
+    /// remain ABI-compatible while new claim records fail closed if omitted.
+    pub fn record_claim_event(
+        env: Env,
+        source_event_id: BytesN<32>,
+        leader: Address,
+        pool: Address,
+        amounts: Vec<u128>,
+        quote: i128,
+        ledger: u32,
+        claim_token: Address,
+    ) -> Result<(), Error> {
+        let recorder: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::EventRecorder)
+            .ok_or(Error::EventRecorderNotConfigured)?;
+        recorder.require_auth();
+        if amounts.is_empty() || quote <= 0 {
+            return Err(Error::InvalidEvent);
+        }
+        let key = DataKey::LeaderEvent(source_event_id);
+        if env.storage().persistent().has(&key) {
+            return Ok(());
+        }
+        env.storage().persistent().set(
+            &key,
+            &LeaderEvent {
+                leader,
+                pool,
+                kind: symbol_short!("claim"),
+                claim_token: Some(claim_token),
+                amounts,
+                quote,
+                ledger,
+                recorded_at: env.ledger().timestamp(),
+            },
+        );
         Ok(())
     }
 
@@ -860,6 +904,9 @@ impl CopyPolicy {
             return Err(Error::EventMismatch);
         }
         if event.leader != session.leader {
+            return Err(Error::EventMismatch);
+        }
+        if kind == symbol_short!("claim") && event.claim_token.as_ref() != Some(&claim_token) {
             return Err(Error::EventMismatch);
         }
         if scale_i128(event.quote, session.coefficient_ppm)? != quote {
@@ -1804,14 +1851,14 @@ mod test {
         assert_eq!(pool_client.last_user(), policy);
 
         let claim_id = BytesN::from_array(&env, &[3; 32]);
-        policy_client.record_leader_event(
+        policy_client.record_claim_event(
             &claim_id,
             &leader,
             &pool_address,
-            &symbol_short!("claim"),
             &Vec::from_array(&env, [7u128]),
             &10,
             &3,
+            &token,
         );
         MockPoolClient::new(&env, &pool).configure_reward(&token, &7);
         policy_client.execute_aquarius_standard_op(
