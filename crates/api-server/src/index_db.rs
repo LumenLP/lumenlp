@@ -2387,6 +2387,27 @@ mod tests {
     }
 
     #[test]
+    fn recorder_claim_token_is_available_for_prepare() {
+        let db = test_db();
+        let event = RecorderEvent {
+            source_event_id: "evt-claim".into(),
+            leader_address: "GLEADER".into(),
+            pool_address: "CPOOL".into(),
+            kind: "claim".into(),
+            claim_token: Some("CREWARD".into()),
+            amounts: vec![42],
+            quote_stroops: 420,
+            ledger: 123,
+            created_at: 456,
+        };
+
+        db.enqueue_recorder_event(&event).unwrap();
+
+        assert_eq!(db.recorder_claim_token("evt-claim").unwrap().as_deref(), Some("CREWARD"));
+        assert_eq!(db.recorder_claim_token("missing").unwrap(), None);
+    }
+
+    #[test]
     fn recorder_claim_recovers_expired_processing_lease() {
         let db = test_db();
         let event = RecorderEvent {
