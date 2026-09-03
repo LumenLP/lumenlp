@@ -53,6 +53,14 @@ export type PreparedCopyOp = {
   pool: string;
   kind: string;
   claim_token?: string | null;
+  policy?: {
+    coefficient?: number;
+    coefficient_ppm?: number | null;
+    allowed_pools?: string[];
+    max_per_op_quote_xlm?: number;
+    max_daily_quote_xlm?: number;
+    expires_at?: number | null;
+  };
   quote_stroops: number;
   scaled_amounts: unknown;
   amount_values?: string[];

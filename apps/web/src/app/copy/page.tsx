@@ -424,6 +424,11 @@ function CopyInner() {
                         {preparedOp.claim_token ? (
                           <> · reward token {shortAddr(preparedOp.claim_token)}</>
                         ) : null}
+                        {preparedOp.policy ? (
+                          <>
+                            {" "}· policy {preparedOp.policy.coefficient ?? "—"}× · per-op {preparedOp.policy.max_per_op_quote_xlm || "∞"} XLM · daily {preparedOp.policy.max_daily_quote_xlm || "∞"} XLM
+                          </>
+                        ) : null}
                       </div>
                     ) : null}
                     {!done ? (
