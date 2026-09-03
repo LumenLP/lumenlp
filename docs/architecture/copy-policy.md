@@ -18,12 +18,13 @@ promotion remains blocked until all downstream authorization paths are tested.
   a `copy` event.
 
 The current `execute_copy_op` records the policy-approved intent and consumes
-the budget without invoking a DEX. `execute_aquarius_standard_op` now adds the
+the budget without invoking a DEX. `execute_aquarius_standard_op` adds the
 adapter boundary for standard Aquarius pools: it invokes only `deposit`,
 `withdraw`, or `claim`, with the policy contract as the user argument. Claim
-also requires an explicit reward-token address and derives the claim amount
-from the pool before authorizing the transfer. It is still not enabled on
-production and does not yet support concentrated-liquidity position calls.
+source events are recorded through `record_claim_event`, which binds the
+reward-token address on-chain; execution derives the claim amount from the
+pool and rejects a different token. It is still not enabled on production and
+does not yet support concentrated-liquidity position calls.
 For deposits, the requested token amounts must equal the coefficient-scaled
 source event. For withdrawals, the requested share amount is likewise bound to
 the coefficient-scaled source event. A relayer cannot replace the Leader,

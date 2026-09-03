@@ -515,6 +515,7 @@ The contract exposes these public methods:
 | `disarm_session(session_id)` | owner auth | Remove the session and its active configuration. |
 | `session(session_id)` | read | Inspect the stored session state. |
 | `record_leader_event(...)` | recorder auth | Store an idempotent canonical source event for later execution. |
+| `record_claim_event(...)` | recorder auth | Store a claim source event together with its exact reward-token address. |
 | `leader_event(source_event_id)` | read | Inspect a recorded source event. |
 | `set_venue_router(venue, router)` | owner auth | Allowlist the Router contract for a supported venue; relayers cannot set it. |
 | `venue_router(venue)` | read | Inspect the configured venue Router or return not configured. |
@@ -566,11 +567,12 @@ could attest a false source event. Production hardening therefore requires a
 multisig recorder, stronger event proofs, or an equivalent independent
 verification path before unrestricted mainnet use.
 
-The recorded-event guard is now applied to the policy-only `execute_copy_op`
-path. The fund-moving Aquarius adapter path still requires the same recorded
-payload model to be wired into its deposit, withdrawal, and claim arguments;
-until then it remains a testnet vertical slice and must not be treated as a
-production automation vault.
+The recorded-event guard is applied to both the policy-only
+`execute_copy_op` path and the fund-moving Aquarius adapter path. Claim source
+events use the separate `record_claim_event` entry point so the reward token is
+persisted on-chain and cannot be replaced by the relayer at execution time.
+The vertical slice remains testnet-only until the full operational, security,
+and venue-validation gates are complete.
 
 #### Aquarius execution and authorization
 
@@ -594,10 +596,12 @@ For `withdraw`, the contract:
 4. authorizes each `token.transfer(pool, policy, output)`;
 5. invokes Aquarius `withdraw(policy, share_amount, min_amounts)`.
 
-For `claim`, the caller supplies the expected `claim_token` address. The
-contract first reads `get_user_reward(policy)`, authorizes only
-`claim_token.transfer(pool, policy, reward_amount)`, and then invokes
-Aquarius `claim(policy)`. A wrong token address or amount causes the complete
+For `claim`, the recorder first persists the reward token through
+`record_claim_event`. The caller still supplies that token as an execution
+argument, but the contract requires it to equal the recorded address. It then
+reads `get_user_reward(policy)`, authorizes only
+`claim_token.transfer(pool, policy, reward_amount)`, and invokes Aquarius
+`claim(policy)`. A missing, wrong, or ambiguous token causes the complete
 transaction to fail rather than widening authorization.
 
 The contract uses `authorize_as_current_contract` with explicit nested token
