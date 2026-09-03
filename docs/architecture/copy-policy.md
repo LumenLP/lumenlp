@@ -87,7 +87,7 @@ The first testnet deployment completed on 2026-08-18:
 - Lab view: [testnet contract](https://lab.stellar.org/r/testnet/contract/CCFF6EGDGRXQYXMYTW6KZHIGGVG6A7IPJTQUB2MHTCDXVSVHHMEXHHBI)
 - Initialization transaction: [35de3ae514ee8f31736f2617dbe744f3a6265745d3edfb5ada61f28193c0f4ee](https://stellar.expert/explorer/testnet/tx/35de3ae514ee8f31736f2617dbe744f3a6265745d3edfb5ada61f28193c0f4ee)
 
-The current ABI was deployed as a new isolated testnet instance on
+The previous ABI was deployed as a new isolated testnet instance on
 2026-08-26. It is the schema-verified target for the next testnet vertical
 slice and is not connected to production relayers or mainnet funds:
 
@@ -96,6 +96,12 @@ slice and is not connected to production relayers or mainnet funds:
 - Deployment transaction: [7957bdfa72b81f0a522f1720eddf412e27ac46e35626473c81789ed4d4400926](https://stellar.expert/explorer/testnet/tx/7957bdfa72b81f0a522f1720eddf412e27ac46e35626473c81789ed4d4400926)
 - Lab view: [testnet contract](https://lab.stellar.org/r/testnet/contract/CC2M72PXE2W66T54NIL6FHIDORLIEETVEKP27MMGGGQ52OFAZS62B534)
 - Verified entry points: `set_event_recorder`, `record_leader_event`, `register_session_coeff`, `execute_copy_op`, and `execute_standard_op`.
+
+The claim-token binding ABI is a subsequent source-compatible contract build.
+It adds `record_claim_event` and stores the reward token in each recorded claim
+before `execute_aquarius_standard_op` validates it. Deploy it as a new isolated
+Testnet instance with `deploy/deploy-copy-policy-testnet.sh`; do not replace an
+existing instance that may still be used by test fixtures.
 
 The isolated testnet configuration was then applied and verified:
 

@@ -8,7 +8,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WASM="${ROOT_DIR}/target/wasm32v1-none/release/lumenlp_copy_policy.wasm"
 RPC_URL="${STELLAR_TESTNET_RPC_URL:-https://soroban-testnet.stellar.org}"
 NETWORK_PASSPHRASE="${STELLAR_TESTNET_NETWORK_PASSPHRASE:-Test SDF Network ; September 2015}"
-SALT="${STELLAR_TESTNET_SALT:-$(printf '%s' 'lumenlp-copy-policy-generic-v4' | shasum -a 256 | awk '{print $1}')}"
+SALT="${STELLAR_TESTNET_SALT:-$(printf '%s' 'lumenlp-copy-policy-generic-v5-claim-token-binding' | shasum -a 256 | awk '{print $1}')}"
 
 : "${STELLAR_TESTNET_SOURCE:?Set STELLAR_TESTNET_SOURCE to a testnet account alias or public key}"
 : "${STELLAR_TESTNET_SIGNER:?Set STELLAR_TESTNET_SIGNER to a testnet signing key or key alias}"
