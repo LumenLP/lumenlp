@@ -9,13 +9,16 @@ import {
   listCopyOps,
   listCopySessions,
   patchCopySession,
+  prepareCopyOp,
   rememberCopyPosition,
   setCopyOpStatus,
   type CopyOp,
   type CopySession,
+  type PreparedCopyOp,
 } from "@/lib/copyLp";
 import { useIdentity } from "@/lib/identity";
 import { newStrategyId, upsertStrategy } from "@/lib/strategies";
+import { copyPolicyConfig } from "@/lib/copyPolicy";
 
 const COEFF_PRESETS = [0.1, 1, 2] as const;
 const POLL_MS = 20_000;
@@ -60,11 +63,13 @@ function CopyInner() {
   const searchParams = useSearchParams();
   const leaderFromQuery = searchParams.get("leader") ?? "";
   const { address, connected } = useIdentity();
+  const policy = copyPolicyConfig();
   const [leaderAddress, setLeaderAddress] = useState(leaderFromQuery);
   const [coefficient, setCoefficient] = useState<number>(1);
   const [customCoeff, setCustomCoeff] = useState("");
   const [session, setSession] = useState<CopySession | null>(null);
   const [ops, setOps] = useState<CopyOp[]>([]);
+  const [prepared, setPrepared] = useState<Record<string, PreparedCopyOp>>({});
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const [actionBusy, setActionBusy] = useState<string | null>(null);
@@ -190,6 +195,20 @@ function CopyInner() {
     }
   }
 
+  async function onPreparePolicy(op: CopyOp) {
+    if (!address) return;
+    setActionBusy(`prepare-${op.id}`);
+    setError(null);
+    try {
+      const result = await prepareCopyOp(op.id, address);
+      setPrepared((prev) => ({ ...prev, [op.id]: result }));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to prepare policy call");
+    } finally {
+      setActionBusy(null);
+    }
+  }
+
   async function onSkip(op: CopyOp) {
     setActionBusy(`skip-${op.id}`);
     setError(null);
@@ -215,6 +234,33 @@ function CopyInner() {
         Copy LP execution is currently enabled for Aquarius pools only. Activity from other
         Stellar DEXes remains available for analysis, but is kept out of the execution queue
         until its adapter is validated.
+      </div>
+
+      <div className="panel">
+        <div className="panel-head">On-chain Copy Policy</div>
+        <div className="strategy-config">
+          <div className="copy-op-head">
+            <span className="muted">Network</span>
+            <span>{policy.network === "testnet" ? "Stellar Testnet" : "Stellar Mainnet"}</span>
+          </div>
+          <div className="copy-op-head">
+            <span className="muted">Policy contract</span>
+            <a href={policy.explorerUrl} target="_blank" rel="noreferrer">
+              {shortAddr(policy.contractId)}
+            </a>
+          </div>
+          <div className="copy-op-head">
+            <span className="muted">Execution</span>
+            <span className="badge">
+              {policy.executionEnabled ? "Testnet, gated" : "Read-only"}
+            </span>
+          </div>
+          <p className="sign-disabled-note">
+            The policy contract is the final safety boundary. User wallets never expose private
+            keys; owner-only policy configuration and relayer submission remain server-controlled.
+            User signing will be enabled only for a prepared, policy-scoped transaction.
+          </p>
+        </div>
       </div>
 
       {!connected ? (
@@ -370,8 +416,21 @@ function CopyInner() {
                     </div>
                     <div>{formatOpQuote(op)}</div>
                     {op.note ? <div className="sign-disabled-note">{op.note}</div> : null}
+                    {prepared[op.id] ? (
+                      <div className="sign-disabled-note">
+                        Policy intent validated: {prepared[op.id].method} · session {prepared[op.id].session_id}
+                        {" "}· {prepared[op.id].quote_stroops.toLocaleString()} stroops
+                      </div>
+                    ) : null}
                     {!done ? (
                       <div className="copy-op-actions">
+                        <button
+                          type="button"
+                          onClick={() => void onPreparePolicy(op)}
+                          disabled={actionBusy !== null || !copyExecutionEnabled(op.venue)}
+                        >
+                          {actionBusy === `prepare-${op.id}` ? "Validating…" : "Validate policy intent"}
+                        </button>
                         <button
                           type="button"
                           className="primary"

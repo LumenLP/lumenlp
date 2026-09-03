@@ -41,6 +41,23 @@ export type CopyOp = {
 
 export type CopyOpStatus = Exclude<CopyOp["status"], "pending">;
 
+export type PreparedCopyOp = {
+  ready: boolean;
+  validated: boolean;
+  network: string;
+  contract_id: string | null;
+  method: "execute_aquarius_standard_op";
+  session_id: number;
+  source_event_id: string;
+  source_event_id_hex?: string;
+  pool: string;
+  kind: string;
+  quote_stroops: number;
+  scaled_amounts: unknown;
+  amount_values?: string[];
+  note: string;
+};
+
 export type CopyPositionEntry = {
   copyOpId: string;
   poolAddress: string;
@@ -152,6 +169,13 @@ export async function setCopyOpStatus(id: string, status: CopyOpStatus): Promise
 
 export async function getCopyOp(id: string): Promise<CopyOp> {
   return getJson<CopyOp>(`/v1/copy/ops/${encodeURIComponent(id)}`);
+}
+
+export async function prepareCopyOp(id: string, followerAddress: string): Promise<PreparedCopyOp> {
+  return postJson<PreparedCopyOp>(
+    `/v1/copy/ops/${encodeURIComponent(id)}/prepare`,
+    { follower_address: followerAddress },
+  );
 }
 
 export function copyOpToDraftSnapshot(op: CopyOp): {

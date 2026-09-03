@@ -326,6 +326,8 @@ impl IndexDb {
             );
             CREATE INDEX IF NOT EXISTS idx_actor_fee_history_actor_pool_time
               ON actor_fee_snapshot_history(actor, pool_address, observed_at DESC, id DESC);
+            CREATE INDEX IF NOT EXISTS idx_actor_fee_history_actor_time_pool
+              ON actor_fee_snapshot_history(actor, observed_at DESC, pool_address, id DESC);
             "#,
         )?;
         // pool_events is created by the indexer component. API startup can
@@ -1240,19 +1242,18 @@ impl IndexDb {
         let mut baseline = HashMap::<String, f64>::new();
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT h.pool_address, h.unclaimed_quote_xlm, h.status
-            FROM actor_fee_snapshot_history h
-            WHERE h.actor = ?1
-              AND h.observed_at <= ?2
-              AND h.id = (
-                SELECT h2.id
-                FROM actor_fee_snapshot_history h2
-                WHERE h2.actor = h.actor
-                  AND h2.pool_address = h.pool_address
-                  AND h2.observed_at <= ?2
-                ORDER BY h2.observed_at DESC, h2.id DESC
-                LIMIT 1
-              )
+            SELECT pool_address, unclaimed_quote_xlm, status
+            FROM (
+              SELECT pool_address, unclaimed_quote_xlm, status,
+                     ROW_NUMBER() OVER (
+                       PARTITION BY pool_address
+                       ORDER BY observed_at DESC, id DESC
+                     ) AS rn
+              FROM actor_fee_snapshot_history
+              WHERE actor = ?1
+                AND observed_at <= ?2
+            )
+            WHERE rn = 1
             "#,
         )?;
         let rows = stmt.query_map(params![actor, since_ts], |row| {

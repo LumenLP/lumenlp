@@ -10,7 +10,7 @@ use {
             service::{PriceService, QuoteMeta},
             value::{coverage_for, xlm_quote_to_usd, QuoteCoverage, UsdPriceMap},
         },
-        recorder::canonical_event,
+        recorder::{canonical_event, source_event_id_bytes},
         token_registry,
     },
     axum::{
@@ -102,6 +102,7 @@ pub fn router() -> Router<AppState> {
         .route("/v1/copy/sessions/{id}", patch(update_copy_session_handler))
         .route("/v1/copy/sessions/{id}/ops", get(list_copy_ops))
         .route("/v1/copy/ops/{id}", get(get_copy_op))
+        .route("/v1/copy/ops/{id}/prepare", post(prepare_copy_op))
         .route("/v1/copy/ops/{id}/status", post(set_copy_op_status))
         .route("/v1/copy/recorder/status", get(recorder_status))
 }
@@ -115,6 +116,7 @@ const REDIS_TOKEN_META_TTL_SECS: u64 = 3_600;
 // shared result for the full stale-revalidation window so separate API
 // workers do not repeat the same expensive scan every minute.
 const REDIS_LP_PROFILE_TTL_SECS: u64 = 300;
+const LOCAL_LP_PROFILE_TTL_SECS: u64 = 30;
 const LP_PROFILE_STALE_GRACE_SECS: u64 = 300;
 const REDIS_LP_LEADERS_TTL_SECS: u64 = 30;
 const LEADER_LIST_CACHE_SECS: u64 = 30;
@@ -2518,7 +2520,10 @@ fn cache_lp_profile(state: &AppState, address: &str, value: &Value) {
             cache.remove(&oldest_key);
         }
     }
-    cache.insert(address.to_owned(), (now + StdDuration::from_secs(30), value.clone()));
+    cache.insert(
+        address.to_owned(),
+        (now + StdDuration::from_secs(LOCAL_LP_PROFILE_TTL_SECS), value.clone()),
+    );
 }
 
 /// Compare accrued fees with capital committed during the same window.
@@ -3447,6 +3452,193 @@ async fn list_copy_ops(
         )
             .into_response(),
     }
+}
+
+#[derive(Deserialize)]
+struct PrepareCopyOpBody {
+    follower_address: String,
+}
+
+/// Validate a pending operation and return a policy-scoped call description.
+/// Transaction construction and submission remain outside this read boundary.
+async fn prepare_copy_op(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<PrepareCopyOpBody>,
+) -> impl IntoResponse {
+    if !valid_stellar_address(&body.follower_address) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "invalid follower address", "code": "bad_address" })),
+        )
+            .into_response();
+    }
+
+    let index_db = state.index_db.lock().unwrap();
+    let op = match index_db.get_copy_op(&id) {
+        Ok(Some(op)) => op,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "copy op not found", "code": "not_found" })),
+            )
+                .into_response();
+        }
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": error.to_string(), "code": "db_error" })),
+            )
+                .into_response();
+        }
+    };
+    let session = match index_db.get_copy_session(&op.session_id) {
+        Ok(Some(session)) => session,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "copy session not found", "code": "not_found" })),
+            )
+                .into_response();
+        }
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": error.to_string(), "code": "db_error" })),
+            )
+                .into_response();
+        }
+    };
+    drop(index_db);
+
+    let venue = state
+        .db
+        .lock()
+        .ok()
+        .and_then(|db| db.pool_meta(&op.pool_address).ok().flatten())
+        .map(|meta| meta.3);
+    if venue.as_deref() != Some("aquarius") {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(json!({
+                "error": "copy execution is currently limited to Aquarius",
+                "code": "venue_not_enabled",
+                "venue": venue,
+            })),
+        )
+            .into_response();
+    }
+
+    if session.follower_address != body.follower_address {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({ "error": "copy op does not belong to follower", "code": "forbidden" })),
+        )
+            .into_response();
+    }
+    if op.status != "pending" {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({ "error": "copy op is not pending", "code": "invalid_status" })),
+        )
+            .into_response();
+    }
+    if session.status != "active" {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({ "error": "copy session is not active", "code": "session_inactive" })),
+        )
+            .into_response();
+    }
+    if op.kind != "deposit" && op.kind != "withdraw" && op.kind != "claim" {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(json!({ "error": "unsupported copy operation", "code": "unsupported_operation" })),
+        )
+            .into_response();
+    }
+    let Some(contract_session_id) = session.contract_session_id else {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({ "error": "policy session is not configured", "code": "policy_session_missing" })),
+        )
+            .into_response();
+    };
+    let Some(quote_xlm) = op.scaled_quote_xlm.filter(|value| value.is_finite() && *value > 0.0) else {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(json!({ "error": "copy op has no verified quote", "code": "quote_missing" })),
+        )
+            .into_response();
+    };
+    let quote_stroops = (quote_xlm * 10_000_000.0).floor() as i128;
+    let Some(source_event_id) = source_event_id_bytes(&op.source_event_id) else {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(json!({ "error": "source event id cannot be encoded as BytesN<32>", "code": "event_id_invalid" })),
+        )
+            .into_response();
+    };
+    let scaled_amounts = serde_json::from_str::<Value>(&op.scaled_amounts_json).unwrap_or(Value::Null);
+    let Some(amount_rows) = scaled_amounts.as_array() else {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(json!({ "error": "copy op has no valid scaled amounts", "code": "amounts_missing" })),
+        )
+            .into_response();
+    };
+    let mut amount_values = Vec::with_capacity(amount_rows.len());
+    for row in amount_rows {
+        let Some(amount) = row.get("amount").and_then(Value::as_str) else {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(json!({ "error": "scaled amount is not an integer string", "code": "amount_invalid" })),
+            )
+                .into_response();
+        };
+        if amount.parse::<u128>().is_err() {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(json!({ "error": "scaled amount is outside u128 range", "code": "amount_invalid" })),
+            )
+                .into_response();
+        }
+        amount_values.push(amount);
+    }
+    if amount_values.is_empty() {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(json!({ "error": "copy op has no scaled amounts", "code": "amounts_missing" })),
+        )
+            .into_response();
+    }
+    let contract_id = std::env::var("COPY_POLICY").ok();
+    let network = std::env::var("STELLAR_NETWORK").unwrap_or_else(|_| "testnet".to_string());
+    if network != "testnet" {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({ "error": "policy preparation is currently testnet-only", "code": "network_not_enabled" })),
+        )
+            .into_response();
+    }
+
+    Json(json!({
+        "ready": false,
+        "validated": true,
+        "network": network,
+        "contract_id": contract_id,
+        "method": "execute_aquarius_standard_op",
+        "session_id": contract_session_id,
+        "source_event_id": op.source_event_id,
+        "source_event_id_hex": source_event_id.iter().map(|byte| format!("{byte:02x}")).collect::<String>(),
+        "pool": op.pool_address,
+        "kind": op.kind,
+        "quote_stroops": quote_stroops,
+        "scaled_amounts": scaled_amounts,
+        "amount_values": amount_values,
+        "note": "Policy intent validated. Transaction XDR construction and submission remain server-controlled."
+    }))
+    .into_response()
 }
 
 #[derive(Deserialize)]
