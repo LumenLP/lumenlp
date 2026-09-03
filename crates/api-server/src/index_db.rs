@@ -632,6 +632,17 @@ impl IndexDb {
         Ok(rows > 0)
     }
 
+    pub fn recorder_claim_token(&self, source_event_id: &str) -> Result<Option<String>> {
+        self.conn
+            .query_row(
+                "SELECT claim_token FROM recorder_outbox WHERE source_event_id = ?1",
+                params![source_event_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
     #[allow(dead_code)]
     pub fn pending_recorder_events(&self, limit: usize) -> Result<Vec<RecorderOutboxRow>> {
         let limit = limit.clamp(1, 1_000) as i64;

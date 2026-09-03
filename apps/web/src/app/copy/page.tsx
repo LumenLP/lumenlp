@@ -404,6 +404,7 @@ function CopyInner() {
             <div className="copy-queue">
               {ops.map((op) => {
                 const done = ["drafted", "skipped", "rejected", "failed", "insufficient"].includes(op.status);
+                const preparedOp = prepared[op.id];
                 return (
                   <div key={op.id} className="copy-op">
                     <div className="copy-op-head">
@@ -416,10 +417,13 @@ function CopyInner() {
                     </div>
                     <div>{formatOpQuote(op)}</div>
                     {op.note ? <div className="sign-disabled-note">{op.note}</div> : null}
-                    {prepared[op.id] ? (
+                    {preparedOp ? (
                       <div className="sign-disabled-note">
-                        Policy intent validated: {prepared[op.id].method} · session {prepared[op.id].session_id}
-                        {" "}· {prepared[op.id].quote_stroops.toLocaleString()} stroops
+                        Policy intent validated: {preparedOp.method} · session {preparedOp.session_id}
+                        {" "}· {preparedOp.quote_stroops.toLocaleString()} stroops
+                        {preparedOp.claim_token ? (
+                          <> · reward token {shortAddr(preparedOp.claim_token)}</>
+                        ) : null}
                       </div>
                     ) : null}
                     {!done ? (

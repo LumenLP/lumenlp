@@ -52,6 +52,7 @@ export type PreparedCopyOp = {
   source_event_id_hex?: string;
   pool: string;
   kind: string;
+  claim_token?: string | null;
   quote_stroops: number;
   scaled_amounts: unknown;
   amount_values?: string[];

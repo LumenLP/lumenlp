@@ -3509,6 +3509,30 @@ async fn prepare_copy_op(
                 .into_response();
         }
     };
+    let claim_token = if op.kind == "claim" {
+        match index_db.recorder_claim_token(&op.source_event_id) {
+            Ok(Some(token)) if valid_stellar_address(&token) => Some(token),
+            Ok(_) => {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    Json(json!({
+                        "error": "claim reward token is not verified",
+                        "code": "claim_token_missing"
+                    })),
+                )
+                    .into_response();
+            }
+            Err(error) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": error.to_string(), "code": "db_error" })),
+                )
+                    .into_response();
+            }
+        }
+    } else {
+        None
+    };
     drop(index_db);
 
     let venue = state
@@ -3633,6 +3657,7 @@ async fn prepare_copy_op(
         "source_event_id_hex": source_event_id.iter().map(|byte| format!("{byte:02x}")).collect::<String>(),
         "pool": op.pool_address,
         "kind": op.kind,
+        "claim_token": claim_token,
         "quote_stroops": quote_stroops,
         "scaled_amounts": scaled_amounts,
         "amount_values": amount_values,
