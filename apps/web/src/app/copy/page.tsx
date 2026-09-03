@@ -67,6 +67,7 @@ function CopyInner() {
   const [leaderAddress, setLeaderAddress] = useState(leaderFromQuery);
   const [coefficient, setCoefficient] = useState<number>(1);
   const [customCoeff, setCustomCoeff] = useState("");
+  const [includeClaims, setIncludeClaims] = useState(true);
   const [session, setSession] = useState<CopySession | null>(null);
   const [ops, setOps] = useState<CopyOp[]>([]);
   const [prepared, setPrepared] = useState<Record<string, PreparedCopyOp>>({});
@@ -137,6 +138,7 @@ function CopyInner() {
         follower_address: address,
         leader_address: leaderAddress.trim(),
         coefficient: effectiveCoeff,
+        include_claims: includeClaims,
       });
       setSession(created);
     } catch (e) {
@@ -325,6 +327,21 @@ function CopyInner() {
               ) : null}
             </div>
 
+            <label className="filter-field">
+              <span className="filter-label">Fee claims</span>
+              <span>
+                <input
+                  type="checkbox"
+                  checked={includeClaims}
+                  onChange={(e) => setIncludeClaims(e.target.checked)}
+                />{" "}
+                Copy verified fee claim events
+              </span>
+              <span className="muted">
+                Claims without a single verified reward token are rejected before preparation.
+              </span>
+            </label>
+
             <div className="landing-actions" style={{ justifyContent: "flex-start" }}>
               <button
                 type="button"
@@ -355,6 +372,10 @@ function CopyInner() {
             <div className="copy-op-head">
               <span className="muted">Coefficient</span>
               <span>{session.coefficient}×</span>
+            </div>
+            <div className="copy-op-head">
+              <span className="muted">Fee claims</span>
+              <span>{session.include_claims ? "Included" : "Excluded"}</span>
             </div>
             <div className="copy-op-head">
               <span className="muted">Status</span>
