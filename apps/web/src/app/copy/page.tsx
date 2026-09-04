@@ -229,8 +229,8 @@ function CopyInner() {
   return (
     <div className="copy-layout">
       <div className="copy-banner">
-        LumenLP does not submit transactions for you. You review and sign every action — no
-        custodial auto-execution.
+        Arm a Soroban Copy Policy once, then LumenLP can automatically submit approved Aquarius
+        LP actions through the relayer — non-custodial and bounded by your limits.
       </div>
       <div className="copy-banner">
         Copy LP execution is currently enabled for Aquarius pools only. Activity from other
@@ -258,9 +258,10 @@ function CopyInner() {
             </span>
           </div>
           <p className="sign-disabled-note">
-            The policy contract is the final safety boundary. User wallets never expose private
-            keys; owner-only policy configuration and relayer submission remain server-controlled.
-            User signing will be enabled only for a prepared, policy-scoped transaction.
+            The policy contract is the final safety boundary. You authorize the policy from your
+            wallet; LumenLP never receives your private keys or takes custody of your funds. The
+            relayer can submit only policy-approved, allowlisted operations within the configured
+            limits.
           </p>
         </div>
       </div>
