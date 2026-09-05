@@ -14,4 +14,3 @@ data/
 .DS_Store
 .worktrees
 thirdparty
-.playwright-mcp
