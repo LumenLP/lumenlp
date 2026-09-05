@@ -181,8 +181,9 @@ export function buildRebalancePreview(input: {
   spotHint?: string | null;
   copyDraft?: CopyDraftSnapshot | null;
 }): RebalancePreview {
-  const honestyNote =
-    "Preview only. Review & sign with your wallet — LumenLP never auto-executes without you.";
+  const honestyNote = input.copyDraft
+    ? "Copy LP preview. Once the Soroban policy is armed, approved Aquarius actions can be submitted by the relayer within the configured limits; execution is currently gated."
+    : "Preview only. Review and sign strategy actions with your wallet — no transaction is submitted from this preview.";
   const copyStep: PreviewStep | null = input.copyDraft
     ? {
         kind: "action",

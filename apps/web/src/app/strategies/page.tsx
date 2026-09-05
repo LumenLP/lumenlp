@@ -285,11 +285,13 @@ function StrategiesInner() {
             </div>
           ))}
           <p className="sign-disabled-note">{preview.honestyNote}</p>
-          <button type="button" className="primary" disabled title="Signing path coming next">
-            Review &amp; sign
+          <button type="button" className="primary" disabled title="Policy execution path coming next">
+            {copyDraft ? "Arm policy (coming next)" : "Review & sign"}
           </button>
           <p className="sign-disabled-note">
-            Signing path coming next — preview and saved configs work for demos now.
+            {copyDraft
+              ? "Policy authorization and relayer submission are gated while the execution path is being completed."
+              : "Signing path coming next — preview and saved configs work for demos now."}
           </p>
         </div>
       </div>

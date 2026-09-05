@@ -62,6 +62,21 @@ describe("buildRebalancePreview", () => {
       true,
     );
   });
+
+  it("describes Copy LP as gated policy automation", () => {
+    const preview = buildRebalancePreview({
+      kind: "stay_in_range",
+      poolAddress: "CPOOL",
+      params: { widthBps: 800 },
+      copyDraft: {
+        kind: "deposit",
+        leaderAmounts: ["10"],
+        scaledAmounts: ["5"],
+      },
+    });
+    expect(preview.honestyNote).toContain("relayer");
+    expect(preview.honestyNote).toContain("gated");
+  });
 });
 
 describe("readStrategies / upsertStrategy", () => {
