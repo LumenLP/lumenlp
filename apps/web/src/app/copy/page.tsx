@@ -68,6 +68,8 @@ function CopyInner() {
   const [coefficient, setCoefficient] = useState<number>(1);
   const [customCoeff, setCustomCoeff] = useState("");
   const [includeClaims, setIncludeClaims] = useState(true);
+  const [maxPerOp, setMaxPerOp] = useState("100");
+  const [maxDaily, setMaxDaily] = useState("500");
   const [session, setSession] = useState<CopySession | null>(null);
   const [ops, setOps] = useState<CopyOp[]>([]);
   const [prepared, setPrepared] = useState<Record<string, PreparedCopyOp>>({});
@@ -131,6 +133,16 @@ function CopyInner() {
       setError("Coefficient must be a positive number");
       return;
     }
+    const maxPerOpXlm = Number(maxPerOp);
+    const maxDailyXlm = Number(maxDaily);
+    if (!Number.isFinite(maxPerOpXlm) || maxPerOpXlm <= 0 || !Number.isFinite(maxDailyXlm) || maxDailyXlm <= 0) {
+      setError("Per-operation and daily limits must be positive numbers");
+      return;
+    }
+    if (maxDailyXlm < maxPerOpXlm) {
+      setError("Daily limit must be at least the per-operation limit");
+      return;
+    }
     setStarting(true);
     setError(null);
     try {
@@ -139,6 +151,8 @@ function CopyInner() {
         leader_address: leaderAddress.trim(),
         coefficient: effectiveCoeff,
         include_claims: includeClaims,
+        max_per_op_quote_xlm: maxPerOpXlm,
+        max_daily_quote_xlm: maxDailyXlm,
       });
       setSession(created);
     } catch (e) {
@@ -343,6 +357,37 @@ function CopyInner() {
               </span>
             </label>
 
+            <div className="copy-op-head">
+              <span className="muted">Safety limits</span>
+              <span className="muted">Applied to policy-approved operations</span>
+            </div>
+            <div className="strategy-config" style={{ padding: 0 }}>
+              <label className="filter-field">
+                <span className="filter-label">Max per operation (XLM)</span>
+                <input
+                  className="filter-input"
+                  type="number"
+                  min="0.000001"
+                  step="any"
+                  value={maxPerOp}
+                  onChange={(e) => setMaxPerOp(e.target.value)}
+                  placeholder="100"
+                />
+              </label>
+              <label className="filter-field">
+                <span className="filter-label">Max per day (XLM)</span>
+                <input
+                  className="filter-input"
+                  type="number"
+                  min="0.000001"
+                  step="any"
+                  value={maxDaily}
+                  onChange={(e) => setMaxDaily(e.target.value)}
+                  placeholder="500"
+                />
+              </label>
+            </div>
+
             <div className="landing-actions" style={{ justifyContent: "flex-start" }}>
               <button
                 type="button"
@@ -377,6 +422,12 @@ function CopyInner() {
             <div className="copy-op-head">
               <span className="muted">Fee claims</span>
               <span>{session.include_claims ? "Included" : "Excluded"}</span>
+            </div>
+            <div className="copy-op-head">
+              <span className="muted">Safety limits</span>
+              <span>
+                {session.policy?.max_per_op_quote_xlm || "∞"} XLM / op · {session.policy?.max_daily_quote_xlm || "∞"} XLM / day
+              </span>
             </div>
             <div className="copy-op-head">
               <span className="muted">Status</span>
