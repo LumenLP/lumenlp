@@ -1,4 +1,30 @@
-import { getJson, patchJson, postJson } from "./api";
+import { ApiError, getJson, patchJson, postJson } from "./api";
+
+export function formatCopyError(error: unknown, fallback: string): string {
+  const code = error instanceof ApiError ? error.code : undefined;
+  switch (code) {
+    case "policy_session_missing":
+      return "Bind an on-chain Soroban policy session before validating this operation.";
+    case "claim_token_missing":
+      return "This fee claim has no verified reward token, so it cannot be prepared safely.";
+    case "quote_missing":
+      return "This operation has no verified XLM quote and cannot be prepared safely.";
+    case "venue_not_enabled":
+      return "Automatic Copy LP is currently enabled for Aquarius only; this venue remains analytics-only.";
+    case "policy_expired":
+      return "The Copy Policy has expired. Start a new session with a fresh expiry.";
+    case "per_operation_limit":
+      return "This operation exceeds the configured per-operation limit.";
+    case "daily_limit":
+      return "This operation would exceed the configured daily limit.";
+    case "session_inactive":
+      return "This Copy session is not active. Resume it before preparing an operation.";
+    case "unsupported_operation":
+      return "This LP action is not supported by the current Copy Policy adapter.";
+    default:
+      return error instanceof Error && error.message ? error.message : fallback;
+  }
+}
 
 export type CopySession = {
   id: string;

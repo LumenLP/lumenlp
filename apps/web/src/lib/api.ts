@@ -411,6 +411,18 @@ export type HistoryPoint = {
   est_apr: number;
 };
 
+export class ApiError extends Error {
+  readonly code?: string;
+  readonly status: number;
+
+  constructor(message: string, status: number, code?: string) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.code = code;
+  }
+}
+
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   // Public analytics responses advertise a short max-age from the API. Keep
   // GETs cacheable in the browser, while writes remain explicitly uncached.
@@ -421,7 +433,16 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   });
   if (!res.ok) {
     const body = await res.text();
-    throw new Error(`${res.status}: ${body}`);
+    let message = body || res.statusText || "Request failed";
+    let code: string | undefined;
+    try {
+      const payload = JSON.parse(body) as { error?: unknown; code?: unknown };
+      if (typeof payload.error === "string") message = payload.error;
+      if (typeof payload.code === "string") code = payload.code;
+    } catch {
+      // Some upstream failures are plain text rather than JSON.
+    }
+    throw new ApiError(message, res.status, code);
   }
   return res.json() as Promise<T>;
 }

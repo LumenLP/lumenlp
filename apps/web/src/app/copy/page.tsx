@@ -6,6 +6,7 @@ import { fmtNum, shortAddr } from "@/lib/api";
 import {
   copyOpToDraftSnapshot,
   createCopySession,
+  formatCopyError,
   listCopyOps,
   listCopySessions,
   patchCopySession,
@@ -105,7 +106,7 @@ function CopyInner() {
         if (!cancelled) setSession(pickSession(sessions));
       } catch (e) {
         if (!cancelled) {
-          setError(e instanceof Error ? e.message : "Failed to load copy sessions");
+          setError(formatCopyError(e, "Failed to load copy sessions"));
         }
       }
     })();
@@ -189,7 +190,7 @@ function CopyInner() {
       });
       setSession(created);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to start copy session");
+      setError(formatCopyError(e, "Failed to start copy session"));
     } finally {
       setStarting(false);
     }
@@ -203,7 +204,7 @@ function CopyInner() {
       const updated = await patchCopySession(session.id, { status });
       setSession(updated);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Session update failed");
+      setError(formatCopyError(e, "Session update failed"));
     } finally {
       setActionBusy(null);
     }
@@ -222,7 +223,7 @@ function CopyInner() {
       const updated = await patchCopySession(session.id, { contract_session_id: value });
       setSession(updated);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to bind policy session");
+      setError(formatCopyError(e, "Failed to bind policy session"));
     } finally {
       setBindingPolicy(false);
     }
@@ -257,7 +258,7 @@ function CopyInner() {
         `/strategies?pool=${encodeURIComponent(op.pool_address)}&copyOp=${encodeURIComponent(op.id)}`,
       );
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to generate draft");
+      setError(formatCopyError(e, "Failed to generate draft"));
     } finally {
       setActionBusy(null);
     }
@@ -271,7 +272,7 @@ function CopyInner() {
       const result = await prepareCopyOp(op.id, address);
       setPrepared((prev) => ({ ...prev, [op.id]: result }));
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to prepare policy call");
+      setError(formatCopyError(e, "Failed to prepare policy call"));
     } finally {
       setActionBusy(null);
     }
@@ -286,7 +287,7 @@ function CopyInner() {
         prev.map((row) => (row.id === op.id ? { ...row, status: "skipped" } : row)),
       );
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to skip op");
+      setError(formatCopyError(e, "Failed to skip op"));
     } finally {
       setActionBusy(null);
     }
