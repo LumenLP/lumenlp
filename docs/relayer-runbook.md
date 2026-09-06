@@ -16,6 +16,9 @@ for Copy LP controls:
 5. `POST /v1/auth/revoke` deletes that token hash when the wallet disconnects.
 
 Challenges are single-use and bind the message, account, nonce, and expiry.
+Challenge creation is limited to one request per account every three seconds
+and 300 requests globally per minute; excess requests return `429` with
+`Retry-After`. Consumed challenges remain briefly for rate-limit accounting.
 All Copy session and operation reads and controls require the resulting bearer
 token; only aggregate recorder health remains public. The authenticated account
 must also match the request's follower address and the stored session owner.

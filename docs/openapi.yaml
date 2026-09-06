@@ -295,6 +295,8 @@ paths:
                   expires_at: { type: integer, format: int64 }
         "400":
           description: Invalid Stellar account address
+        "429":
+          description: Per-address or global challenge creation rate limit exceeded
   /v1/auth/verify:
     post:
       summary: Exchange a wallet signature for a short-lived API token

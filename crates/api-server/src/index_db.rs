@@ -6,6 +6,13 @@ use {
     std::collections::{HashMap, HashSet},
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WalletAuthChallengeCreate {
+    Created,
+    AddressRateLimited,
+    GlobalRateLimited,
+}
+
 #[derive(Debug, Clone)]
 pub struct PoolRollupRow {
     pub pool_address: String,
@@ -350,6 +357,10 @@ impl IndexDb {
             );
             CREATE INDEX IF NOT EXISTS idx_wallet_auth_challenges_expiry
               ON wallet_auth_challenges(expires_at);
+            CREATE INDEX IF NOT EXISTS idx_wallet_auth_challenges_address_created
+              ON wallet_auth_challenges(address, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_wallet_auth_challenges_created
+              ON wallet_auth_challenges(created_at DESC);
 
             CREATE TABLE IF NOT EXISTS wallet_auth_tokens (
               token_hash TEXT PRIMARY KEY,
@@ -421,12 +432,33 @@ impl IndexDb {
         message: &str,
         expires_at: i64,
         now: i64,
-    ) -> Result<()> {
-        self.conn.execute(
+        address_window_secs: i64,
+        global_window_secs: i64,
+        global_limit: i64,
+    ) -> Result<WalletAuthChallengeCreate> {
+        let tx = self.conn.unchecked_transaction()?;
+        let address_recent: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM wallet_auth_challenges WHERE address = ?1 AND created_at > ?2",
+            params![address, now - address_window_secs],
+            |row| row.get(0),
+        )?;
+        if address_recent > 0 {
+            return Ok(WalletAuthChallengeCreate::AddressRateLimited);
+        }
+        let global_recent: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM wallet_auth_challenges WHERE created_at > ?1",
+            params![now - global_window_secs],
+            |row| row.get(0),
+        )?;
+        if global_recent >= global_limit {
+            return Ok(WalletAuthChallengeCreate::GlobalRateLimited);
+        }
+        tx.execute(
             "INSERT INTO wallet_auth_challenges (id, address, message, expires_at, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
             params![id, address, message, expires_at, now],
         )?;
-        Ok(())
+        tx.commit()?;
+        Ok(WalletAuthChallengeCreate::Created)
     }
 
     pub fn wallet_auth_challenge(&self, id: &str) -> Result<Option<WalletAuthChallengeRow>> {
@@ -489,8 +521,8 @@ impl IndexDb {
 
     pub fn prune_wallet_auth(&self, now: i64) -> Result<()> {
         self.conn.execute(
-            "DELETE FROM wallet_auth_challenges WHERE expires_at <= ?1 OR consumed_at IS NOT NULL",
-            params![now],
+            "DELETE FROM wallet_auth_challenges WHERE expires_at <= ?1 OR (consumed_at IS NOT NULL AND consumed_at <= ?2)",
+            params![now, now - 60],
         )?;
         self.conn
             .execute("DELETE FROM wallet_auth_tokens WHERE expires_at <= ?1", params![now])?;
@@ -2479,8 +2511,26 @@ mod tests {
     #[test]
     fn wallet_auth_challenges_are_single_use_and_tokens_expire() {
         let db = test_db();
-        db.create_wallet_auth_challenge("challenge", "GADDRESS", "message", 200, 100)
-            .unwrap();
+        assert_eq!(
+            db.create_wallet_auth_challenge("challenge", "GADDRESS", "message", 200, 100, 3, 60, 300)
+                .unwrap(),
+            WalletAuthChallengeCreate::Created
+        );
+        assert_eq!(
+            db.create_wallet_auth_challenge("too-soon", "GADDRESS", "message", 202, 102, 3, 60, 300)
+                .unwrap(),
+            WalletAuthChallengeCreate::AddressRateLimited
+        );
+        assert_eq!(
+            db.create_wallet_auth_challenge("next", "GADDRESS", "message", 204, 104, 3, 60, 300)
+                .unwrap(),
+            WalletAuthChallengeCreate::Created
+        );
+        assert_eq!(
+            db.create_wallet_auth_challenge("other", "GOTHER", "message", 202, 102, 3, 60, 300)
+                .unwrap(),
+            WalletAuthChallengeCreate::Created
+        );
         let row = db.wallet_auth_challenge("challenge").unwrap().unwrap();
         assert_eq!(row.address, "GADDRESS");
         assert_eq!(row.consumed_at, None);
@@ -2493,6 +2543,26 @@ mod tests {
         assert!(db.revoke_wallet_auth_token("hash").unwrap());
         assert!(!db.revoke_wallet_auth_token("hash").unwrap());
         assert_eq!(db.wallet_auth_token_address("hash", 199).unwrap(), None);
+    }
+
+    #[test]
+    fn wallet_auth_challenge_global_limit_is_enforced() {
+        let db = test_db();
+        assert_eq!(
+            db.create_wallet_auth_challenge("one", "GONE", "message", 200, 100, 3, 60, 2)
+                .unwrap(),
+            WalletAuthChallengeCreate::Created
+        );
+        assert_eq!(
+            db.create_wallet_auth_challenge("two", "GTWO", "message", 201, 101, 3, 60, 2)
+                .unwrap(),
+            WalletAuthChallengeCreate::Created
+        );
+        assert_eq!(
+            db.create_wallet_auth_challenge("three", "GTHREE", "message", 202, 102, 3, 60, 2)
+                .unwrap(),
+            WalletAuthChallengeCreate::GlobalRateLimited
+        );
     }
 
     #[test]

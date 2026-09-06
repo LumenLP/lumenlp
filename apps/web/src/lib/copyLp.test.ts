@@ -26,4 +26,13 @@ describe("formatCopyError", () => {
       "temporary upstream failure",
     );
   });
+
+  it("explains wallet challenge throttling", () => {
+    expect(
+      formatCopyError(
+        new ApiError("wallet authentication challenge rate limit exceeded", 429, "auth_rate_limited"),
+        "fallback",
+      ),
+    ).toContain("Wait a few seconds");
+  });
 });

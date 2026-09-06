@@ -4,7 +4,7 @@ use {
         copy_policy::{coefficient_ppm, validate_copy_op, PolicyReject},
         index_db::{
             CopyOpRow, CopySessionRow, IndexDb, IndexerStatus, PoolActivityRow, PoolActivitySummaryRow, PoolEventRow,
-            PoolRollupRow, RecorderOutboxStatus,
+            PoolRollupRow, RecorderOutboxStatus, WalletAuthChallengeCreate,
         },
         pricing::{
             service::{PriceService, QuoteMeta},
@@ -17,7 +17,7 @@ use {
     axum::{
         extract::{Path, Query, State},
         http::{
-            header::{AUTHORIZATION, CACHE_CONTROL},
+            header::{AUTHORIZATION, CACHE_CONTROL, RETRY_AFTER},
             HeaderMap, HeaderName, HeaderValue, StatusCode,
         },
         response::IntoResponse,
@@ -130,6 +130,9 @@ const LEADER_LIST_CACHE_SECS: u64 = 30;
 const INDEXER_STATUS_CACHE_SECS: u64 = 5;
 const WALLET_AUTH_CHALLENGE_SECS: i64 = 5 * 60;
 const WALLET_AUTH_TOKEN_SECS: i64 = 15 * 60;
+const WALLET_AUTH_ADDRESS_COOLDOWN_SECS: i64 = 3;
+const WALLET_AUTH_GLOBAL_WINDOW_SECS: i64 = 60;
+const WALLET_AUTH_GLOBAL_WINDOW_LIMIT: i64 = 300;
 
 fn wallet_bearer_token(headers: &HeaderMap) -> Result<&str, axum::response::Response> {
     headers
@@ -204,20 +207,44 @@ async fn create_wallet_auth_challenge(
     let nonce = wallet_auth::random_opaque_value();
     let message = wallet_auth::challenge_message(&body.address, &nonce, expires_at);
     let index_db = state.index_db.lock().unwrap();
-    if let Err(error) = index_db.create_wallet_auth_challenge(
-        &challenge_id,
-        &body.address,
-        &message,
-        expires_at,
-        now,
-    ) {
+    if let Err(error) = index_db.prune_wallet_auth(now) {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": error.to_string(), "code": "db_error" })),
         )
             .into_response();
     }
-    let _ = index_db.prune_wallet_auth(now);
+    let created = index_db.create_wallet_auth_challenge(
+        &challenge_id,
+        &body.address,
+        &message,
+        expires_at,
+        now,
+        WALLET_AUTH_ADDRESS_COOLDOWN_SECS,
+        WALLET_AUTH_GLOBAL_WINDOW_SECS,
+        WALLET_AUTH_GLOBAL_WINDOW_LIMIT,
+    );
+    match created {
+        Ok(WalletAuthChallengeCreate::Created) => {}
+        Ok(reason) => {
+            let retry_after = match reason {
+                WalletAuthChallengeCreate::AddressRateLimited => WALLET_AUTH_ADDRESS_COOLDOWN_SECS,
+                WalletAuthChallengeCreate::GlobalRateLimited => WALLET_AUTH_GLOBAL_WINDOW_SECS,
+                WalletAuthChallengeCreate::Created => unreachable!(),
+            };
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                [(RETRY_AFTER, retry_after.to_string())],
+                Json(json!({ "error": "wallet authentication challenge rate limit exceeded", "code": "auth_rate_limited" })),
+            )
+                .into_response();
+        }
+        Err(error) => return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": error.to_string(), "code": "db_error" })),
+        )
+            .into_response(),
+    }
 
     Json(json!({
         "challenge_id": challenge_id,

@@ -22,6 +22,8 @@ export function formatCopyError(error: unknown, fallback: string): string {
     case "auth_signature_invalid":
     case "auth_address_mismatch":
       return "Wallet authentication failed. Reconnect the follower wallet and try again.";
+    case "auth_rate_limited":
+      return "Too many wallet login attempts. Wait a few seconds and try again.";
     case "per_operation_limit":
       return "This operation exceeds the configured per-operation limit.";
     case "daily_limit":
