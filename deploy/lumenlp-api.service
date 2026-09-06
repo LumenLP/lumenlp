@@ -8,6 +8,9 @@ Type=simple
 User=root
 WorkingDirectory=/opt/lumenlp
 Environment=RPC_URL=http://127.0.0.1:8003
+Environment=COPY_POLICY_RPC_URL=https://soroban-testnet.stellar.org
+Environment=COPY_POLICY_NETWORK=testnet
+Environment="COPY_POLICY_NETWORK_PASSPHRASE=Test SDF Network ; September 2015"
 Environment=DATABASE_PATH=/opt/lumenlp/data/lumenlp.db
 Environment=INDEXER_DB_PATH=/opt/lumenlp/data/pool-indexer.db
 EnvironmentFile=-/etc/lumenlp/api.env

@@ -1,10 +1,175 @@
 use {
     crate::index_db::CopySessionRow,
-    dex::{support_matrix, DraftOpKind, VenueId},
+    dex::{rpc::scval_to_address, support_matrix, DraftOpKind, SorobanRpc, VenueId},
+    stellar_xdr::curr as xdr,
 };
 
 pub const COEFFICIENT_SCALE: f64 = 1_000_000.0;
 pub const MAX_COEFFICIENT_PPM: u32 = 10_000_000;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OnChainPolicySession {
+    pub leader: String,
+    pub allowed_pools: Vec<String>,
+    pub coefficient_ppm: u32,
+    pub follow_claims: bool,
+    pub max_per_op_quote: i128,
+    pub max_daily_quote: i128,
+    pub expires_at: u64,
+    pub paused: bool,
+}
+
+#[derive(Debug)]
+pub enum PolicyBindingError {
+    Unavailable(String),
+    Mismatch(&'static str),
+}
+
+impl PolicyBindingError {
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::Unavailable(_) => "policy_binding_unavailable",
+            Self::Mismatch(_) => "policy_binding_mismatch",
+        }
+    }
+
+    pub fn message(&self) -> String {
+        match self {
+            Self::Unavailable(error) => format!("could not verify on-chain policy: {error}"),
+            Self::Mismatch(field) => format!("on-chain policy does not match local {field}"),
+        }
+    }
+}
+
+pub async fn verify_policy_binding(
+    rpc: &SorobanRpc,
+    contract_address: &str,
+    contract_session_id: u32,
+    follower_address: &str,
+    leader_address: &str,
+    coefficient: f64,
+    include_claims: bool,
+    allowed_pools: &[String],
+    max_per_op_quote_xlm: f64,
+    max_daily_quote_xlm: f64,
+    expires_at: Option<i64>,
+) -> Result<(), PolicyBindingError> {
+    let owner = rpc
+        .call_no_args(contract_address, "policy_owner")
+        .await
+        .map_err(|error| PolicyBindingError::Unavailable(error.to_string()))
+        .and_then(|value| {
+            scval_to_address(&value).map_err(|error| PolicyBindingError::Unavailable(error.to_string()))
+        })?;
+    if owner != follower_address {
+        return Err(PolicyBindingError::Mismatch("owner"));
+    }
+
+    let value = rpc
+        .simulate_call(contract_address, "session", vec![xdr::ScVal::U32(contract_session_id)])
+        .await
+        .map_err(|error| PolicyBindingError::Unavailable(error.to_string()))?;
+    let session = parse_policy_session(&value).map_err(|error| PolicyBindingError::Unavailable(error.to_string()))?;
+
+    if session.leader != leader_address {
+        return Err(PolicyBindingError::Mismatch("leader"));
+    }
+    if session.coefficient_ppm != coefficient_ppm(coefficient).unwrap_or_default() {
+        return Err(PolicyBindingError::Mismatch("coefficient"));
+    }
+    if session.follow_claims != include_claims {
+        return Err(PolicyBindingError::Mismatch("claim setting"));
+    }
+    if allowed_pools.is_empty() {
+        return Err(PolicyBindingError::Mismatch("non-empty pool allowlist"));
+    }
+    let mut expected_pools = allowed_pools.to_vec();
+    expected_pools.sort();
+    let mut actual_pools = session.allowed_pools;
+    actual_pools.sort();
+    if actual_pools != expected_pools {
+        return Err(PolicyBindingError::Mismatch("pool allowlist"));
+    }
+    if session.max_per_op_quote != xlm_to_stroops(max_per_op_quote_xlm).unwrap_or_default() {
+        return Err(PolicyBindingError::Mismatch("per-operation limit"));
+    }
+    if session.max_daily_quote != xlm_to_stroops(max_daily_quote_xlm).unwrap_or_default() {
+        return Err(PolicyBindingError::Mismatch("daily limit"));
+    }
+    if Some(session.expires_at) != expires_at.and_then(|value| u64::try_from(value).ok()) {
+        return Err(PolicyBindingError::Mismatch("expiry"));
+    }
+    if session.paused {
+        return Err(PolicyBindingError::Mismatch("active state"));
+    }
+    Ok(())
+}
+
+pub fn parse_policy_session(value: &xdr::ScVal) -> anyhow::Result<OnChainPolicySession> {
+    let xdr::ScVal::Map(Some(map)) = value else {
+        anyhow::bail!("policy session result is not a map");
+    };
+    let field = |name| {
+        map.0
+            .iter()
+            .find(|entry| matches!(&entry.key, xdr::ScVal::Symbol(symbol) if symbol.to_string() == name))
+            .map(|entry| &entry.val)
+            .ok_or_else(|| anyhow::anyhow!("policy session missing field {name}"))
+    };
+    let allowed_pools = match field("allowed_pools")? {
+        xdr::ScVal::Vec(Some(values)) => values
+            .0
+            .iter()
+            .map(scval_to_address)
+            .collect::<anyhow::Result<Vec<_>>>()?,
+        _ => anyhow::bail!("policy session allowed_pools is not a vector"),
+    };
+    Ok(OnChainPolicySession {
+        leader: scval_to_address(field("leader")?)?,
+        allowed_pools,
+        coefficient_ppm: scval_u32(field("coefficient_ppm")?)?,
+        follow_claims: scval_bool(field("follow_claims")?)?,
+        max_per_op_quote: scval_i128(field("max_per_op_quote")?)?,
+        max_daily_quote: scval_i128(field("max_daily_quote")?)?,
+        expires_at: scval_u64(field("expires_at")?)?,
+        paused: scval_bool(field("paused")?)?,
+    })
+}
+
+fn xlm_to_stroops(value: f64) -> Option<i128> {
+    if !value.is_finite() || value <= 0.0 {
+        return None;
+    }
+    Some((value * 10_000_000.0).round() as i128)
+}
+
+fn scval_u32(value: &xdr::ScVal) -> anyhow::Result<u32> {
+    match value {
+        xdr::ScVal::U32(value) => Ok(*value),
+        _ => anyhow::bail!("expected u32"),
+    }
+}
+
+fn scval_u64(value: &xdr::ScVal) -> anyhow::Result<u64> {
+    match value {
+        xdr::ScVal::U64(value) => Ok(*value),
+        _ => anyhow::bail!("expected u64"),
+    }
+}
+
+fn scval_i128(value: &xdr::ScVal) -> anyhow::Result<i128> {
+    match value {
+        xdr::ScVal::I128(parts) => Ok(((parts.hi as i128) << 64) | parts.lo as i128),
+        _ => anyhow::bail!("expected i128"),
+    }
+}
+
+fn scval_bool(value: &xdr::ScVal) -> anyhow::Result<bool> {
+    match value {
+        xdr::ScVal::Bool(value) => Ok(*value),
+        _ => anyhow::bail!("expected bool"),
+    }
+}
 
 /// Convert the API's human-friendly coefficient into the fixed-point value
 /// expected by the Soroban policy contract.
@@ -108,9 +273,17 @@ fn draft_kind(operation: &str) -> Option<DraftOpKind> {
 mod tests {
     use {super::*, crate::index_db::CopySessionRow};
 
+    fn map_entry(name: &str, value: xdr::ScVal) -> xdr::ScMapEntry {
+        xdr::ScMapEntry {
+            key: xdr::ScVal::Symbol(name.try_into().unwrap()),
+            val: value,
+        }
+    }
+
     fn session() -> CopySessionRow {
         CopySessionRow {
             id: "s".into(),
+            contract_address: None,
             contract_session_id: None,
             follower_address: "GFOLLOWER".into(),
             leader_address: "GLEADER".into(),
@@ -188,5 +361,54 @@ mod tests {
         assert_eq!(coefficient_ppm(10.0), Some(10_000_000));
         assert_eq!(coefficient_ppm(0.0), None);
         assert_eq!(coefficient_ppm(10.000_001), None);
+    }
+
+    #[test]
+    fn parses_copy_policy_session_contract_value() {
+        let leader_value = xdr::ScVal::Address(xdr::ScAddress::Account(xdr::AccountId(
+            xdr::PublicKey::PublicKeyTypeEd25519(xdr::Uint256([7; 32])),
+        )));
+        let pool_value = xdr::ScVal::Address(xdr::ScAddress::Contract(xdr::ContractId(xdr::Hash([8; 32]))));
+        let leader = scval_to_address(&leader_value).unwrap();
+        let pool = scval_to_address(&pool_value).unwrap();
+        let value = xdr::ScVal::Map(Some(xdr::ScMap(
+            vec![
+                map_entry(
+                    "allowed_pools",
+                    xdr::ScVal::Vec(Some(xdr::ScVec(vec![pool_value].try_into().unwrap()))),
+                ),
+                map_entry("coefficient_ppm", xdr::ScVal::U32(100_000)),
+                map_entry("daily_day", xdr::ScVal::U64(1)),
+                map_entry("daily_used_quote", xdr::ScVal::I128(xdr::Int128Parts { hi: 0, lo: 0 })),
+                map_entry("expires_at", xdr::ScVal::U64(2_000)),
+                map_entry("follow_claims", xdr::ScVal::Bool(true)),
+                map_entry("leader", leader_value),
+                map_entry(
+                    "max_daily_quote",
+                    xdr::ScVal::I128(xdr::Int128Parts { hi: 0, lo: 20_000_000 }),
+                ),
+                map_entry(
+                    "max_per_op_quote",
+                    xdr::ScVal::I128(xdr::Int128Parts { hi: 0, lo: 10_000_000 }),
+                ),
+                map_entry("paused", xdr::ScVal::Bool(false)),
+            ]
+            .try_into()
+            .unwrap(),
+        )));
+
+        assert_eq!(
+            parse_policy_session(&value).unwrap(),
+            OnChainPolicySession {
+                leader,
+                allowed_pools: vec![pool],
+                coefficient_ppm: 100_000,
+                follow_claims: true,
+                max_per_op_quote: 10_000_000,
+                max_daily_quote: 20_000_000,
+                expires_at: 2_000,
+                paused: false,
+            }
+        );
     }
 }

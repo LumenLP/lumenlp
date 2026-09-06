@@ -183,12 +183,16 @@ relayer sends it to Soroban, it is deterministically encoded as a zero-padded
 32-byte value for the policy contract's `BytesN<32>` replay key; IDs longer
 than 32 bytes are rejected rather than truncated.
 
-Copy sessions also keep two distinct identifiers. LumenLP uses an opaque local
-session ID for API and database relationships, while the Soroban policy uses a
-registered `u32` session ID. The optional `contract_session_id` binding is
-stored on the local session only after the corresponding policy session has
-been registered. A relayer must use that explicit binding and must not derive
-one by hashing or truncating the local ID.
+Copy sessions keep an opaque local ID for API/database relationships and an
+explicit `(contract_address, contract_session_id)` on-chain identity. Binding
+is fail-closed: the API reads `policy_owner` and `session` through Soroban RPC,
+requires the contract owner to equal the authenticated follower, and compares
+the Leader, pool allowlist, coefficient, claim setting, limits, expiry, and
+pause state before storing either identifier. Preparation uses only this
+verified contract address; it never derives an on-chain ID from the local ID or
+silently falls back to a server-wide policy contract. Policy verification uses
+a dedicated `COPY_POLICY_RPC_URL` and network passphrase, isolated from the
+mainnet RPC that powers pool analytics.
 
 ## Repository Structure
 

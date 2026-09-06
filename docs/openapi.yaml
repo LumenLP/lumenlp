@@ -588,6 +588,7 @@ components:
       required: [follower_address, leader_address, coefficient]
       properties:
         follower_address: { type: string }
+        contract_address: { type: string, nullable: true, description: User-owned Copy Policy contract; must be supplied together with contract_session_id and is verified on-chain before storage. }
         contract_session_id: { type: integer, format: int32, minimum: 0, nullable: true }
         leader_address: { type: string }
         coefficient: { type: number }
@@ -600,18 +601,20 @@ components:
         expires_at: { type: integer, format: int64, nullable: true }
     UpdateCopySession:
       type: object
-      description: After contract_session_id is bound, coefficient, include_claims, and contract_session_id are immutable; create a new session to change the on-chain policy identity or terms.
+      description: contract_address and contract_session_id must be supplied together and are verified on-chain. After binding, coefficient, include_claims, contract address, and session ID are immutable; create a new session to change the on-chain policy identity or terms.
       required: [follower_address]
       properties:
         follower_address: { type: string }
         status: { type: string, enum: [active, paused, stopped] }
         coefficient: { type: number, exclusiveMinimum: 0 }
         include_claims: { type: boolean }
+        contract_address: { type: string, nullable: true }
         contract_session_id: { type: integer, format: int32, minimum: 0, nullable: true }
     CopySession:
       type: object
       properties:
         id: { type: string }
+        contract_address: { type: string, nullable: true }
         contract_session_id: { type: integer, format: int32, minimum: 0, nullable: true }
         follower_address: { type: string }
         leader_address: { type: string }

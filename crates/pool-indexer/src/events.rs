@@ -657,23 +657,23 @@ fn pool_swap_from_event(event: &PoolEvent) -> Option<PoolSwap> {
     let soroswap = topic
         .first()
         .and_then(|value| value.get("value"))
-        .and_then(Value::as_str) ==
-        Some("SoroswapPair");
+        .and_then(Value::as_str)
+        == Some("SoroswapPair");
     let phoenix = topic
         .first()
         .and_then(|value| value.get("value"))
-        .and_then(Value::as_str) ==
-        Some("swap");
+        .and_then(Value::as_str)
+        == Some("swap");
     let comet = topic
         .first()
         .and_then(|value| value.get("value"))
-        .and_then(Value::as_str) ==
-        Some("POOL") &&
-        topic
+        .and_then(Value::as_str)
+        == Some("POOL")
+        && topic
             .get(1)
             .and_then(|value| value.get("value"))
-            .and_then(Value::as_str) ==
-            Some("swap");
+            .and_then(Value::as_str)
+            == Some("swap");
     let derived_venue = derived.get("venue").and_then(Value::as_str);
     let sushi = derived_venue == Some("sushi_v3");
     let token_in = derived

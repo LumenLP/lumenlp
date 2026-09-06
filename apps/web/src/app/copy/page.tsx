@@ -77,6 +77,7 @@ function CopyInner() {
   const [maxDaily, setMaxDaily] = useState("500");
   const [expiryDays, setExpiryDays] = useState("30");
   const [allowedPoolsText, setAllowedPoolsText] = useState("");
+  const [contractAddress, setContractAddress] = useState("");
   const [contractSessionId, setContractSessionId] = useState("");
   const [session, setSession] = useState<CopySession | null>(null);
   const [ops, setOps] = useState<CopyOp[]>([]);
@@ -93,7 +94,10 @@ function CopyInner() {
     session?.policy?.expires_at != null && session.policy.expires_at * 1000 <= nowMs,
   );
   const policyReady =
-    session?.contract_session_id != null && policy.executionEnabled && !policyExpired;
+    session?.contract_address != null &&
+    session.contract_session_id != null &&
+    policy.executionEnabled &&
+    !policyExpired;
 
   useEffect(() => {
     const timer = setInterval(() => setNowMs(Date.now()), 30_000);
@@ -177,6 +181,15 @@ function CopyInner() {
       return;
     }
     const contractSessionIdValue = contractSessionId.trim() ? Number(contractSessionId) : null;
+    const contractAddressValue = contractAddress.trim() || null;
+    if ((contractAddressValue === null) !== (contractSessionIdValue === null)) {
+      setError("Policy contract address and session ID must be provided together");
+      return;
+    }
+    if (contractAddressValue !== null && !isCAddress(contractAddressValue)) {
+      setError("Policy contract must be a complete Stellar contract address starting with C");
+      return;
+    }
     if (
       contractSessionIdValue !== null &&
       (!Number.isInteger(contractSessionIdValue) || contractSessionIdValue < 0)
@@ -196,6 +209,7 @@ function CopyInner() {
         max_daily_quote_xlm: maxDailyXlm,
         expires_at: Math.floor(Date.now() / 1000) + expiryDaysValue * 24 * 60 * 60,
         allowed_pools: allowedPools,
+        contract_address: contractAddressValue ?? undefined,
         contract_session_id: contractSessionIdValue ?? undefined,
       });
       setSession(created);
@@ -222,6 +236,11 @@ function CopyInner() {
 
   async function onBindPolicySession() {
     if (!session || !address) return;
+    const policyContract = contractAddress.trim();
+    if (!isCAddress(policyContract)) {
+      setError("Policy contract must be a complete Stellar contract address starting with C");
+      return;
+    }
     const value = Number(contractSessionId.trim());
     if (!Number.isInteger(value) || value < 0) {
       setError("On-chain policy session ID must be a non-negative whole number");
@@ -230,7 +249,10 @@ function CopyInner() {
     setBindingPolicy(true);
     setError(null);
     try {
-      const updated = await patchCopySession(session.id, address, { contract_session_id: value });
+      const updated = await patchCopySession(session.id, address, {
+        contract_address: policyContract,
+        contract_session_id: value,
+      });
       setSession(updated);
     } catch (e) {
       setError(formatCopyError(e, "Failed to bind policy session"));
@@ -483,12 +505,22 @@ function CopyInner() {
                 spellCheck={false}
               />
               <span className="muted">
-                Leave blank to allow all validated Aquarius pools touched by this Leader. A pool
-                allowlist is safer for unattended execution.
+                A bound on-chain policy requires at least one explicit pool. Leave blank only while
+                creating an unbound review session.
               </span>
             </label>
             <label className="filter-field">
-              <span className="filter-label">On-chain policy session ID (optional)</span>
+              <span className="filter-label">On-chain policy contract (optional)</span>
+              <input
+                className="filter-input"
+                value={contractAddress}
+                onChange={(e) => setContractAddress(e.target.value)}
+                placeholder="C… policy contract owned by this wallet"
+                spellCheck={false}
+              />
+            </label>
+            <label className="filter-field">
+              <span className="filter-label">On-chain policy session ID</span>
               <input
                 className="filter-input"
                 type="number"
@@ -499,8 +531,8 @@ function CopyInner() {
                 placeholder="Set after registering the Soroban policy session"
               />
               <span className="muted">
-                Bind an existing on-chain session. LumenLP does not create or sign the registration
-                transaction from this field.
+                Contract and session are verified against the connected wallet and local policy
+                before binding. LumenLP does not sign the registration transaction here.
               </span>
             </label>
 
@@ -562,17 +594,28 @@ function CopyInner() {
               </span>
             </div>
             <div className="copy-op-head">
-              <span className="muted">On-chain policy session</span>
-              <span>{session.contract_session_id ?? "Not bound"}</span>
+              <span className="muted">On-chain policy</span>
+              <span>
+                {session.contract_address && session.contract_session_id != null
+                  ? `${shortAddr(session.contract_address)} · session ${session.contract_session_id}`
+                  : "Not bound"}
+              </span>
             </div>
-            {session.contract_session_id == null ? (
+            {session.contract_address == null || session.contract_session_id == null ? (
               <p className="sign-disabled-note">
                 Bind an existing Soroban policy session before validating or preparing automatic
                 Copy LP operations. The queue can still be reviewed while policy is unbound.
               </p>
             ) : null}
-            {session.contract_session_id == null ? (
+            {session.contract_address == null || session.contract_session_id == null ? (
               <div className="copy-op-actions">
+                <input
+                  className="filter-input"
+                  value={contractAddress}
+                  onChange={(e) => setContractAddress(e.target.value)}
+                  placeholder="Policy contract C…"
+                  spellCheck={false}
+                />
                 <input
                   className="filter-input"
                   type="number"

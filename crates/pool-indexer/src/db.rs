@@ -756,15 +756,19 @@ mod tests {
             pool_address: "CPool".into(),
             kind: PoolEventKind::Trade,
             body_json: r#"{"topic":[{"value":"SoroswapPair"}],"derived":{"amount_in":"10"}}"#.into(),
-        }).unwrap();
+        })
+        .unwrap();
 
         assert_eq!(db.backfill_event_venue_labels().unwrap(), 1);
         assert_eq!(db.backfill_event_venue_labels().unwrap(), 0);
-        let body: String = db.conn.query_row(
-            "SELECT body_json FROM pool_events WHERE event_id = 'legacy-soroswap-trade'",
-            [],
-            |row| row.get(0),
-        ).unwrap();
+        let body: String = db
+            .conn
+            .query_row(
+                "SELECT body_json FROM pool_events WHERE event_id = 'legacy-soroswap-trade'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
         assert!(body.contains("\"venue\":\"soroswap_amm\""));
         assert!(body.contains("\"pool_type\":\"constant_product\""));
     }
@@ -787,11 +791,14 @@ mod tests {
             ..base
         };
         assert!(db.insert_event(&replay).unwrap());
-        let body: String = db.conn.query_row(
-            "SELECT body_json FROM pool_events WHERE event_id = 'duplicate-trade'",
-            [],
-            |row| row.get(0),
-        ).unwrap();
+        let body: String = db
+            .conn
+            .query_row(
+                "SELECT body_json FROM pool_events WHERE event_id = 'duplicate-trade'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
         assert!(body.contains("\"actor\":\"GACTOR\""));
         assert!(body.contains("\"venue\":\"aquarius\""));
     }

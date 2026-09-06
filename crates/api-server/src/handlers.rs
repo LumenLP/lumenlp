@@ -1,7 +1,7 @@
 use {
     crate::{
         copy_lp::build_scaled_op_payload,
-        copy_policy::{coefficient_ppm, validate_copy_op, PolicyReject},
+        copy_policy::{coefficient_ppm, validate_copy_op, verify_policy_binding, PolicyBindingError, PolicyReject},
         index_db::{
             CopyOpRow, CopySessionRow, IndexDb, IndexerStatus, PoolActivityRow, PoolActivitySummaryRow, PoolEventRow,
             PoolRollupRow, RecorderOutboxStatus, WalletAuthChallengeCreate,
@@ -11,8 +11,7 @@ use {
             value::{coverage_for, xlm_quote_to_usd, QuoteCoverage, UsdPriceMap},
         },
         recorder::{canonical_event, source_event_id_bytes},
-        token_registry,
-        wallet_auth,
+        token_registry, wallet_auth,
     },
     axum::{
         extract::{Path, Query, State},
@@ -52,6 +51,8 @@ use {
 #[derive(Clone)]
 pub struct AppState {
     pub rpc: Arc<SorobanRpc>,
+    /// Isolated from the mainnet analytics RPC while Copy Policy is on testnet.
+    pub copy_policy_rpc: Arc<SorobanRpc>,
     pub db: Arc<Mutex<Db>>,
     pub index_db: Arc<Mutex<IndexDb>>,
     pub token_meta_cache: Arc<Mutex<HashMap<String, TokenMeta>>>,
@@ -239,11 +240,13 @@ async fn create_wallet_auth_challenge(
             )
                 .into_response();
         }
-        Err(error) => return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": error.to_string(), "code": "db_error" })),
-        )
-            .into_response(),
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": error.to_string(), "code": "db_error" })),
+            )
+                .into_response()
+        }
     }
 
     Json(json!({
@@ -287,7 +290,9 @@ async fn verify_wallet_auth_challenge(
     if challenge.address != body.address || challenge.consumed_at.is_some() || challenge.expires_at <= now {
         return (
             StatusCode::UNAUTHORIZED,
-            Json(json!({ "error": "authentication challenge is invalid or expired", "code": "auth_challenge_invalid" })),
+            Json(
+                json!({ "error": "authentication challenge is invalid or expired", "code": "auth_challenge_invalid" }),
+            ),
         )
             .into_response();
     }
@@ -318,12 +323,9 @@ async fn verify_wallet_auth_challenge(
 
     let token = wallet_auth::random_opaque_value();
     let expires_at = now + WALLET_AUTH_TOKEN_SECS;
-    if let Err(error) = index_db.create_wallet_auth_token(
-        &wallet_auth::token_hash(&token),
-        &body.address,
-        expires_at,
-        now,
-    ) {
+    if let Err(error) =
+        index_db.create_wallet_auth_token(&wallet_auth::token_hash(&token), &body.address, expires_at, now)
+    {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": error.to_string(), "code": "db_error" })),
@@ -334,10 +336,7 @@ async fn verify_wallet_auth_challenge(
     Json(json!({ "token": token, "expires_at": expires_at, "address": body.address })).into_response()
 }
 
-async fn revoke_wallet_auth_token(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> impl IntoResponse {
+async fn revoke_wallet_auth_token(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
     let token = match wallet_bearer_token(&headers) {
         Ok(token) => token,
         Err(response) => return response,
@@ -3239,6 +3238,10 @@ fn valid_stellar_address(address: &str) -> bool {
     address.starts_with('G') && address.len() >= 56
 }
 
+fn valid_contract_address(address: &str) -> bool {
+    address.starts_with('C') && address.len() >= 56
+}
+
 fn new_copy_entity_id() -> String {
     let ts = chrono::Utc::now()
         .timestamp_nanos_opt()
@@ -3249,6 +3252,7 @@ fn new_copy_entity_id() -> String {
 fn copy_session_json(session: &CopySessionRow) -> Value {
     json!({
         "id": session.id,
+        "contract_address": session.contract_address,
         "contract_session_id": session.contract_session_id,
         "follower_address": session.follower_address,
         "leader_address": session.leader_address,
@@ -3336,15 +3340,7 @@ fn reconcile_copy_ops(index_db: &IndexDb, session: &mut CopySessionRow) -> Resul
     }
 
     if copy_session_expired(session.expires_at, Utc::now().timestamp()) {
-        index_db.update_copy_session(
-            &session.id,
-            Some("paused"),
-            None,
-            None,
-            None,
-            None,
-            None,
-        )?;
+        index_db.update_copy_session(&session.id, Some("paused"), None, None, None, None, None, None)?;
         session.status = "paused".to_string();
         return Ok(());
     }
@@ -3434,6 +3430,7 @@ fn reconcile_copy_ops(index_db: &IndexDb, session: &mut CopySessionRow) -> Resul
             Some(&last_event_id),
             None,
             None,
+            None,
         )?;
         session.watermark_ts = last_created_at;
         session.watermark_event_id = last_event_id;
@@ -3483,7 +3480,16 @@ struct CreateCopySessionBody {
     max_per_op_quote_xlm: Option<f64>,
     max_daily_quote_xlm: Option<f64>,
     expires_at: Option<i64>,
+    contract_address: Option<String>,
     contract_session_id: Option<u32>,
+}
+
+fn policy_binding_response(error: PolicyBindingError) -> axum::response::Response {
+    let status = match &error {
+        PolicyBindingError::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
+        PolicyBindingError::Mismatch(_) => StatusCode::UNPROCESSABLE_ENTITY,
+    };
+    (status, Json(json!({ "error": error.message(), "code": error.code() }))).into_response()
 }
 
 async fn create_copy_session(
@@ -3536,6 +3542,44 @@ async fn create_copy_session(
     }
 
     let include_claims = body.include_claims.unwrap_or(false);
+    if body.contract_address.is_some() != body.contract_session_id.is_some() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": "contract_address and contract_session_id must be provided together",
+                "code": "policy_binding_incomplete"
+            })),
+        )
+            .into_response();
+    }
+    if let (Some(contract_address), Some(contract_session_id)) =
+        (body.contract_address.as_deref(), body.contract_session_id)
+    {
+        if !valid_contract_address(contract_address) {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "invalid policy contract address", "code": "bad_contract_address" })),
+            )
+                .into_response();
+        }
+        if let Err(error) = verify_policy_binding(
+            &state.copy_policy_rpc,
+            contract_address,
+            contract_session_id,
+            &body.follower_address,
+            &body.leader_address,
+            body.coefficient,
+            include_claims,
+            body.allowed_pools.as_deref().unwrap_or(&[]),
+            max_per_op,
+            max_daily,
+            body.expires_at,
+        )
+        .await
+        {
+            return policy_binding_response(error);
+        }
+    }
     let index_db = state.index_db.lock().unwrap();
     match index_db.create_copy_session(
         &body.follower_address,
@@ -3546,6 +3590,7 @@ async fn create_copy_session(
         max_per_op,
         max_daily,
         body.expires_at,
+        body.contract_address.as_deref(),
         body.contract_session_id,
     ) {
         Ok(session) => Json(copy_session_json(&session)).into_response(),
@@ -3598,6 +3643,7 @@ struct UpdateCopySessionBody {
     status: Option<String>,
     coefficient: Option<f64>,
     include_claims: Option<bool>,
+    contract_address: Option<String>,
     contract_session_id: Option<u32>,
 }
 
@@ -3605,6 +3651,7 @@ fn bound_policy_update_conflicts(
     session: &CopySessionRow,
     coefficient: Option<f64>,
     include_claims: Option<bool>,
+    contract_address: Option<&str>,
     contract_session_id: Option<u32>,
 ) -> bool {
     let Some(bound_session_id) = session.contract_session_id else {
@@ -3612,6 +3659,7 @@ fn bound_policy_update_conflicts(
     };
     coefficient.is_some_and(|value| coefficient_ppm(value) != coefficient_ppm(session.coefficient))
         || include_claims.is_some_and(|value| value != session.include_claims)
+        || contract_address.is_some_and(|value| session.contract_address.as_deref().is_some_and(|bound| bound != value))
         || contract_session_id.is_some_and(|value| value != bound_session_id)
 }
 
@@ -3653,8 +3701,19 @@ async fn update_copy_session_handler(
         }
     }
 
-    let index_db = state.index_db.lock().unwrap();
-    match index_db.get_copy_session(&id) {
+    if body.contract_address.is_some() != body.contract_session_id.is_some() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": "contract_address and contract_session_id must be provided together",
+                "code": "policy_binding_incomplete"
+            })),
+        )
+            .into_response();
+    }
+
+    let session_result = { state.index_db.lock().unwrap().get_copy_session(&id) };
+    match session_result {
         Ok(None) => (
             StatusCode::NOT_FOUND,
             Json(json!({ "error": "copy session not found", "code": "not_found" })),
@@ -3675,6 +3734,7 @@ async fn update_copy_session_handler(
                 &session,
                 body.coefficient,
                 body.include_claims,
+                body.contract_address.as_deref(),
                 body.contract_session_id,
             ) {
                 return (
@@ -3699,6 +3759,36 @@ async fn update_copy_session_handler(
                     .into_response();
             }
 
+            if let (Some(contract_address), Some(contract_session_id)) =
+                (body.contract_address.as_deref(), body.contract_session_id)
+            {
+                if !valid_contract_address(contract_address) {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(json!({ "error": "invalid policy contract address", "code": "bad_contract_address" })),
+                    )
+                        .into_response();
+                }
+                if let Err(error) = verify_policy_binding(
+                    &state.copy_policy_rpc,
+                    contract_address,
+                    contract_session_id,
+                    &session.follower_address,
+                    &session.leader_address,
+                    body.coefficient.unwrap_or(session.coefficient),
+                    body.include_claims.unwrap_or(session.include_claims),
+                    &session.allowed_pools,
+                    session.max_per_op_quote_xlm,
+                    session.max_daily_quote_xlm,
+                    session.expires_at,
+                )
+                .await
+                {
+                    return policy_binding_response(error);
+                }
+            }
+
+            let index_db = state.index_db.lock().unwrap();
             match index_db.update_copy_session(
                 &id,
                 body.status.as_deref(),
@@ -3706,6 +3796,7 @@ async fn update_copy_session_handler(
                 None,
                 None,
                 body.include_claims,
+                body.contract_address.as_deref(),
                 body.contract_session_id,
             ) {
                 Ok(()) => match index_db.get_copy_session(&id) {
@@ -4020,8 +4111,16 @@ async fn prepare_copy_op(
         )
             .into_response();
     }
-    let contract_id = std::env::var("COPY_POLICY").ok();
-    let network = std::env::var("STELLAR_NETWORK").unwrap_or_else(|_| "testnet".to_string());
+    let Some(contract_id) = session.contract_address.as_deref() else {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({ "error": "verified policy contract is not configured", "code": "policy_contract_missing" })),
+        )
+            .into_response();
+    };
+    let network = std::env::var("COPY_POLICY_NETWORK")
+        .or_else(|_| std::env::var("STELLAR_NETWORK"))
+        .unwrap_or_else(|_| "testnet".to_string());
     if network != "testnet" {
         return (
             StatusCode::CONFLICT,
@@ -4065,11 +4164,7 @@ struct SetCopyOpStatusBody {
     note: Option<String>,
 }
 
-async fn get_copy_op(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-    headers: HeaderMap,
-) -> impl IntoResponse {
+async fn get_copy_op(State(state): State<AppState>, Path(id): Path<String>, headers: HeaderMap) -> impl IntoResponse {
     let index_db = state.index_db.lock().unwrap();
     let result = index_db.get_copy_op(&id);
     let session = match result.as_ref() {
@@ -4221,6 +4316,7 @@ mod tests {
     fn copy_session_fixture() -> CopySessionRow {
         CopySessionRow {
             id: "session".into(),
+            contract_address: Some("CPOLICY".into()),
             contract_session_id: Some(42),
             follower_address: "GFOLLOWER".into(),
             leader_address: "GLEADER".into(),
@@ -4242,16 +4338,30 @@ mod tests {
     #[test]
     fn bound_copy_policy_rejects_local_policy_drift() {
         let session = copy_session_fixture();
-        assert!(!bound_policy_update_conflicts(&session, None, None, None));
+        assert!(!bound_policy_update_conflicts(&session, None, None, None, None));
         assert!(!bound_policy_update_conflicts(
             &session,
             Some(0.5),
             Some(true),
+            Some("CPOLICY"),
             Some(42)
         ));
-        assert!(bound_policy_update_conflicts(&session, Some(0.6), None, None));
-        assert!(bound_policy_update_conflicts(&session, None, Some(false), None));
-        assert!(bound_policy_update_conflicts(&session, None, None, Some(43)));
+        assert!(bound_policy_update_conflicts(&session, Some(0.6), None, None, None));
+        assert!(bound_policy_update_conflicts(&session, None, Some(false), None, None));
+        assert!(bound_policy_update_conflicts(
+            &session,
+            None,
+            None,
+            Some("COTHER"),
+            Some(42)
+        ));
+        assert!(bound_policy_update_conflicts(
+            &session,
+            None,
+            None,
+            Some("CPOLICY"),
+            Some(43)
+        ));
 
         let mut unbound = session;
         unbound.contract_session_id = None;
@@ -4259,7 +4369,18 @@ mod tests {
             &unbound,
             Some(0.6),
             Some(false),
+            Some("COTHER"),
             Some(43)
+        ));
+
+        let mut legacy = copy_session_fixture();
+        legacy.contract_address = None;
+        assert!(!bound_policy_update_conflicts(
+            &legacy,
+            None,
+            None,
+            Some("CPOLICY"),
+            Some(42)
         ));
     }
 

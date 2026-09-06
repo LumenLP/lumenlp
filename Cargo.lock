@@ -57,6 +57,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "stellar-strkey 0.0.13",
+ "stellar-xdr 23.0.0",
  "tokio",
  "tower-http",
  "tracing",

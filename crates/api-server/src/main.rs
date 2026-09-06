@@ -30,6 +30,8 @@ use {
     tracing::{info, info_span, warn, Span},
 };
 
+const TESTNET_PASSPHRASE: &str = "Test SDF Network ; September 2015";
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -37,11 +39,16 @@ async fn main() -> Result<()> {
         .init();
 
     let rpc_url = std::env::var("RPC_URL").unwrap_or_else(|_| "http://127.0.0.1:8003".into());
+    let copy_policy_rpc_url =
+        std::env::var("COPY_POLICY_RPC_URL").unwrap_or_else(|_| "https://soroban-testnet.stellar.org".into());
+    let copy_policy_network_passphrase =
+        std::env::var("COPY_POLICY_NETWORK_PASSPHRASE").unwrap_or_else(|_| TESTNET_PASSPHRASE.into());
     let db_path = std::env::var("DATABASE_PATH").unwrap_or_else(|_| "./data/lumenlp.db".into());
     let index_db_path = std::env::var("INDEXER_DB_PATH").unwrap_or_else(|_| "./data/pool-indexer.db".into());
     let bind = std::env::var("BIND").unwrap_or_else(|_| "0.0.0.0:8080".into());
 
     let rpc = Arc::new(SorobanRpc::new(&rpc_url, MAINNET_PASSPHRASE));
+    let copy_policy_rpc = Arc::new(SorobanRpc::new(&copy_policy_rpc_url, &copy_policy_network_passphrase));
     let db = Arc::new(Mutex::new(Db::open(&db_path)?));
     let index_db = Arc::new(Mutex::new(IndexDb::open(&index_db_path)?));
     let token_meta_cache = Arc::new(Mutex::new(HashMap::new()));
@@ -51,6 +58,7 @@ async fn main() -> Result<()> {
         .and_then(|url| redis::Client::open(url).ok());
     let state = AppState {
         rpc,
+        copy_policy_rpc,
         db,
         index_db,
         token_meta_cache,

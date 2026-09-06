@@ -151,17 +151,28 @@ must not be treated as executed merely because a transaction was constructed.
 
 ## Bind a local session
 
-After the Soroban owner has registered a session, bind its numeric ID to the
-matching local Copy session through the API. The leader, allowed pools,
-coefficient, claim setting, expiry, and quote limits must already match the
-on-chain policy; `contract_session_id` is only an identity binding and does not
-replace those checks.
+After the Soroban owner has registered a session, bind its contract address and
+numeric ID to the matching local Copy session through the API. The contract
+must be owned by the authenticated follower. The leader, allowed pools,
+coefficient, claim setting, expiry, and quote limits must also match the
+on-chain policy. The API reads `policy_owner` and `session` through Soroban RPC
+and fails closed before storing the binding. A bound policy requires at least
+one explicitly allowlisted pool; an empty local pool list is review-only.
+
+The API uses a dedicated policy RPC so testnet policy verification cannot be
+accidentally sent to the mainnet analytics RPC:
+
+```sh
+COPY_POLICY_RPC_URL=https://soroban-testnet.stellar.org
+COPY_POLICY_NETWORK=testnet
+COPY_POLICY_NETWORK_PASSPHRASE='Test SDF Network ; September 2015'
+```
 
 ```sh
 curl -X PATCH https://api.lumenlp.xyz/v1/copy/sessions/<local-session-id> \
   -H 'authorization: Bearer <wallet-auth-token>' \
   -H 'content-type: application/json' \
-  -d '{"follower_address":"G...","contract_session_id":42}'
+  -d '{"follower_address":"G...","contract_address":"C...","contract_session_id":42}'
 ```
 
 Use the returned session JSON to confirm the binding before running the
@@ -171,7 +182,8 @@ the numeric ID. The API verifies both the wallet bearer token and the stored
 session owner before accepting the update. This API authentication protects
 the control plane; the Soroban policy remains the execution authority.
 
-Once `contract_session_id` is bound, the API rejects changes to the local
-coefficient, claim setting, or contract session identity. Pause, resume, and
-stop remain available. Create and bind a new Copy session when policy terms
-change so local preparation cannot silently drift from the on-chain policy.
+Once the contract and session are bound, the API rejects changes to the local
+coefficient, claim setting, contract address, or contract session identity.
+Pause, resume, and stop remain available. Create and bind a new Copy session
+when policy terms change so local preparation cannot silently drift from the
+on-chain policy.

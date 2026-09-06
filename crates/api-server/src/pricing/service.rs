@@ -257,10 +257,10 @@ mod tests {
                 .unwrap()
                 .current_price
                 .parse::<f64>()
-                .unwrap() -
-                0.17)
-                .abs() <
-                1e-9
+                .unwrap()
+                - 0.17)
+                .abs()
+                < 1e-9
         );
         let prices = parse_freighter_prices(&env);
         assert!((prices["native"] - 0.17).abs() < 1e-9);
