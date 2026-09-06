@@ -16,7 +16,10 @@ use {
     },
     axum::{
         extract::{Path, Query, State},
-        http::{header::CACHE_CONTROL, HeaderName, HeaderValue, StatusCode},
+        http::{
+            header::{AUTHORIZATION, CACHE_CONTROL},
+            HeaderMap, HeaderName, HeaderValue, StatusCode,
+        },
         response::IntoResponse,
         routing::{get, patch, post},
         Json, Router,
@@ -126,6 +129,52 @@ const LEADER_LIST_CACHE_SECS: u64 = 30;
 const INDEXER_STATUS_CACHE_SECS: u64 = 5;
 const WALLET_AUTH_CHALLENGE_SECS: i64 = 5 * 60;
 const WALLET_AUTH_TOKEN_SECS: i64 = 15 * 60;
+
+fn require_wallet_auth(
+    state: &AppState,
+    headers: &HeaderMap,
+    expected_address: &str,
+) -> Result<(), axum::response::Response> {
+    let token = headers
+        .get(AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({ "error": "wallet authentication is required", "code": "auth_required" })),
+            )
+                .into_response()
+        })?;
+    let address = state
+        .index_db
+        .lock()
+        .unwrap()
+        .wallet_auth_token_address(&wallet_auth::token_hash(token), Utc::now().timestamp())
+        .map_err(|error| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": error.to_string(), "code": "db_error" })),
+            )
+                .into_response()
+        })?
+        .ok_or_else(|| {
+            (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({ "error": "wallet authentication expired or invalid", "code": "auth_invalid" })),
+            )
+                .into_response()
+        })?;
+    if address != expected_address {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(json!({ "error": "authenticated wallet does not match follower", "code": "auth_address_mismatch" })),
+        )
+            .into_response());
+    }
+    Ok(())
+}
 
 #[derive(Deserialize)]
 struct WalletAuthChallengeBody {
@@ -3384,6 +3433,7 @@ struct CreateCopySessionBody {
 
 async fn create_copy_session(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(body): Json<CreateCopySessionBody>,
 ) -> impl IntoResponse {
     if !valid_stellar_address(&body.follower_address) {
@@ -3392,6 +3442,9 @@ async fn create_copy_session(
             Json(json!({ "error": "invalid follower address", "code": "bad_address" })),
         )
             .into_response();
+    }
+    if let Err(response) = require_wallet_auth(&state, &headers, &body.follower_address) {
+        return response;
     }
     if !valid_stellar_address(&body.leader_address) {
         return (
@@ -3506,6 +3559,7 @@ fn bound_policy_update_conflicts(
 async fn update_copy_session_handler(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    headers: HeaderMap,
     Json(body): Json<UpdateCopySessionBody>,
 ) -> impl IntoResponse {
     if !valid_stellar_address(&body.follower_address) {
@@ -3514,6 +3568,9 @@ async fn update_copy_session_handler(
             Json(json!({ "error": "invalid follower address", "code": "bad_address" })),
         )
             .into_response();
+    }
+    if let Err(response) = require_wallet_auth(&state, &headers, &body.follower_address) {
+        return response;
     }
     if let Some(ref status) = body.status {
         if !COPY_SESSION_STATUSES.contains(&status.as_str()) {
@@ -3692,6 +3749,7 @@ struct PrepareCopyOpBody {
 async fn prepare_copy_op(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    headers: HeaderMap,
     Json(body): Json<PrepareCopyOpBody>,
 ) -> impl IntoResponse {
     if !valid_stellar_address(&body.follower_address) {
@@ -3700,6 +3758,9 @@ async fn prepare_copy_op(
             Json(json!({ "error": "invalid follower address", "code": "bad_address" })),
         )
             .into_response();
+    }
+    if let Err(response) = require_wallet_auth(&state, &headers, &body.follower_address) {
+        return response;
     }
 
     let index_db = state.index_db.lock().unwrap();
@@ -3970,6 +4031,7 @@ async fn get_copy_op(State(state): State<AppState>, Path(id): Path<String>) -> i
 async fn set_copy_op_status(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    headers: HeaderMap,
     Json(body): Json<SetCopyOpStatusBody>,
 ) -> impl IntoResponse {
     if !valid_stellar_address(&body.follower_address) {
@@ -3978,6 +4040,9 @@ async fn set_copy_op_status(
             Json(json!({ "error": "invalid follower address", "code": "bad_address" })),
         )
             .into_response();
+    }
+    if let Err(response) = require_wallet_auth(&state, &headers, &body.follower_address) {
+        return response;
     }
     if !COPY_OP_STATUSES.contains(&body.status.as_str()) {
         return (

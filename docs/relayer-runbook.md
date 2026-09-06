@@ -15,9 +15,9 @@ for Copy LP controls:
 4. The database stores only the SHA-256 token hash; expired records are pruned during challenge creation.
 
 Challenges are single-use and bind the message, account, nonce, and expiry.
-The Copy endpoints will require the resulting bearer token once the web wallet
-flow and server enforcement are deployed together. Until that cutover, the
-follower-address owner check is a compatibility boundary, not authentication.
+Creating or updating a Copy session, preparing an operation, and updating an
+operation status require the resulting bearer token. The authenticated account
+must also match the request's follower address and the stored session owner.
 
 ## Boundary
 
@@ -155,6 +155,7 @@ replace those checks.
 
 ```sh
 curl -X PATCH https://api.lumenlp.xyz/v1/copy/sessions/<local-session-id> \
+  -H 'authorization: Bearer <wallet-auth-token>' \
   -H 'content-type: application/json' \
   -d '{"follower_address":"G...","contract_session_id":42}'
 ```
@@ -162,10 +163,9 @@ curl -X PATCH https://api.lumenlp.xyz/v1/copy/sessions/<local-session-id> \
 Use the returned session JSON to confirm the binding before running the
 relayer. If the local and on-chain policies do not describe the same follower
 workflow, stop and create a new isolated testnet session instead of reusing
-the numeric ID. The API compares `follower_address` with the session owner to
-prevent cross-session updates, but that field alone is not wallet-signature
-authentication; production mutation authorization must use the signed policy
-flow.
+the numeric ID. The API verifies both the wallet bearer token and the stored
+session owner before accepting the update. This API authentication protects
+the control plane; the Soroban policy remains the execution authority.
 
 Once `contract_session_id` is bound, the API rejects changes to the local
 coefficient, claim setting, or contract session identity. Pause, resume, and

@@ -358,6 +358,8 @@ paths:
           description: Sessions
     post:
       summary: Create copy session
+      security:
+        - walletBearer: []
       requestBody:
         required: true
         content:
@@ -370,7 +372,9 @@ paths:
   /v1/copy/sessions/{id}:
     patch:
       summary: Update a follower-owned copy session
-      description: The follower address must match the session owner. This owner binding is not a substitute for wallet-signature authentication.
+      description: Requires a short-lived wallet bearer token whose account matches the session owner and follower address.
+      security:
+        - walletBearer: []
       parameters:
         - $ref: "#/components/parameters/SessionId"
       requestBody:
@@ -434,10 +438,44 @@ paths:
                 $ref: "#/components/schemas/CopyOp"
         "404":
           description: Not found
+  /v1/copy/ops/{id}/prepare:
+    post:
+      summary: Validate and prepare a policy-scoped Copy operation
+      description: Requires a short-lived wallet bearer token whose account matches the owner of the op's Copy session.
+      security:
+        - walletBearer: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [follower_address]
+              properties:
+                follower_address: { type: string }
+      responses:
+        "200":
+          description: Validated policy call description
+        "401":
+          description: Wallet token missing, invalid, or expired
+        "403":
+          description: Authenticated account does not own the Copy session
+        "409":
+          description: Session or operation is not executable in its current state
+        "422":
+          description: Operation is unsupported or lacks verified execution data
   /v1/copy/ops/{id}/status:
     post:
       summary: Update a user-reviewed Copy op status
-      description: The follower address must match the owner of the op's Copy session. This owner binding is not a substitute for wallet-signature authentication.
+      description: Requires a short-lived wallet bearer token whose account matches the owner of the op's Copy session.
+      security:
+        - walletBearer: []
       parameters:
         - name: id
           in: path
@@ -461,9 +499,12 @@ paths:
           description: Not found
         "409":
           description: Invalid status transition
-        "409":
-          description: Invalid status transition
 components:
+  securitySchemes:
+    walletBearer:
+      type: http
+      scheme: bearer
+      description: Opaque 15-minute token obtained from the SEP-53 challenge exchange.
   parameters:
     PoolAddress:
       name: address

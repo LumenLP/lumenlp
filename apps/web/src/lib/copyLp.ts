@@ -1,4 +1,5 @@
 import { ApiError, getJson, patchJson, postJson } from "./api";
+import { walletAuthHeaders } from "./walletAuth";
 
 export function formatCopyError(error: unknown, fallback: string): string {
   const code = error instanceof ApiError ? error.code : undefined;
@@ -15,6 +16,12 @@ export function formatCopyError(error: unknown, fallback: string): string {
       return "The Copy Policy has expired. Start a new session with a fresh expiry.";
     case "policy_binding_conflict":
       return "This session is already bound on-chain. Start a new session to change policy limits or settings.";
+    case "auth_required":
+    case "auth_invalid":
+    case "auth_challenge_invalid":
+    case "auth_signature_invalid":
+    case "auth_address_mismatch":
+      return "Wallet authentication failed. Reconnect the follower wallet and try again.";
     case "per_operation_limit":
       return "This operation exceeds the configured per-operation limit.";
     case "daily_limit":
@@ -171,7 +178,7 @@ export async function createCopySession(body: {
   expires_at?: number | null;
   contract_session_id?: number;
 }): Promise<CopySession> {
-  return postJson<CopySession>("/v1/copy/sessions", body);
+  return postJson<CopySession>("/v1/copy/sessions", body, await walletAuthHeaders(body.follower_address));
 }
 
 export async function listCopySessions(follower: string): Promise<CopySession[]> {
@@ -202,10 +209,11 @@ export async function patchCopySession(
     contract_session_id?: number;
   },
 ): Promise<CopySession> {
-  return patchJson<CopySession>(`/v1/copy/sessions/${encodeURIComponent(id)}`, {
-    ...body,
-    follower_address: followerAddress,
-  });
+  return patchJson<CopySession>(
+    `/v1/copy/sessions/${encodeURIComponent(id)}`,
+    { ...body, follower_address: followerAddress },
+    await walletAuthHeaders(followerAddress),
+  );
 }
 
 export async function setCopyOpStatus(
@@ -216,6 +224,7 @@ export async function setCopyOpStatus(
   await postJson<{ id: string; status: string }>(
     `/v1/copy/ops/${encodeURIComponent(id)}/status`,
     { follower_address: followerAddress, status },
+    await walletAuthHeaders(followerAddress),
   );
 }
 
@@ -227,6 +236,7 @@ export async function prepareCopyOp(id: string, followerAddress: string): Promis
   return postJson<PreparedCopyOp>(
     `/v1/copy/ops/${encodeURIComponent(id)}/prepare`,
     { follower_address: followerAddress },
+    await walletAuthHeaders(followerAddress),
   );
 }
 

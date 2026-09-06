@@ -451,18 +451,18 @@ export function getJson<T>(path: string): Promise<T> {
   return requestJson<T>(path);
 }
 
-export function postJson<T>(path: string, body?: unknown): Promise<T> {
+export function postJson<T>(path: string, body?: unknown, headers?: Record<string, string>): Promise<T> {
   return requestJson<T>(path, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...headers },
     body: body != null ? JSON.stringify(body) : undefined,
   });
 }
 
-export function patchJson<T>(path: string, body: unknown): Promise<T> {
+export function patchJson<T>(path: string, body: unknown, headers?: Record<string, string>): Promise<T> {
   return requestJson<T>(path, {
     method: "PATCH",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...headers },
     body: JSON.stringify(body),
   });
 }
