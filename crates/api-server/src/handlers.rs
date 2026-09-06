@@ -3057,6 +3057,23 @@ fn copy_op_json(op: &CopyOpRow, venue: Option<&str>) -> Value {
     })
 }
 
+fn policy_reject_response(reason: PolicyReject) -> axum::response::Response {
+    let code = reason.code();
+    let status = if matches!(reason, PolicyReject::Expired) {
+        StatusCode::CONFLICT
+    } else {
+        StatusCode::UNPROCESSABLE_ENTITY
+    };
+    (
+        status,
+        Json(json!({
+            "error": format!("copy policy rejected: {code}"),
+            "code": code,
+        })),
+    )
+        .into_response()
+}
+
 fn copy_op_status(policy_result: Result<(), PolicyReject>, recorder_ready: bool) -> (String, Option<String>) {
     let (status, note) = match policy_result {
         Ok(()) => ("pending".to_string(), None),
@@ -3595,6 +3612,37 @@ async fn prepare_copy_op(
         )
             .into_response();
     };
+
+    let daily_start = Utc::now()
+        .date_naive()
+        .and_hms_opt(0, 0, 0)
+        .map(|value| value.and_utc().timestamp())
+        .unwrap_or(0);
+    let daily_used_xlm = {
+        let index_db = state.index_db.lock().unwrap();
+        match index_db.copy_quote_used_since_excluding(&session.id, daily_start, &op.id) {
+            Ok(value) => value,
+            Err(error) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": error.to_string(), "code": "db_error" })),
+                )
+                    .into_response();
+            }
+        }
+    };
+    if let Err(reason) = validate_copy_op(
+        &session,
+        "aquarius",
+        &op.kind,
+        &op.pool_address,
+        Some(quote_xlm),
+        Utc::now().timestamp(),
+        daily_used_xlm,
+    ) {
+        return policy_reject_response(reason);
+    }
+
     let quote_stroops = (quote_xlm * 10_000_000.0).floor() as i128;
     let Some(source_event_id) = source_event_id_bytes(&op.source_event_id) else {
         return (

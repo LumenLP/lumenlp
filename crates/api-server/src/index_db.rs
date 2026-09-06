@@ -561,6 +561,19 @@ impl IndexDb {
         )?)
     }
 
+    pub fn copy_quote_used_since_excluding(
+        &self,
+        session_id: &str,
+        since_ts: i64,
+        excluded_op_id: &str,
+    ) -> Result<f64> {
+        Ok(self.conn.query_row(
+            "SELECT COALESCE(SUM(scaled_quote_xlm), 0) FROM copy_ops WHERE session_id = ?1 AND created_at >= ?2 AND id != ?3 AND status != 'rejected'",
+            params![session_id, since_ts, excluded_op_id],
+            |row| row.get(0),
+        )?)
+    }
+
     pub fn pause_active_sessions_for_pair(&self, follower_address: &str, leader_address: &str) -> Result<()> {
         let now = chrono::Utc::now().timestamp();
         self.conn.execute(

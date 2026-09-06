@@ -88,7 +88,7 @@ function CopyInner() {
 
   const effectiveCoeff = customCoeff.trim() ? Number(customCoeff) : coefficient;
   const sessionLive = session?.status === "active" || session?.status === "paused";
-  const policyReady = Boolean(session?.contract_session_id) && policy.executionEnabled;
+  const policyReady = session?.contract_session_id != null && policy.executionEnabled;
 
   useEffect(() => {
     if (leaderFromQuery) setLeaderAddress(leaderFromQuery);
@@ -546,13 +546,13 @@ function CopyInner() {
               <span className="muted">On-chain policy session</span>
               <span>{session.contract_session_id ?? "Not bound"}</span>
             </div>
-            {!session.contract_session_id ? (
+            {session.contract_session_id == null ? (
               <p className="sign-disabled-note">
                 Bind an existing Soroban policy session before validating or preparing automatic
                 Copy LP operations. The queue can still be reviewed while policy is unbound.
               </p>
             ) : null}
-            {!session.contract_session_id ? (
+            {session.contract_session_id == null ? (
               <div className="copy-op-actions">
                 <input
                   className="filter-input"
