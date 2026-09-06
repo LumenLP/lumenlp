@@ -6,6 +6,7 @@ export type CopySession = {
   leader_address: string;
   coefficient: number;
   coefficient_ppm?: number | null;
+  contract_session_id?: number | null;
   status: "active" | "paused" | "stopped";
   include_claims: boolean;
   policy?: {
@@ -140,6 +141,7 @@ export async function createCopySession(body: {
   max_per_op_quote_xlm?: number;
   max_daily_quote_xlm?: number;
   expires_at?: number | null;
+  contract_session_id?: number;
 }): Promise<CopySession> {
   return postJson<CopySession>("/v1/copy/sessions", body);
 }

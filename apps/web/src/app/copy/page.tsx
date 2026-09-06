@@ -76,6 +76,7 @@ function CopyInner() {
   const [maxDaily, setMaxDaily] = useState("500");
   const [expiryDays, setExpiryDays] = useState("30");
   const [allowedPoolsText, setAllowedPoolsText] = useState("");
+  const [contractSessionId, setContractSessionId] = useState("");
   const [session, setSession] = useState<CopySession | null>(null);
   const [ops, setOps] = useState<CopyOp[]>([]);
   const [prepared, setPrepared] = useState<Record<string, PreparedCopyOp>>({});
@@ -162,6 +163,14 @@ function CopyInner() {
       setError("Allowed pools must be complete Stellar contract addresses starting with C");
       return;
     }
+    const contractSessionIdValue = contractSessionId.trim() ? Number(contractSessionId) : null;
+    if (
+      contractSessionIdValue !== null &&
+      (!Number.isInteger(contractSessionIdValue) || contractSessionIdValue < 0)
+    ) {
+      setError("On-chain policy session ID must be a non-negative whole number");
+      return;
+    }
     setStarting(true);
     setError(null);
     try {
@@ -174,6 +183,7 @@ function CopyInner() {
         max_daily_quote_xlm: maxDailyXlm,
         expires_at: Math.floor(Date.now() / 1000) + expiryDaysValue * 24 * 60 * 60,
         allowed_pools: allowedPools,
+        contract_session_id: contractSessionIdValue ?? undefined,
       });
       setSession(created);
     } catch (e) {
@@ -436,6 +446,22 @@ function CopyInner() {
                 allowlist is safer for unattended execution.
               </span>
             </label>
+            <label className="filter-field">
+              <span className="filter-label">On-chain policy session ID (optional)</span>
+              <input
+                className="filter-input"
+                type="number"
+                min="0"
+                step="1"
+                value={contractSessionId}
+                onChange={(e) => setContractSessionId(e.target.value)}
+                placeholder="Set after registering the Soroban policy session"
+              />
+              <span className="muted">
+                Bind an existing on-chain session. LumenLP does not create or sign the registration
+                transaction from this field.
+              </span>
+            </label>
 
             <div className="landing-actions" style={{ justifyContent: "flex-start" }}>
               <button
@@ -493,6 +519,10 @@ function CopyInner() {
                   ? `${session.policy.allowed_pools.length} allowlisted pool${session.policy.allowed_pools.length === 1 ? "" : "s"}`
                   : "All validated Aquarius pools"}
               </span>
+            </div>
+            <div className="copy-op-head">
+              <span className="muted">On-chain policy session</span>
+              <span>{session.contract_session_id ?? "Not bound"}</span>
             </div>
             <div className="copy-op-head">
               <span className="muted">Status</span>
