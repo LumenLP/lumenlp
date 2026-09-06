@@ -3035,6 +3035,10 @@ fn copy_session_json(session: &CopySessionRow) -> Value {
     })
 }
 
+fn copy_session_expired(expires_at: Option<i64>, now: i64) -> bool {
+    expires_at.is_some_and(|expires_at| now >= expires_at)
+}
+
 fn copy_op_json(op: &CopyOpRow, venue: Option<&str>) -> Value {
     let leader_amounts = serde_json::from_str(&op.leader_amounts_json).unwrap_or(Value::Null);
     let scaled_amounts = serde_json::from_str(&op.scaled_amounts_json).unwrap_or(Value::Null);
@@ -3096,10 +3100,7 @@ fn reconcile_copy_ops(index_db: &IndexDb, session: &mut CopySessionRow) -> Resul
         return Ok(());
     }
 
-    if session
-        .expires_at
-        .is_some_and(|expires_at| Utc::now().timestamp() >= expires_at)
-    {
+    if copy_session_expired(session.expires_at, Utc::now().timestamp()) {
         index_db.update_copy_session(
             &session.id,
             Some("paused"),
@@ -3390,34 +3391,49 @@ async fn update_copy_session_handler(
             Json(json!({ "error": "copy session not found", "code": "not_found" })),
         )
             .into_response(),
-        Ok(Some(_)) => match index_db.update_copy_session(
-            &id,
-            body.status.as_deref(),
-            body.coefficient,
-            None,
-            None,
-            body.include_claims,
-            body.contract_session_id,
-        ) {
-            Ok(()) => match index_db.get_copy_session(&id) {
-                Ok(Some(session)) => Json(copy_session_json(&session)).into_response(),
-                Ok(None) => (
-                    StatusCode::NOT_FOUND,
-                    Json(json!({ "error": "copy session not found", "code": "not_found" })),
+        Ok(Some(session)) => {
+            if body.status.as_deref() == Some("active")
+                && copy_session_expired(session.expires_at, Utc::now().timestamp())
+            {
+                return (
+                    StatusCode::CONFLICT,
+                    Json(json!({
+                        "error": "expired copy session cannot be resumed",
+                        "code": "policy_expired"
+                    })),
                 )
-                    .into_response(),
+                    .into_response();
+            }
+
+            match index_db.update_copy_session(
+                &id,
+                body.status.as_deref(),
+                body.coefficient,
+                None,
+                None,
+                body.include_claims,
+                body.contract_session_id,
+            ) {
+                Ok(()) => match index_db.get_copy_session(&id) {
+                    Ok(Some(session)) => Json(copy_session_json(&session)).into_response(),
+                    Ok(None) => (
+                        StatusCode::NOT_FOUND,
+                        Json(json!({ "error": "copy session not found", "code": "not_found" })),
+                    )
+                        .into_response(),
+                    Err(error) => (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({ "error": error.to_string(), "code": "db_error" })),
+                    )
+                        .into_response(),
+                },
                 Err(error) => (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(json!({ "error": error.to_string(), "code": "db_error" })),
                 )
                     .into_response(),
-            },
-            Err(error) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": error.to_string(), "code": "db_error" })),
-            )
-                .into_response(),
-        },
+            }
+        }
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": error.to_string(), "code": "db_error" })),
@@ -3812,6 +3828,14 @@ async fn set_copy_op_status(
 #[cfg(test)]
 mod tests {
     use {super::*, serde_json::json};
+
+    #[test]
+    fn copy_session_expiry_uses_inclusive_boundary() {
+        assert!(!copy_session_expired(None, 100));
+        assert!(!copy_session_expired(Some(101), 100));
+        assert!(copy_session_expired(Some(100), 100));
+        assert!(copy_session_expired(Some(99), 100));
+    }
 
     #[test]
     fn bridge_tvl_usd_skips_zero_and_negative() {
