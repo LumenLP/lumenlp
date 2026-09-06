@@ -75,7 +75,7 @@ function StrategiesInner() {
   }, [kind]);
 
   useEffect(() => {
-    if (!copyOpFromQuery) {
+    if (!copyOpFromQuery || !address) {
       setCopyDraft(null);
       return;
     }
@@ -85,7 +85,7 @@ function StrategiesInner() {
       return;
     }
     let cancelled = false;
-    void getCopyOp(copyOpFromQuery)
+    void getCopyOp(copyOpFromQuery, address)
       .then((op) => {
         if (!cancelled) setCopyDraft(copyOpToDraftSnapshot(op));
       })

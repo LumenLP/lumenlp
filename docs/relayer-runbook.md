@@ -15,8 +15,8 @@ for Copy LP controls:
 4. The database stores only the SHA-256 token hash; expired records are pruned during challenge creation.
 
 Challenges are single-use and bind the message, account, nonce, and expiry.
-Creating or updating a Copy session, preparing an operation, and updating an
-operation status require the resulting bearer token. The authenticated account
+All Copy session and operation reads and controls require the resulting bearer
+token; only aggregate recorder health remains public. The authenticated account
 must also match the request's follower address and the stored session owner.
 
 ## Boundary

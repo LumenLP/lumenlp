@@ -347,6 +347,9 @@ paths:
   /v1/copy/sessions:
     get:
       summary: List copy sessions for follower
+      description: Requires a short-lived wallet bearer token for the requested follower.
+      security:
+        - walletBearer: []
       parameters:
         - in: query
           name: follower
@@ -356,6 +359,8 @@ paths:
       responses:
         "200":
           description: Sessions
+        "401":
+          description: Wallet token missing, invalid, or expired
     post:
       summary: Create copy session
       security:
@@ -401,6 +406,9 @@ paths:
   /v1/copy/sessions/{id}/ops:
     get:
       summary: List copy ops (reconciles on read)
+      description: Requires a short-lived wallet bearer token for the session owner.
+      security:
+        - walletBearer: []
       parameters:
         - $ref: "#/components/parameters/SessionId"
         - in: query
@@ -420,9 +428,16 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/CopyOp"
+        "401":
+          description: Wallet token missing, invalid, or expired
+        "404":
+          description: Session not found
   /v1/copy/ops/{id}:
     get:
       summary: Get one copy op (scaled amounts)
+      description: Requires a short-lived wallet bearer token for the operation's session owner.
+      security:
+        - walletBearer: []
       parameters:
         - name: id
           in: path
@@ -436,6 +451,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/CopyOp"
+        "401":
+          description: Wallet token missing, invalid, or expired
         "404":
           description: Not found
   /v1/copy/ops/{id}/prepare:

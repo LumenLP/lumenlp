@@ -447,8 +447,8 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-export function getJson<T>(path: string): Promise<T> {
-  return requestJson<T>(path);
+export function getJson<T>(path: string, headers?: Record<string, string>): Promise<T> {
+  return requestJson<T>(path, { headers });
 }
 
 export function postJson<T>(path: string, body?: unknown, headers?: Record<string, string>): Promise<T> {

@@ -3509,6 +3509,7 @@ struct ListCopySessionsQuery {
 
 async fn list_copy_sessions(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(q): Query<ListCopySessionsQuery>,
 ) -> impl IntoResponse {
     if !valid_stellar_address(&q.follower) {
@@ -3517,6 +3518,9 @@ async fn list_copy_sessions(
             Json(json!({ "error": "invalid follower address", "code": "bad_address" })),
         )
             .into_response();
+    }
+    if let Err(response) = require_wallet_auth(&state, &headers, &q.follower) {
+        return response;
     }
 
     let index_db = state.index_db.lock().unwrap();
@@ -3685,10 +3689,10 @@ struct ListCopyOpsQuery {
 async fn list_copy_ops(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    headers: HeaderMap,
     Query(q): Query<ListCopyOpsQuery>,
 ) -> impl IntoResponse {
-    let index_db = state.index_db.lock().unwrap();
-    let mut session = match index_db.get_copy_session(&id) {
+    let mut session = match state.index_db.lock().unwrap().get_copy_session(&id) {
         Ok(Some(session)) => session,
         Ok(None) => {
             return (
@@ -3705,6 +3709,11 @@ async fn list_copy_ops(
                 .into_response();
         }
     };
+    if let Err(response) = require_wallet_auth(&state, &headers, &session.follower_address) {
+        return response;
+    }
+
+    let index_db = state.index_db.lock().unwrap();
 
     if let Err(error) = reconcile_copy_ops(&index_db, &mut session) {
         return (
@@ -4001,10 +4010,39 @@ struct SetCopyOpStatusBody {
     note: Option<String>,
 }
 
-async fn get_copy_op(State(state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
+async fn get_copy_op(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
     let index_db = state.index_db.lock().unwrap();
     let result = index_db.get_copy_op(&id);
+    let session = match result.as_ref() {
+        Ok(Some(op)) => match index_db.get_copy_session(&op.session_id) {
+            Ok(Some(session)) => Some(session),
+            Ok(None) => {
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(json!({ "error": "copy session not found", "code": "not_found" })),
+                )
+                    .into_response();
+            }
+            Err(error) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": error.to_string(), "code": "db_error" })),
+                )
+                    .into_response();
+            }
+        },
+        _ => None,
+    };
     drop(index_db);
+    if let Some(session) = session {
+        if let Err(response) = require_wallet_auth(&state, &headers, &session.follower_address) {
+            return response;
+        }
+    }
     match result {
         Ok(Some(op)) => {
             let venue = state

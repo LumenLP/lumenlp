@@ -184,17 +184,20 @@ export async function createCopySession(body: {
 export async function listCopySessions(follower: string): Promise<CopySession[]> {
   const res = await getJson<{ sessions: CopySession[] }>(
     `/v1/copy/sessions?follower=${encodeURIComponent(follower)}`,
+    await walletAuthHeaders(follower),
   );
   return res.sessions;
 }
 
 export async function listCopyOps(
   sessionId: string,
+  followerAddress: string,
   status?: string,
 ): Promise<CopyOp[]> {
   const qs = status ? `?status=${encodeURIComponent(status)}` : "";
   const res = await getJson<{ session_id: string; ops: CopyOp[] }>(
     `/v1/copy/sessions/${encodeURIComponent(sessionId)}/ops${qs}`,
+    await walletAuthHeaders(followerAddress),
   );
   return res.ops;
 }
@@ -228,8 +231,11 @@ export async function setCopyOpStatus(
   );
 }
 
-export async function getCopyOp(id: string): Promise<CopyOp> {
-  return getJson<CopyOp>(`/v1/copy/ops/${encodeURIComponent(id)}`);
+export async function getCopyOp(id: string, followerAddress: string): Promise<CopyOp> {
+  return getJson<CopyOp>(
+    `/v1/copy/ops/${encodeURIComponent(id)}`,
+    await walletAuthHeaders(followerAddress),
+  );
 }
 
 export async function prepareCopyOp(id: string, followerAddress: string): Promise<PreparedCopyOp> {

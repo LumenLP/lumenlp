@@ -133,7 +133,7 @@ function CopyInner() {
     let cancelled = false;
     const fetchOps = async () => {
       try {
-        const list = await listCopyOps(session.id);
+        const list = await listCopyOps(session.id, address);
         if (!cancelled) setOps(list);
       } catch {
         /* poll errors are non-fatal */
@@ -145,7 +145,7 @@ function CopyInner() {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [session, sessionLive]);
+  }, [address, session, sessionLive]);
 
   async function onStart() {
     if (!address || !isGAddress(leaderAddress.trim())) return;
