@@ -198,6 +198,10 @@ This verification is not only a one-time enrollment check. The API repeats the
 same fail-closed comparison immediately before preparing each Copy operation.
 Replacing, pausing, disarming, or changing the on-chain session therefore
 prevents new execution payloads from being produced from stale local state.
+For a bound session, the web application maps Pause, Resume, and Stop to the
+owner-authorized `pause_session`, `resume_session`, and `disarm_session`
+contract calls. The wallet signs the prepared Soroban transaction, and local
+session state changes only after the transaction is confirmed on-chain.
 
 ## Repository Structure
 

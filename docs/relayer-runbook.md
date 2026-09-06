@@ -191,3 +191,8 @@ on-chain policy.
 The prepare endpoint repeats the owner and session checks on every request. A
 paused, disarmed, replaced, or unreachable policy must stop the relayer rather
 than falling back to a previously verified local binding.
+
+Bound-session Pause, Resume, and Stop controls are wallet-authorized Soroban
+transactions. Do not treat the local API status as authoritative until the
+corresponding transaction is confirmed; the web client deliberately updates
+local state only after confirmation.

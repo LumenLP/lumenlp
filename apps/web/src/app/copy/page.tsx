@@ -19,7 +19,11 @@ import {
 } from "@/lib/copyLp";
 import { useIdentity } from "@/lib/identity";
 import { newStrategyId, upsertStrategy } from "@/lib/strategies";
-import { copyPolicyConfig } from "@/lib/copyPolicy";
+import {
+  copyPolicyConfig,
+  submitPolicyControl,
+  type CopyPolicyControl,
+} from "@/lib/copyPolicy";
 
 const COEFF_PRESETS = [0.1, 1, 2] as const;
 const POLL_MS = 20_000;
@@ -86,6 +90,7 @@ function CopyInner() {
   const [starting, setStarting] = useState(false);
   const [actionBusy, setActionBusy] = useState<string | null>(null);
   const [bindingPolicy, setBindingPolicy] = useState(false);
+  const [policyTxHash, setPolicyTxHash] = useState<string | null>(null);
   const [nowMs, setNowMs] = useState(() => Date.now());
 
   const effectiveCoeff = customCoeff.trim() ? Number(customCoeff) : coefficient;
@@ -224,7 +229,19 @@ function CopyInner() {
     if (!session || !address) return;
     setActionBusy(status);
     setError(null);
+    setPolicyTxHash(null);
     try {
+      if (session.contract_address && session.contract_session_id != null) {
+        const control: CopyPolicyControl =
+          status === "active" ? "resume" : status === "paused" ? "pause" : "disarm";
+        const hash = await submitPolicyControl(
+          session.contract_address,
+          session.contract_session_id,
+          control,
+          address,
+        );
+        setPolicyTxHash(hash);
+      }
       const updated = await patchCopySession(session.id, address, { status });
       setSession(updated);
     } catch (e) {
@@ -644,6 +661,11 @@ function CopyInner() {
               <span className="muted">Status</span>
               <span className="badge">{session.status}</span>
             </div>
+            {policyTxHash ? (
+              <p className="sign-disabled-note">
+                Policy control confirmed on-chain: {shortAddr(policyTxHash)}
+              </p>
+            ) : null}
             {sessionLive ? (
               <div className="copy-op-actions">
                 {session.status === "active" ? (
@@ -652,7 +674,7 @@ function CopyInner() {
                     onClick={() => void onPatchStatus("paused")}
                     disabled={actionBusy !== null}
                   >
-                    Pause
+                    {actionBusy === "paused" ? "Confirming…" : "Pause"}
                   </button>
                 ) : (
                   <button
@@ -661,7 +683,7 @@ function CopyInner() {
                     onClick={() => void onPatchStatus("active")}
                     disabled={actionBusy !== null || policyExpired}
                   >
-                    {policyExpired ? "Expired" : "Resume"}
+                    {actionBusy === "active" ? "Confirming…" : policyExpired ? "Expired" : "Resume"}
                   </button>
                 )}
                 <button
@@ -669,7 +691,7 @@ function CopyInner() {
                   onClick={() => void onPatchStatus("stopped")}
                   disabled={actionBusy !== null}
                 >
-                  Stop
+                  {actionBusy === "stopped" ? "Confirming…" : "Stop"}
                 </button>
               </div>
             ) : (
