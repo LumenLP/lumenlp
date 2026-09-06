@@ -166,7 +166,12 @@ export async function listCopyOps(
 
 export async function patchCopySession(
   id: string,
-  body: { status?: string; coefficient?: number; include_claims?: boolean },
+  body: {
+    status?: string;
+    coefficient?: number;
+    include_claims?: boolean;
+    contract_session_id?: number;
+  },
 ): Promise<CopySession> {
   return patchJson<CopySession>(`/v1/copy/sessions/${encodeURIComponent(id)}`, body);
 }

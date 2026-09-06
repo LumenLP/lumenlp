@@ -83,6 +83,7 @@ function CopyInner() {
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const [actionBusy, setActionBusy] = useState<string | null>(null);
+  const [bindingPolicy, setBindingPolicy] = useState(false);
 
   const effectiveCoeff = customCoeff.trim() ? Number(customCoeff) : coefficient;
   const sessionLive = session?.status === "active" || session?.status === "paused";
@@ -204,6 +205,25 @@ function CopyInner() {
       setError(e instanceof Error ? e.message : "Session update failed");
     } finally {
       setActionBusy(null);
+    }
+  }
+
+  async function onBindPolicySession() {
+    if (!session) return;
+    const value = Number(contractSessionId.trim());
+    if (!Number.isInteger(value) || value < 0) {
+      setError("On-chain policy session ID must be a non-negative whole number");
+      return;
+    }
+    setBindingPolicy(true);
+    setError(null);
+    try {
+      const updated = await patchCopySession(session.id, { contract_session_id: value });
+      setSession(updated);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to bind policy session");
+    } finally {
+      setBindingPolicy(false);
     }
   }
 
@@ -524,6 +544,26 @@ function CopyInner() {
               <span className="muted">On-chain policy session</span>
               <span>{session.contract_session_id ?? "Not bound"}</span>
             </div>
+            {!session.contract_session_id ? (
+              <div className="copy-op-actions">
+                <input
+                  className="filter-input"
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={contractSessionId}
+                  onChange={(e) => setContractSessionId(e.target.value)}
+                  placeholder="Existing on-chain session ID"
+                />
+                <button
+                  type="button"
+                  onClick={() => void onBindPolicySession()}
+                  disabled={bindingPolicy}
+                >
+                  {bindingPolicy ? "Binding…" : "Bind policy"}
+                </button>
+              </div>
+            ) : null}
             <div className="copy-op-head">
               <span className="muted">Status</span>
               <span className="badge">{session.status}</span>
