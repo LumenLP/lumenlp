@@ -71,6 +71,36 @@ pub async fn verify_policy_binding(
         .map_err(|error| PolicyBindingError::Unavailable(error.to_string()))?;
     let session = parse_policy_session(&value).map_err(|error| PolicyBindingError::Unavailable(error.to_string()))?;
 
+    validate_policy_binding(
+        &owner,
+        &session,
+        follower_address,
+        leader_address,
+        coefficient,
+        include_claims,
+        allowed_pools,
+        max_per_op_quote_xlm,
+        max_daily_quote_xlm,
+        expires_at,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_policy_binding(
+    owner: &str,
+    session: &OnChainPolicySession,
+    follower_address: &str,
+    leader_address: &str,
+    coefficient: f64,
+    include_claims: bool,
+    allowed_pools: &[String],
+    max_per_op_quote_xlm: f64,
+    max_daily_quote_xlm: f64,
+    expires_at: Option<i64>,
+) -> Result<(), PolicyBindingError> {
+    if owner != follower_address {
+        return Err(PolicyBindingError::Mismatch("owner"));
+    }
     if session.leader != leader_address {
         return Err(PolicyBindingError::Mismatch("leader"));
     }
@@ -85,7 +115,7 @@ pub async fn verify_policy_binding(
     }
     let mut expected_pools = allowed_pools.to_vec();
     expected_pools.sort();
-    let mut actual_pools = session.allowed_pools;
+    let mut actual_pools = session.allowed_pools.clone();
     actual_pools.sort();
     if actual_pools != expected_pools {
         return Err(PolicyBindingError::Mismatch("pool allowlist"));
@@ -410,5 +440,46 @@ mod tests {
                 paused: false,
             }
         );
+    }
+
+    #[test]
+    fn binding_validation_rejects_policy_drift_and_pause() {
+        let mut actual = OnChainPolicySession {
+            leader: "GLEADER".into(),
+            allowed_pools: vec!["CPOOL".into()],
+            coefficient_ppm: 100_000,
+            follow_claims: true,
+            max_per_op_quote: 100_000_000,
+            max_daily_quote: 200_000_000,
+            expires_at: 2_000,
+            paused: false,
+        };
+        let validate = |session: &OnChainPolicySession| {
+            validate_policy_binding(
+                "GFOLLOWER",
+                session,
+                "GFOLLOWER",
+                "GLEADER",
+                0.1,
+                true,
+                &["CPOOL".into()],
+                10.0,
+                20.0,
+                Some(2_000),
+            )
+        };
+
+        assert!(validate(&actual).is_ok());
+        actual.coefficient_ppm = 200_000;
+        assert!(matches!(
+            validate(&actual),
+            Err(PolicyBindingError::Mismatch("coefficient"))
+        ));
+        actual.coefficient_ppm = 100_000;
+        actual.paused = true;
+        assert!(matches!(
+            validate(&actual),
+            Err(PolicyBindingError::Mismatch("active state"))
+        ));
     }
 }

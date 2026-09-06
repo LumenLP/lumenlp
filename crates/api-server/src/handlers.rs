@@ -3918,51 +3918,14 @@ async fn prepare_copy_op(
         return response;
     }
 
-    let index_db = state.index_db.lock().unwrap();
-    let op = match index_db.get_copy_op(&id) {
-        Ok(Some(op)) => op,
-        Ok(None) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({ "error": "copy op not found", "code": "not_found" })),
-            )
-                .into_response();
-        }
-        Err(error) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": error.to_string(), "code": "db_error" })),
-            )
-                .into_response();
-        }
-    };
-    let session = match index_db.get_copy_session(&op.session_id) {
-        Ok(Some(session)) => session,
-        Ok(None) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({ "error": "copy session not found", "code": "not_found" })),
-            )
-                .into_response();
-        }
-        Err(error) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": error.to_string(), "code": "db_error" })),
-            )
-                .into_response();
-        }
-    };
-    let claim_token = if op.kind == "claim" {
-        match index_db.recorder_claim_token(&op.source_event_id) {
-            Ok(Some(token)) if valid_stellar_address(&token) => Some(token),
-            Ok(_) => {
+    let (op, session, claim_token) = {
+        let index_db = state.index_db.lock().unwrap();
+        let op = match index_db.get_copy_op(&id) {
+            Ok(Some(op)) => op,
+            Ok(None) => {
                 return (
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    Json(json!({
-                        "error": "claim reward token is not verified",
-                        "code": "claim_token_missing"
-                    })),
+                    StatusCode::NOT_FOUND,
+                    Json(json!({ "error": "copy op not found", "code": "not_found" })),
                 )
                     .into_response();
             }
@@ -3973,11 +3936,50 @@ async fn prepare_copy_op(
                 )
                     .into_response();
             }
-        }
-    } else {
-        None
+        };
+        let session = match index_db.get_copy_session(&op.session_id) {
+            Ok(Some(session)) => session,
+            Ok(None) => {
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(json!({ "error": "copy session not found", "code": "not_found" })),
+                )
+                    .into_response();
+            }
+            Err(error) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": error.to_string(), "code": "db_error" })),
+                )
+                    .into_response();
+            }
+        };
+        let claim_token = if op.kind == "claim" {
+            match index_db.recorder_claim_token(&op.source_event_id) {
+                Ok(Some(token)) if valid_stellar_address(&token) => Some(token),
+                Ok(_) => {
+                    return (
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        Json(json!({
+                            "error": "claim reward token is not verified",
+                            "code": "claim_token_missing"
+                        })),
+                    )
+                        .into_response();
+                }
+                Err(error) => {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({ "error": error.to_string(), "code": "db_error" })),
+                    )
+                        .into_response();
+                }
+            }
+        } else {
+            None
+        };
+        (op, session, claim_token)
     };
-    drop(index_db);
 
     let venue = state
         .db
@@ -4032,6 +4034,13 @@ async fn prepare_copy_op(
         )
             .into_response();
     };
+    let Some(contract_id) = session.contract_address.as_deref() else {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({ "error": "verified policy contract is not configured", "code": "policy_contract_missing" })),
+        )
+            .into_response();
+    };
     let Some(quote_xlm) = op.scaled_quote_xlm.filter(|value| value.is_finite() && *value > 0.0) else {
         return (
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -4068,6 +4077,26 @@ async fn prepare_copy_op(
         daily_used_xlm,
     ) {
         return policy_reject_response(reason);
+    }
+
+    // Avoid RPC work for locally invalid operations, then fail closed on the
+    // latest on-chain policy state before preparing an execution payload.
+    if let Err(error) = verify_policy_binding(
+        &state.copy_policy_rpc,
+        contract_id,
+        contract_session_id,
+        &session.follower_address,
+        &session.leader_address,
+        session.coefficient,
+        session.include_claims,
+        &session.allowed_pools,
+        session.max_per_op_quote_xlm,
+        session.max_daily_quote_xlm,
+        session.expires_at,
+    )
+    .await
+    {
+        return policy_binding_response(error);
     }
 
     let quote_stroops = (quote_xlm * 10_000_000.0).floor() as i128;
@@ -4111,13 +4140,6 @@ async fn prepare_copy_op(
         )
             .into_response();
     }
-    let Some(contract_id) = session.contract_address.as_deref() else {
-        return (
-            StatusCode::CONFLICT,
-            Json(json!({ "error": "verified policy contract is not configured", "code": "policy_contract_missing" })),
-        )
-            .into_response();
-    };
     let network = std::env::var("COPY_POLICY_NETWORK")
         .or_else(|_| std::env::var("STELLAR_NETWORK"))
         .unwrap_or_else(|_| "testnet".to_string());
@@ -4132,6 +4154,7 @@ async fn prepare_copy_op(
     Json(json!({
         "ready": false,
         "validated": true,
+        "policy_verified_at": Utc::now().timestamp(),
         "network": network,
         "contract_id": contract_id,
         "method": "execute_aquarius_standard_op",

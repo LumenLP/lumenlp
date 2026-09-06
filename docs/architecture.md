@@ -194,6 +194,11 @@ silently falls back to a server-wide policy contract. Policy verification uses
 a dedicated `COPY_POLICY_RPC_URL` and network passphrase, isolated from the
 mainnet RPC that powers pool analytics.
 
+This verification is not only a one-time enrollment check. The API repeats the
+same fail-closed comparison immediately before preparing each Copy operation.
+Replacing, pausing, disarming, or changing the on-chain session therefore
+prevents new execution payloads from being produced from stale local state.
+
 ## Repository Structure
 
 ```text

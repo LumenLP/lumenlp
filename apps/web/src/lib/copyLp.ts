@@ -16,6 +16,10 @@ export function formatCopyError(error: unknown, fallback: string): string {
       return "The Copy Policy has expired. Start a new session with a fresh expiry.";
     case "policy_binding_conflict":
       return "This session is already bound on-chain. Start a new session to change policy limits or settings.";
+    case "policy_binding_mismatch":
+      return "The on-chain policy no longer matches this Copy session. Review or replace the policy before continuing.";
+    case "policy_binding_unavailable":
+      return "The on-chain policy could not be verified. Wait for the policy RPC to recover before continuing.";
     case "auth_required":
     case "auth_invalid":
     case "auth_challenge_invalid":
@@ -83,6 +87,7 @@ export type CopyOpStatus = Exclude<CopyOp["status"], "pending">;
 export type PreparedCopyOp = {
   ready: boolean;
   validated: boolean;
+  policy_verified_at?: number;
   network: string;
   contract_id: string | null;
   method: "execute_aquarius_standard_op";

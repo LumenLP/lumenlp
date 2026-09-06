@@ -35,4 +35,13 @@ describe("formatCopyError", () => {
       ),
     ).toContain("Wait a few seconds");
   });
+
+  it("fails closed when the bound policy changed or cannot be read", () => {
+    expect(
+      formatCopyError(new ApiError("mismatch", 422, "policy_binding_mismatch"), "fallback"),
+    ).toContain("no longer matches");
+    expect(
+      formatCopyError(new ApiError("unavailable", 503, "policy_binding_unavailable"), "fallback"),
+    ).toContain("could not be verified");
+  });
 });

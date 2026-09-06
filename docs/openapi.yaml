@@ -477,7 +477,7 @@ paths:
   /v1/copy/ops/{id}/prepare:
     post:
       summary: Validate and prepare a policy-scoped Copy operation
-      description: Requires a short-lived wallet bearer token whose account matches the owner of the op's Copy session.
+      description: Requires a short-lived wallet bearer token whose account matches the owner of the op's Copy session. Re-reads the bound policy owner and session from Soroban RPC before returning a call description, and fails closed if any policy term has drifted.
       security:
         - walletBearer: []
       parameters:
@@ -505,7 +505,9 @@ paths:
         "409":
           description: Session or operation is not executable in its current state
         "422":
-          description: Operation is unsupported or lacks verified execution data
+          description: Operation is unsupported, lacks verified execution data, or no longer matches the bound on-chain policy
+        "503":
+          description: The bound on-chain policy could not be verified
   /v1/copy/ops/{id}/status:
     post:
       summary: Update a user-reviewed Copy op status

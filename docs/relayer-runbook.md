@@ -187,3 +187,7 @@ coefficient, claim setting, contract address, or contract session identity.
 Pause, resume, and stop remain available. Create and bind a new Copy session
 when policy terms change so local preparation cannot silently drift from the
 on-chain policy.
+
+The prepare endpoint repeats the owner and session checks on every request. A
+paused, disarmed, replaced, or unreachable policy must stop the relayer rather
+than falling back to a previously verified local binding.
