@@ -3096,6 +3096,23 @@ fn reconcile_copy_ops(index_db: &IndexDb, session: &mut CopySessionRow) -> Resul
         return Ok(());
     }
 
+    if session
+        .expires_at
+        .is_some_and(|expires_at| Utc::now().timestamp() >= expires_at)
+    {
+        index_db.update_copy_session(
+            &session.id,
+            Some("paused"),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )?;
+        session.status = "paused".to_string();
+        return Ok(());
+    }
+
     loop {
         let since = session.watermark_ts.max(session.cursor_ts);
         let after_event_id = if since == session.watermark_ts {

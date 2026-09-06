@@ -615,9 +615,9 @@ function CopyInner() {
                     type="button"
                     className="primary"
                     onClick={() => void onPatchStatus("active")}
-                    disabled={actionBusy !== null}
+                    disabled={actionBusy !== null || policyExpired}
                   >
-                    Resume
+                    {policyExpired ? "Expired" : "Resume"}
                   </button>
                 )}
                 <button
