@@ -27,6 +27,10 @@ function isGAddress(a: string) {
   return a.startsWith("G") && a.length >= 56;
 }
 
+function isCAddress(a: string) {
+  return a.startsWith("C") && a.length >= 56;
+}
+
 function venueLabel(venue: string | null | undefined) {
   if (venue === "aquarius") return "Aquarius";
   if (venue === "soroswap" || venue === "soroswap_amm") return "Soroswap";
@@ -71,6 +75,7 @@ function CopyInner() {
   const [maxPerOp, setMaxPerOp] = useState("100");
   const [maxDaily, setMaxDaily] = useState("500");
   const [expiryDays, setExpiryDays] = useState("30");
+  const [allowedPoolsText, setAllowedPoolsText] = useState("");
   const [session, setSession] = useState<CopySession | null>(null);
   const [ops, setOps] = useState<CopyOp[]>([]);
   const [prepared, setPrepared] = useState<Record<string, PreparedCopyOp>>({});
@@ -149,6 +154,14 @@ function CopyInner() {
       setError("Policy expiry must be a whole number between 1 and 365 days");
       return;
     }
+    const allowedPools = allowedPoolsText
+      .split(/[\s,]+/)
+      .map((pool) => pool.trim())
+      .filter(Boolean);
+    if (allowedPools.some((pool) => !isCAddress(pool))) {
+      setError("Allowed pools must be complete Stellar contract addresses starting with C");
+      return;
+    }
     setStarting(true);
     setError(null);
     try {
@@ -160,6 +173,7 @@ function CopyInner() {
         max_per_op_quote_xlm: maxPerOpXlm,
         max_daily_quote_xlm: maxDailyXlm,
         expires_at: Math.floor(Date.now() / 1000) + expiryDaysValue * 24 * 60 * 60,
+        allowed_pools: allowedPools,
       });
       setSession(created);
     } catch (e) {
@@ -407,6 +421,21 @@ function CopyInner() {
                 />
               </label>
             </div>
+            <label className="filter-field">
+              <span className="filter-label">Allowed pools (optional)</span>
+              <textarea
+                className="filter-input"
+                rows={2}
+                value={allowedPoolsText}
+                onChange={(e) => setAllowedPoolsText(e.target.value)}
+                placeholder="Paste complete C… pool addresses, separated by spaces or lines"
+                spellCheck={false}
+              />
+              <span className="muted">
+                Leave blank to allow all validated Aquarius pools touched by this Leader. A pool
+                allowlist is safer for unattended execution.
+              </span>
+            </label>
 
             <div className="landing-actions" style={{ justifyContent: "flex-start" }}>
               <button
@@ -455,6 +484,14 @@ function CopyInner() {
                 {session.policy?.expires_at
                   ? new Date(session.policy.expires_at * 1000).toLocaleDateString()
                   : "Not configured"}
+              </span>
+            </div>
+            <div className="copy-op-head">
+              <span className="muted">Pool scope</span>
+              <span>
+                {session.policy?.allowed_pools?.length
+                  ? `${session.policy.allowed_pools.length} allowlisted pool${session.policy.allowed_pools.length === 1 ? "" : "s"}`
+                  : "All validated Aquarius pools"}
               </span>
             </div>
             <div className="copy-op-head">
