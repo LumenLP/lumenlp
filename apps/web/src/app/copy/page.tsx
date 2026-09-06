@@ -85,10 +85,20 @@ function CopyInner() {
   const [starting, setStarting] = useState(false);
   const [actionBusy, setActionBusy] = useState<string | null>(null);
   const [bindingPolicy, setBindingPolicy] = useState(false);
+  const [nowMs, setNowMs] = useState(() => Date.now());
 
   const effectiveCoeff = customCoeff.trim() ? Number(customCoeff) : coefficient;
   const sessionLive = session?.status === "active" || session?.status === "paused";
-  const policyReady = session?.contract_session_id != null && policy.executionEnabled;
+  const policyExpired = Boolean(
+    session?.policy?.expires_at != null && session.policy.expires_at * 1000 <= nowMs,
+  );
+  const policyReady =
+    session?.contract_session_id != null && policy.executionEnabled && !policyExpired;
+
+  useEffect(() => {
+    const timer = setInterval(() => setNowMs(Date.now()), 30_000);
+    return () => clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     if (leaderFromQuery) setLeaderAddress(leaderFromQuery);
@@ -530,7 +540,7 @@ function CopyInner() {
               <span className="muted">Policy expiry</span>
               <span>
                 {session.policy?.expires_at
-                  ? new Date(session.policy.expires_at * 1000).toLocaleDateString()
+                  ? `${new Date(session.policy.expires_at * 1000).toLocaleDateString()}${policyExpired ? " (expired)" : ""}`
                   : "Not configured"}
               </span>
             </div>
@@ -571,6 +581,12 @@ function CopyInner() {
                   {bindingPolicy ? "Binding…" : "Bind policy"}
                 </button>
               </div>
+            ) : null}
+            {policyExpired ? (
+              <p className="sign-disabled-note">
+                This Copy Policy has expired. Start a new session before preparing automatic
+                operations.
+              </p>
             ) : null}
             <div className="copy-op-head">
               <span className="muted">Status</span>
@@ -621,6 +637,7 @@ function CopyInner() {
               {ops.map((op) => {
                 const done = ["drafted", "skipped", "rejected", "failed", "insufficient"].includes(op.status);
                 const preparedOp = prepared[op.id];
+                const canPrepare = policyReady && session.status === "active";
                 return (
                   <div key={op.id} className="copy-op">
                     <div className="copy-op-head">
@@ -652,11 +669,15 @@ function CopyInner() {
                         <button
                           type="button"
                           onClick={() => void onPreparePolicy(op)}
-                          disabled={actionBusy !== null || !copyExecutionEnabled(op.venue) || !policyReady}
+                          disabled={actionBusy !== null || !copyExecutionEnabled(op.venue) || !canPrepare}
                         >
                           {actionBusy === `prepare-${op.id}`
                             ? "Validating…"
-                            : policyReady
+                            : policyExpired
+                              ? "Policy expired"
+                              : session.status !== "active"
+                                ? "Resume first"
+                                : policyReady
                               ? "Validate policy intent"
                               : "Bind policy first"}
                         </button>
