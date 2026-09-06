@@ -12,6 +12,7 @@ use {
         },
         recorder::{canonical_event, source_event_id_bytes},
         token_registry,
+        wallet_auth,
     },
     axum::{
         extract::{Path, Query, State},
@@ -98,6 +99,8 @@ pub fn router() -> Router<AppState> {
         .route("/v1/positions/summary", get(positions_summary))
         .route("/v1/lp/profile", get(lp_profile))
         .route("/v1/lp/leaders", get(lp_leaders))
+        .route("/v1/auth/challenge", post(create_wallet_auth_challenge))
+        .route("/v1/auth/verify", post(verify_wallet_auth_challenge))
         .route("/v1/copy/sessions", post(create_copy_session).get(list_copy_sessions))
         .route("/v1/copy/sessions/{id}", patch(update_copy_session_handler))
         .route("/v1/copy/sessions/{id}/ops", get(list_copy_ops))
@@ -121,6 +124,134 @@ const LP_PROFILE_STALE_GRACE_SECS: u64 = 300;
 const REDIS_LP_LEADERS_TTL_SECS: u64 = 30;
 const LEADER_LIST_CACHE_SECS: u64 = 30;
 const INDEXER_STATUS_CACHE_SECS: u64 = 5;
+const WALLET_AUTH_CHALLENGE_SECS: i64 = 5 * 60;
+const WALLET_AUTH_TOKEN_SECS: i64 = 15 * 60;
+
+#[derive(Deserialize)]
+struct WalletAuthChallengeBody {
+    address: String,
+}
+
+async fn create_wallet_auth_challenge(
+    State(state): State<AppState>,
+    Json(body): Json<WalletAuthChallengeBody>,
+) -> impl IntoResponse {
+    if stellar_strkey::ed25519::PublicKey::from_string(&body.address).is_err() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "invalid Stellar account address", "code": "bad_address" })),
+        )
+            .into_response();
+    }
+
+    let now = Utc::now().timestamp();
+    let expires_at = now + WALLET_AUTH_CHALLENGE_SECS;
+    let challenge_id = wallet_auth::random_opaque_value();
+    let nonce = wallet_auth::random_opaque_value();
+    let message = wallet_auth::challenge_message(&body.address, &nonce, expires_at);
+    let index_db = state.index_db.lock().unwrap();
+    if let Err(error) = index_db.create_wallet_auth_challenge(
+        &challenge_id,
+        &body.address,
+        &message,
+        expires_at,
+        now,
+    ) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": error.to_string(), "code": "db_error" })),
+        )
+            .into_response();
+    }
+    let _ = index_db.prune_wallet_auth(now);
+
+    Json(json!({
+        "challenge_id": challenge_id,
+        "message": message,
+        "expires_at": expires_at
+    }))
+    .into_response()
+}
+
+#[derive(Deserialize)]
+struct WalletAuthVerifyBody {
+    challenge_id: String,
+    address: String,
+    signed_message: String,
+}
+
+async fn verify_wallet_auth_challenge(
+    State(state): State<AppState>,
+    Json(body): Json<WalletAuthVerifyBody>,
+) -> impl IntoResponse {
+    let now = Utc::now().timestamp();
+    let index_db = state.index_db.lock().unwrap();
+    let challenge = match index_db.wallet_auth_challenge(&body.challenge_id) {
+        Ok(Some(challenge)) => challenge,
+        Ok(None) => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({ "error": "authentication challenge not found", "code": "auth_challenge_invalid" })),
+            )
+                .into_response();
+        }
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": error.to_string(), "code": "db_error" })),
+            )
+                .into_response();
+        }
+    };
+    if challenge.address != body.address || challenge.consumed_at.is_some() || challenge.expires_at <= now {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "authentication challenge is invalid or expired", "code": "auth_challenge_invalid" })),
+        )
+            .into_response();
+    }
+    if wallet_auth::verify_sep53(&body.address, &challenge.message, &body.signed_message).is_err() {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "wallet signature is invalid", "code": "auth_signature_invalid" })),
+        )
+            .into_response();
+    }
+    match index_db.consume_wallet_auth_challenge(&challenge.id, now) {
+        Ok(true) => {}
+        Ok(false) => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({ "error": "authentication challenge was already used", "code": "auth_challenge_invalid" })),
+            )
+                .into_response();
+        }
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": error.to_string(), "code": "db_error" })),
+            )
+                .into_response();
+        }
+    }
+
+    let token = wallet_auth::random_opaque_value();
+    let expires_at = now + WALLET_AUTH_TOKEN_SECS;
+    if let Err(error) = index_db.create_wallet_auth_token(
+        &wallet_auth::token_hash(&token),
+        &body.address,
+        expires_at,
+        now,
+    ) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": error.to_string(), "code": "db_error" })),
+        )
+            .into_response();
+    }
+
+    Json(json!({ "token": token, "expires_at": expires_at, "address": body.address })).into_response()
+}
 
 fn redis_token_meta_key(address: &str) -> String {
     format!("lumenlp:token-meta:v1:{address}")

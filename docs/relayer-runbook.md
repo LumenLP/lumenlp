@@ -4,6 +4,21 @@ This runbook covers the first Copy LP execution path. It is intentionally
 testnet-only until the Soroban policy instance, recorder authority, relayer
 authority, and DEX operation fixtures have been validated together.
 
+## Wallet authentication
+
+The API exposes a SEP-53 challenge exchange as the authentication foundation
+for Copy LP controls:
+
+1. `POST /v1/auth/challenge` creates a five-minute, account-bound message.
+2. The wallet signs the exact message using SEP-53 message signing.
+3. `POST /v1/auth/verify` consumes the challenge and returns a 15-minute opaque token.
+4. The database stores only the SHA-256 token hash; expired records are pruned during challenge creation.
+
+Challenges are single-use and bind the message, account, nonce, and expiry.
+The Copy endpoints will require the resulting bearer token once the web wallet
+flow and server enforcement are deployed together. Until that cutover, the
+follower-address owner check is a compatibility boundary, not authentication.
+
 ## Boundary
 
 The API and indexer create durable `recorder_outbox` and `copy_ops` rows. They

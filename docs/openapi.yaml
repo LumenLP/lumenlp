@@ -269,6 +269,62 @@ paths:
                   fee_data:
                     type: object
                     description: Snapshot coverage and refresh metadata.
+  /v1/auth/challenge:
+    post:
+      summary: Create a one-time wallet authentication challenge
+      description: Returns a five-minute message for the requested Stellar account to sign according to SEP-53.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [address]
+              properties:
+                address: { type: string }
+      responses:
+        "200":
+          description: One-time challenge created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  challenge_id: { type: string }
+                  message: { type: string }
+                  expires_at: { type: integer, format: int64 }
+        "400":
+          description: Invalid Stellar account address
+  /v1/auth/verify:
+    post:
+      summary: Exchange a wallet signature for a short-lived API token
+      description: Verifies the SEP-53 signature, consumes the challenge once, and returns a 15-minute opaque bearer token. Only the token hash is persisted.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [challenge_id, address, signed_message]
+              properties:
+                challenge_id: { type: string }
+                address: { type: string }
+                signed_message:
+                  type: string
+                  description: Base64-encoded Ed25519 signature returned by a SEP-53-compatible wallet.
+      responses:
+        "200":
+          description: Authentication token issued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token: { type: string }
+                  expires_at: { type: integer, format: int64 }
+                  address: { type: string }
+        "401":
+          description: Challenge invalid, expired, already consumed, or signature invalid
   /v1/copy/recorder/status:
     get:
       summary: Recorder outbox status

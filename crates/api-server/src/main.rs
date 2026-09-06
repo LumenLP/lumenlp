@@ -5,6 +5,7 @@ mod index_db;
 mod pricing;
 mod recorder;
 mod token_registry;
+mod wallet_auth;
 
 use {
     anyhow::Result,

@@ -87,6 +87,15 @@ pub struct CopyOpRow {
     pub updated_at: i64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WalletAuthChallengeRow {
+    pub id: String,
+    pub address: String,
+    pub message: String,
+    pub expires_at: i64,
+    pub consumed_at: Option<i64>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 #[allow(dead_code)]
 pub struct RecorderOutboxRow {
@@ -330,6 +339,26 @@ impl IndexDb {
               ON actor_fee_snapshot_history(actor, pool_address, observed_at DESC, id DESC);
             CREATE INDEX IF NOT EXISTS idx_actor_fee_history_actor_time_pool
               ON actor_fee_snapshot_history(actor, observed_at DESC, pool_address, id DESC);
+
+            CREATE TABLE IF NOT EXISTS wallet_auth_challenges (
+              id TEXT PRIMARY KEY,
+              address TEXT NOT NULL,
+              message TEXT NOT NULL,
+              expires_at INTEGER NOT NULL,
+              consumed_at INTEGER,
+              created_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_wallet_auth_challenges_expiry
+              ON wallet_auth_challenges(expires_at);
+
+            CREATE TABLE IF NOT EXISTS wallet_auth_tokens (
+              token_hash TEXT PRIMARY KEY,
+              address TEXT NOT NULL,
+              expires_at INTEGER NOT NULL,
+              created_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_wallet_auth_tokens_expiry
+              ON wallet_auth_tokens(expires_at);
             "#,
         )?;
         // pool_events is created by the indexer component. API startup can
@@ -383,6 +412,82 @@ impl IndexDb {
             )
             .map(|value| value != 0)
             .unwrap_or(false)
+    }
+
+    pub fn create_wallet_auth_challenge(
+        &self,
+        id: &str,
+        address: &str,
+        message: &str,
+        expires_at: i64,
+        now: i64,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO wallet_auth_challenges (id, address, message, expires_at, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![id, address, message, expires_at, now],
+        )?;
+        Ok(())
+    }
+
+    pub fn wallet_auth_challenge(&self, id: &str) -> Result<Option<WalletAuthChallengeRow>> {
+        self.conn
+            .query_row(
+                "SELECT id, address, message, expires_at, consumed_at FROM wallet_auth_challenges WHERE id = ?1",
+                params![id],
+                |row| {
+                    Ok(WalletAuthChallengeRow {
+                        id: row.get(0)?,
+                        address: row.get(1)?,
+                        message: row.get(2)?,
+                        expires_at: row.get(3)?,
+                        consumed_at: row.get(4)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    pub fn consume_wallet_auth_challenge(&self, id: &str, now: i64) -> Result<bool> {
+        Ok(self.conn.execute(
+            "UPDATE wallet_auth_challenges SET consumed_at = ?2 WHERE id = ?1 AND consumed_at IS NULL AND expires_at > ?2",
+            params![id, now],
+        )? == 1)
+    }
+
+    pub fn create_wallet_auth_token(
+        &self,
+        token_hash: &str,
+        address: &str,
+        expires_at: i64,
+        now: i64,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO wallet_auth_tokens (token_hash, address, expires_at, created_at) VALUES (?1, ?2, ?3, ?4)",
+            params![token_hash, address, expires_at, now],
+        )?;
+        Ok(())
+    }
+
+    pub fn wallet_auth_token_address(&self, token_hash: &str, now: i64) -> Result<Option<String>> {
+        self.conn
+            .query_row(
+                "SELECT address FROM wallet_auth_tokens WHERE token_hash = ?1 AND expires_at > ?2",
+                params![token_hash, now],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    pub fn prune_wallet_auth(&self, now: i64) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM wallet_auth_challenges WHERE expires_at <= ?1 OR consumed_at IS NOT NULL",
+            params![now],
+        )?;
+        self.conn
+            .execute("DELETE FROM wallet_auth_tokens WHERE expires_at <= ?1", params![now])?;
+        Ok(())
     }
 
     pub fn create_copy_session(
@@ -2360,6 +2465,24 @@ mod tests {
         assert!(db.table_exists("copy_ops"));
         assert!(db.table_exists("recorder_outbox"));
         assert!(db.table_exists("token_metadata"));
+        assert!(db.table_exists("wallet_auth_challenges"));
+        assert!(db.table_exists("wallet_auth_tokens"));
+    }
+
+    #[test]
+    fn wallet_auth_challenges_are_single_use_and_tokens_expire() {
+        let db = test_db();
+        db.create_wallet_auth_challenge("challenge", "GADDRESS", "message", 200, 100)
+            .unwrap();
+        let row = db.wallet_auth_challenge("challenge").unwrap().unwrap();
+        assert_eq!(row.address, "GADDRESS");
+        assert_eq!(row.consumed_at, None);
+        assert!(db.consume_wallet_auth_challenge("challenge", 150).unwrap());
+        assert!(!db.consume_wallet_auth_challenge("challenge", 151).unwrap());
+
+        db.create_wallet_auth_token("hash", "GADDRESS", 200, 100).unwrap();
+        assert_eq!(db.wallet_auth_token_address("hash", 199).unwrap().as_deref(), Some("GADDRESS"));
+        assert_eq!(db.wallet_auth_token_address("hash", 200).unwrap(), None);
     }
 
     #[test]
