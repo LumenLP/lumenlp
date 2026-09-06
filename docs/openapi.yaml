@@ -325,6 +325,23 @@ paths:
                   address: { type: string }
         "401":
           description: Challenge invalid, expired, already consumed, or signature invalid
+  /v1/auth/revoke:
+    post:
+      summary: Revoke the current wallet authentication token
+      description: Deletes the persisted hash for the supplied bearer token. Repeated revocation is safe and returns revoked false.
+      security:
+        - walletBearer: []
+      responses:
+        "200":
+          description: Revocation result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  revoked: { type: boolean }
+        "401":
+          description: Wallet bearer token is missing
   /v1/copy/recorder/status:
     get:
       summary: Recorder outbox status

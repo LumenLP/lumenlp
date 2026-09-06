@@ -6,10 +6,12 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
 import { ensureWalletKit } from "@/lib/wallet-kit";
+import { revokeWalletAuth } from "@/lib/walletAuth";
 
 type IdentityStatus = "idle" | "connecting" | "connected" | "disconnecting";
 
@@ -42,8 +44,16 @@ export function IdentityProvider({ children }: { children: ReactNode }) {
   const [input, setInput] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<IdentityStatus>("idle");
+  const addressRef = useRef("");
 
   const commitAddress = useCallback((next: string, nextError: string | null = null) => {
+    const previous = addressRef.current;
+    if (previous && previous !== next) {
+      void revokeWalletAuth(previous).catch(() => {
+        /* the removed local token still expires server-side after 15 minutes */
+      });
+    }
+    addressRef.current = next;
     setAddressState(next);
     setInput(next);
     setError(nextError);

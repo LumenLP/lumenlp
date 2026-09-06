@@ -480,6 +480,13 @@ impl IndexDb {
             .map_err(Into::into)
     }
 
+    pub fn revoke_wallet_auth_token(&self, token_hash: &str) -> Result<bool> {
+        Ok(self.conn.execute(
+            "DELETE FROM wallet_auth_tokens WHERE token_hash = ?1",
+            params![token_hash],
+        )? == 1)
+    }
+
     pub fn prune_wallet_auth(&self, now: i64) -> Result<()> {
         self.conn.execute(
             "DELETE FROM wallet_auth_challenges WHERE expires_at <= ?1 OR consumed_at IS NOT NULL",
@@ -2483,6 +2490,9 @@ mod tests {
         db.create_wallet_auth_token("hash", "GADDRESS", 200, 100).unwrap();
         assert_eq!(db.wallet_auth_token_address("hash", 199).unwrap().as_deref(), Some("GADDRESS"));
         assert_eq!(db.wallet_auth_token_address("hash", 200).unwrap(), None);
+        assert!(db.revoke_wallet_auth_token("hash").unwrap());
+        assert!(!db.revoke_wallet_auth_token("hash").unwrap());
+        assert_eq!(db.wallet_auth_token_address("hash", 199).unwrap(), None);
     }
 
     #[test]

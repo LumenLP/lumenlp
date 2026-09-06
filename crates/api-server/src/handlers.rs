@@ -104,6 +104,7 @@ pub fn router() -> Router<AppState> {
         .route("/v1/lp/leaders", get(lp_leaders))
         .route("/v1/auth/challenge", post(create_wallet_auth_challenge))
         .route("/v1/auth/verify", post(verify_wallet_auth_challenge))
+        .route("/v1/auth/revoke", post(revoke_wallet_auth_token))
         .route("/v1/copy/sessions", post(create_copy_session).get(list_copy_sessions))
         .route("/v1/copy/sessions/{id}", patch(update_copy_session_handler))
         .route("/v1/copy/sessions/{id}/ops", get(list_copy_ops))
@@ -130,12 +131,8 @@ const INDEXER_STATUS_CACHE_SECS: u64 = 5;
 const WALLET_AUTH_CHALLENGE_SECS: i64 = 5 * 60;
 const WALLET_AUTH_TOKEN_SECS: i64 = 15 * 60;
 
-fn require_wallet_auth(
-    state: &AppState,
-    headers: &HeaderMap,
-    expected_address: &str,
-) -> Result<(), axum::response::Response> {
-    let token = headers
+fn wallet_bearer_token(headers: &HeaderMap) -> Result<&str, axum::response::Response> {
+    headers
         .get(AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.strip_prefix("Bearer "))
@@ -146,7 +143,15 @@ fn require_wallet_auth(
                 Json(json!({ "error": "wallet authentication is required", "code": "auth_required" })),
             )
                 .into_response()
-        })?;
+        })
+}
+
+fn require_wallet_auth(
+    state: &AppState,
+    headers: &HeaderMap,
+    expected_address: &str,
+) -> Result<(), axum::response::Response> {
+    let token = wallet_bearer_token(headers)?;
     let address = state
         .index_db
         .lock()
@@ -300,6 +305,29 @@ async fn verify_wallet_auth_challenge(
     }
 
     Json(json!({ "token": token, "expires_at": expires_at, "address": body.address })).into_response()
+}
+
+async fn revoke_wallet_auth_token(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let token = match wallet_bearer_token(&headers) {
+        Ok(token) => token,
+        Err(response) => return response,
+    };
+    match state
+        .index_db
+        .lock()
+        .unwrap()
+        .revoke_wallet_auth_token(&wallet_auth::token_hash(token))
+    {
+        Ok(revoked) => Json(json!({ "revoked": revoked })).into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": error.to_string(), "code": "db_error" })),
+        )
+            .into_response(),
+    }
 }
 
 fn redis_token_meta_key(address: &str) -> String {

@@ -13,6 +13,7 @@ for Copy LP controls:
 2. The wallet signs the exact message using SEP-53 message signing.
 3. `POST /v1/auth/verify` consumes the challenge and returns a 15-minute opaque token.
 4. The database stores only the SHA-256 token hash; expired records are pruned during challenge creation.
+5. `POST /v1/auth/revoke` deletes that token hash when the wallet disconnects.
 
 Challenges are single-use and bind the message, account, nonce, and expiry.
 All Copy session and operation reads and controls require the resulting bearer
