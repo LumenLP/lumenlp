@@ -467,6 +467,7 @@ components:
         expires_at: { type: integer, format: int64, nullable: true }
     UpdateCopySession:
       type: object
+      description: After contract_session_id is bound, coefficient, include_claims, and contract_session_id are immutable; create a new session to change the on-chain policy identity or terms.
       required: [follower_address]
       properties:
         follower_address: { type: string }

@@ -3358,6 +3358,20 @@ struct UpdateCopySessionBody {
     contract_session_id: Option<u32>,
 }
 
+fn bound_policy_update_conflicts(
+    session: &CopySessionRow,
+    coefficient: Option<f64>,
+    include_claims: Option<bool>,
+    contract_session_id: Option<u32>,
+) -> bool {
+    let Some(bound_session_id) = session.contract_session_id else {
+        return false;
+    };
+    coefficient.is_some_and(|value| coefficient_ppm(value) != coefficient_ppm(session.coefficient))
+        || include_claims.is_some_and(|value| value != session.include_claims)
+        || contract_session_id.is_some_and(|value| value != bound_session_id)
+}
+
 async fn update_copy_session_handler(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -3406,6 +3420,21 @@ async fn update_copy_session_handler(
                     Json(json!({
                         "error": "copy session does not belong to follower",
                         "code": "forbidden"
+                    })),
+                )
+                    .into_response();
+            }
+            if bound_policy_update_conflicts(
+                &session,
+                body.coefficient,
+                body.include_claims,
+                body.contract_session_id,
+            ) {
+                return (
+                    StatusCode::CONFLICT,
+                    Json(json!({
+                        "error": "bound copy policy fields cannot be changed",
+                        "code": "policy_binding_conflict"
                     })),
                 )
                     .into_response();
@@ -3899,6 +3928,51 @@ async fn set_copy_op_status(
 #[cfg(test)]
 mod tests {
     use {super::*, serde_json::json};
+
+    fn copy_session_fixture() -> CopySessionRow {
+        CopySessionRow {
+            id: "session".into(),
+            contract_session_id: Some(42),
+            follower_address: "GFOLLOWER".into(),
+            leader_address: "GLEADER".into(),
+            coefficient: 0.5,
+            status: "active".into(),
+            include_claims: true,
+            allowed_pools: vec!["CPOOL".into()],
+            max_per_op_quote_xlm: 10.0,
+            max_daily_quote_xlm: 100.0,
+            expires_at: Some(1_000),
+            cursor_ts: 0,
+            watermark_ts: 0,
+            watermark_event_id: String::new(),
+            created_at: 0,
+            updated_at: 0,
+        }
+    }
+
+    #[test]
+    fn bound_copy_policy_rejects_local_policy_drift() {
+        let session = copy_session_fixture();
+        assert!(!bound_policy_update_conflicts(&session, None, None, None));
+        assert!(!bound_policy_update_conflicts(
+            &session,
+            Some(0.5),
+            Some(true),
+            Some(42)
+        ));
+        assert!(bound_policy_update_conflicts(&session, Some(0.6), None, None));
+        assert!(bound_policy_update_conflicts(&session, None, Some(false), None));
+        assert!(bound_policy_update_conflicts(&session, None, None, Some(43)));
+
+        let mut unbound = session;
+        unbound.contract_session_id = None;
+        assert!(!bound_policy_update_conflicts(
+            &unbound,
+            Some(0.6),
+            Some(false),
+            Some(43)
+        ));
+    }
 
     #[test]
     fn copy_session_expiry_uses_inclusive_boundary() {

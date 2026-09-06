@@ -13,6 +13,8 @@ export function formatCopyError(error: unknown, fallback: string): string {
       return "Automatic Copy LP is currently enabled for Aquarius only; this venue remains analytics-only.";
     case "policy_expired":
       return "The Copy Policy has expired. Start a new session with a fresh expiry.";
+    case "policy_binding_conflict":
+      return "This session is already bound on-chain. Start a new session to change policy limits or settings.";
     case "per_operation_limit":
       return "This operation exceeds the configured per-operation limit.";
     case "daily_limit":

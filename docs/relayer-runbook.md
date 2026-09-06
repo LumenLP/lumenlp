@@ -151,3 +151,8 @@ the numeric ID. The API compares `follower_address` with the session owner to
 prevent cross-session updates, but that field alone is not wallet-signature
 authentication; production mutation authorization must use the signed policy
 flow.
+
+Once `contract_session_id` is bound, the API rejects changes to the local
+coefficient, claim setting, or contract session identity. Pause, resume, and
+stop remain available. Create and bind a new Copy session when policy terms
+change so local preparation cannot silently drift from the on-chain policy.
