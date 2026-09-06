@@ -354,10 +354,18 @@ function CopyInner() {
 
       {error ? <div className="error">{error}</div> : null}
 
-      {connected && !sessionLive ? (
+      {connected && (!sessionLive || policyExpired) ? (
         <div className="panel">
-          <div className="panel-head">Start copy session</div>
+          <div className="panel-head">
+            {policyExpired ? "Re-arm copy session" : "Start copy session"}
+          </div>
           <div className="strategy-config">
+            {policyExpired ? (
+              <p className="sign-disabled-note">
+                The previous policy session is retained for review. Start a new session to follow
+                this Leader with a fresh expiry and limits.
+              </p>
+            ) : null}
             <label className="filter-field">
               <span className="filter-label">Leader address</span>
               <input
