@@ -207,11 +207,11 @@ function CopyInner() {
   }
 
   async function onPatchStatus(status: "active" | "paused" | "stopped") {
-    if (!session) return;
+    if (!session || !address) return;
     setActionBusy(status);
     setError(null);
     try {
-      const updated = await patchCopySession(session.id, { status });
+      const updated = await patchCopySession(session.id, address, { status });
       setSession(updated);
     } catch (e) {
       setError(formatCopyError(e, "Session update failed"));
@@ -221,7 +221,7 @@ function CopyInner() {
   }
 
   async function onBindPolicySession() {
-    if (!session) return;
+    if (!session || !address) return;
     const value = Number(contractSessionId.trim());
     if (!Number.isInteger(value) || value < 0) {
       setError("On-chain policy session ID must be a non-negative whole number");
@@ -230,7 +230,7 @@ function CopyInner() {
     setBindingPolicy(true);
     setError(null);
     try {
-      const updated = await patchCopySession(session.id, { contract_session_id: value });
+      const updated = await patchCopySession(session.id, address, { contract_session_id: value });
       setSession(updated);
     } catch (e) {
       setError(formatCopyError(e, "Failed to bind policy session"));
@@ -260,7 +260,7 @@ function CopyInner() {
         updatedAt: Date.now(),
       });
       rememberCopyPosition(address, op.position_key, op.id, op.pool_address);
-      await setCopyOpStatus(op.id, "drafted");
+      await setCopyOpStatus(op.id, address, "drafted");
       setOps((prev) =>
         prev.map((row) => (row.id === op.id ? { ...row, status: "drafted" } : row)),
       );
@@ -289,10 +289,11 @@ function CopyInner() {
   }
 
   async function onSkip(op: CopyOp) {
+    if (!address) return;
     setActionBusy(`skip-${op.id}`);
     setError(null);
     try {
-      await setCopyOpStatus(op.id, "skipped");
+      await setCopyOpStatus(op.id, address, "skipped");
       setOps((prev) =>
         prev.map((row) => (row.id === op.id ? { ...row, status: "skipped" } : row)),
       );

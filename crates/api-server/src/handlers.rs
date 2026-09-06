@@ -3351,6 +3351,7 @@ async fn list_copy_sessions(
 
 #[derive(Deserialize)]
 struct UpdateCopySessionBody {
+    follower_address: String,
     status: Option<String>,
     coefficient: Option<f64>,
     include_claims: Option<bool>,
@@ -3362,6 +3363,13 @@ async fn update_copy_session_handler(
     Path(id): Path<String>,
     Json(body): Json<UpdateCopySessionBody>,
 ) -> impl IntoResponse {
+    if !valid_stellar_address(&body.follower_address) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "invalid follower address", "code": "bad_address" })),
+        )
+            .into_response();
+    }
     if let Some(ref status) = body.status {
         if !COPY_SESSION_STATUSES.contains(&status.as_str()) {
             return (
@@ -3392,6 +3400,16 @@ async fn update_copy_session_handler(
         )
             .into_response(),
         Ok(Some(session)) => {
+            if session.follower_address != body.follower_address {
+                return (
+                    StatusCode::FORBIDDEN,
+                    Json(json!({
+                        "error": "copy session does not belong to follower",
+                        "code": "forbidden"
+                    })),
+                )
+                    .into_response();
+            }
             if body.status.as_deref() == Some("active")
                 && copy_session_expired(session.expires_at, Utc::now().timestamp())
             {
@@ -3757,6 +3775,7 @@ async fn prepare_copy_op(
 
 #[derive(Deserialize)]
 struct SetCopyOpStatusBody {
+    follower_address: String,
     status: String,
     note: Option<String>,
 }
@@ -3793,6 +3812,13 @@ async fn set_copy_op_status(
     Path(id): Path<String>,
     Json(body): Json<SetCopyOpStatusBody>,
 ) -> impl IntoResponse {
+    if !valid_stellar_address(&body.follower_address) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "invalid follower address", "code": "bad_address" })),
+        )
+            .into_response();
+    }
     if !COPY_OP_STATUSES.contains(&body.status.as_str()) {
         return (
             StatusCode::BAD_REQUEST,
@@ -3805,6 +3831,51 @@ async fn set_copy_op_status(
     }
 
     let index_db = state.index_db.lock().unwrap();
+    let op = match index_db.get_copy_op(&id) {
+        Ok(Some(op)) => op,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "copy op not found", "code": "not_found" })),
+            )
+                .into_response();
+        }
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": error.to_string(), "code": "db_error" })),
+            )
+                .into_response();
+        }
+    };
+    let session = match index_db.get_copy_session(&op.session_id) {
+        Ok(Some(session)) => session,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "copy session not found", "code": "not_found" })),
+            )
+                .into_response();
+        }
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": error.to_string(), "code": "db_error" })),
+            )
+                .into_response();
+        }
+    };
+    if session.follower_address != body.follower_address {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({
+                "error": "copy op does not belong to follower",
+                "code": "forbidden"
+            })),
+        )
+            .into_response();
+    }
+
     match index_db.update_copy_op_status(&id, &body.status, body.note.as_deref()) {
         Ok(()) => Json(json!({ "id": id, "status": body.status })).into_response(),
         Err(error) if error.to_string().contains("copy op not found") => (

@@ -311,6 +311,33 @@ paths:
       responses:
         "200":
           description: Session created
+  /v1/copy/sessions/{id}:
+    patch:
+      summary: Update a follower-owned copy session
+      description: The follower address must match the session owner. This owner binding is not a substitute for wallet-signature authentication.
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateCopySession"
+      responses:
+        "200":
+          description: Session updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CopySession"
+        "400":
+          description: Invalid follower, status, coefficient, or policy update
+        "403":
+          description: Follower does not own the session
+        "404":
+          description: Session not found
+        "409":
+          description: Expired session cannot be resumed
   /v1/copy/sessions/{id}/ops:
     get:
       summary: List copy ops (reconciles on read)
@@ -354,6 +381,7 @@ paths:
   /v1/copy/ops/{id}/status:
     post:
       summary: Update a user-reviewed Copy op status
+      description: The follower address must match the owner of the op's Copy session. This owner binding is not a substitute for wallet-signature authentication.
       parameters:
         - name: id
           in: path
@@ -371,8 +399,12 @@ paths:
           description: Copy op status updated
         "400":
           description: Unsupported status
+        "403":
+          description: Follower does not own the Copy session
         "404":
           description: Not found
+        "409":
+          description: Invalid status transition
         "409":
           description: Invalid status transition
 components:
@@ -433,6 +465,15 @@ components:
         max_per_op_quote_xlm: { type: number }
         max_daily_quote_xlm: { type: number }
         expires_at: { type: integer, format: int64, nullable: true }
+    UpdateCopySession:
+      type: object
+      required: [follower_address]
+      properties:
+        follower_address: { type: string }
+        status: { type: string, enum: [active, paused, stopped] }
+        coefficient: { type: number, exclusiveMinimum: 0 }
+        include_claims: { type: boolean }
+        contract_session_id: { type: integer, format: int32, minimum: 0, nullable: true }
     CopySession:
       type: object
       properties:
@@ -478,8 +519,9 @@ components:
         updated_at: { type: integer, format: int64 }
     CopyOpStatusUpdate:
       type: object
-      required: [status]
+      required: [follower_address, status]
       properties:
+        follower_address: { type: string }
         status:
           type: string
           enum: [drafted, skipped, signed, failed, insufficient, rejected]

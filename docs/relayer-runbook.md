@@ -141,10 +141,13 @@ replace those checks.
 ```sh
 curl -X PATCH https://api.lumenlp.xyz/v1/copy/sessions/<local-session-id> \
   -H 'content-type: application/json' \
-  -d '{"contract_session_id":42}'
+  -d '{"follower_address":"G...","contract_session_id":42}'
 ```
 
 Use the returned session JSON to confirm the binding before running the
 relayer. If the local and on-chain policies do not describe the same follower
 workflow, stop and create a new isolated testnet session instead of reusing
-the numeric ID.
+the numeric ID. The API compares `follower_address` with the session owner to
+prevent cross-session updates, but that field alone is not wallet-signature
+authentication; production mutation authorization must use the signed policy
+flow.

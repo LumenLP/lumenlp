@@ -192,6 +192,7 @@ export async function listCopyOps(
 
 export async function patchCopySession(
   id: string,
+  followerAddress: string,
   body: {
     status?: string;
     coefficient?: number;
@@ -199,13 +200,20 @@ export async function patchCopySession(
     contract_session_id?: number;
   },
 ): Promise<CopySession> {
-  return patchJson<CopySession>(`/v1/copy/sessions/${encodeURIComponent(id)}`, body);
+  return patchJson<CopySession>(`/v1/copy/sessions/${encodeURIComponent(id)}`, {
+    ...body,
+    follower_address: followerAddress,
+  });
 }
 
-export async function setCopyOpStatus(id: string, status: CopyOpStatus): Promise<void> {
+export async function setCopyOpStatus(
+  id: string,
+  followerAddress: string,
+  status: CopyOpStatus,
+): Promise<void> {
   await postJson<{ id: string; status: string }>(
     `/v1/copy/ops/${encodeURIComponent(id)}/status`,
-    { status },
+    { follower_address: followerAddress, status },
   );
 }
 
