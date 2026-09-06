@@ -70,6 +70,7 @@ function CopyInner() {
   const [includeClaims, setIncludeClaims] = useState(true);
   const [maxPerOp, setMaxPerOp] = useState("100");
   const [maxDaily, setMaxDaily] = useState("500");
+  const [expiryDays, setExpiryDays] = useState("30");
   const [session, setSession] = useState<CopySession | null>(null);
   const [ops, setOps] = useState<CopyOp[]>([]);
   const [prepared, setPrepared] = useState<Record<string, PreparedCopyOp>>({});
@@ -143,6 +144,11 @@ function CopyInner() {
       setError("Daily limit must be at least the per-operation limit");
       return;
     }
+    const expiryDaysValue = Number(expiryDays);
+    if (!Number.isInteger(expiryDaysValue) || expiryDaysValue < 1 || expiryDaysValue > 365) {
+      setError("Policy expiry must be a whole number between 1 and 365 days");
+      return;
+    }
     setStarting(true);
     setError(null);
     try {
@@ -153,6 +159,7 @@ function CopyInner() {
         include_claims: includeClaims,
         max_per_op_quote_xlm: maxPerOpXlm,
         max_daily_quote_xlm: maxDailyXlm,
+        expires_at: Math.floor(Date.now() / 1000) + expiryDaysValue * 24 * 60 * 60,
       });
       setSession(created);
     } catch (e) {
@@ -386,6 +393,19 @@ function CopyInner() {
                   placeholder="500"
                 />
               </label>
+              <label className="filter-field">
+                <span className="filter-label">Policy expiry (days)</span>
+                <input
+                  className="filter-input"
+                  type="number"
+                  min="1"
+                  max="365"
+                  step="1"
+                  value={expiryDays}
+                  onChange={(e) => setExpiryDays(e.target.value)}
+                  placeholder="30"
+                />
+              </label>
             </div>
 
             <div className="landing-actions" style={{ justifyContent: "flex-start" }}>
@@ -427,6 +447,14 @@ function CopyInner() {
               <span className="muted">Safety limits</span>
               <span>
                 {session.policy?.max_per_op_quote_xlm || "∞"} XLM / op · {session.policy?.max_daily_quote_xlm || "∞"} XLM / day
+              </span>
+            </div>
+            <div className="copy-op-head">
+              <span className="muted">Policy expiry</span>
+              <span>
+                {session.policy?.expires_at
+                  ? new Date(session.policy.expires_at * 1000).toLocaleDateString()
+                  : "Not configured"}
               </span>
             </div>
             <div className="copy-op-head">
