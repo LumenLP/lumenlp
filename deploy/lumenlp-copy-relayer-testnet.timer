@@ -1,0 +1,12 @@
+[Unit]
+Description=Run LumenLP Copy relayer on Testnet
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=15s
+AccuracySec=5s
+Persistent=true
+Unit=lumenlp-copy-relayer-testnet.service
+
+[Install]
+WantedBy=timers.target

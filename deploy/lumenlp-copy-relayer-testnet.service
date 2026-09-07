@@ -1,0 +1,13 @@
+[Unit]
+Description=LumenLP Copy relayer (Testnet only)
+After=network-online.target lumenlp-api.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/lumenlp
+Environment=STELLAR_NETWORK=testnet
+EnvironmentFile=/etc/lumenlp/copy-relayer-testnet.env
+ExecStart=/opt/lumenlp/deploy/run-copy-relayer-testnet.sh
+TimeoutStartSec=120

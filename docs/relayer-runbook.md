@@ -63,6 +63,25 @@ Dry-run is the default. It prints the selected source event, deterministic
 `BytesN<32>` replay key, normalized integer amounts, and quote values without
 submitting a transaction.
 
+## Systemd testnet runner
+
+The repository includes `deploy/lumenlp-copy-relayer-testnet.service` and
+`deploy/lumenlp-copy-relayer-testnet.timer`. Install the example configuration
+as `/etc/lumenlp/copy-relayer-testnet.env`, replace the placeholder addresses,
+and keep `RUN_WRITE=0` until the isolated policy fixture has been verified:
+
+```sh
+install -m 600 deploy/copy-relayer-testnet.env.example \
+  /etc/lumenlp/copy-relayer-testnet.env
+systemctl daemon-reload
+systemctl enable --now lumenlp-copy-relayer-testnet.timer
+```
+
+The timer is deliberately testnet-only and runs every 15 seconds. Enabling
+writes requires an explicit operator change to the env file; the script still
+rejects non-testnet configuration and validates the policy ABI before any
+transaction is submitted.
+
 ## Configure policy
 
 For a fresh isolated testnet policy, use
