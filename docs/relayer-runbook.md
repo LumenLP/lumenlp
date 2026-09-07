@@ -38,6 +38,13 @@ address; multi-token or incomplete claim events remain fail-closed. The
 execution call uses coefficient-scaled amounts from `copy_ops`,
 not the raw Leader amounts stored in `recorder_outbox`.
 
+The helper is intentionally single-instance. It takes an advisory `flock`
+next to the configured SQLite database before reading a pending operation.
+This prevents overlapping systemd timer runs or manual invocations from
+submitting the same local queue row concurrently; on-chain replay protection
+remains a separate fail-closed safeguard. Set `COPY_RELAYER_LOCK_FILE` only
+when the database directory is not writable by the relayer user.
+
 ## Dry run
 
 Run from the repository root with a copy of the index database or the

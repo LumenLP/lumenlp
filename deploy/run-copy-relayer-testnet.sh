@@ -9,6 +9,17 @@ DATABASE_PATH="${COPY_INDEX_DB_PATH:-./data/pool-indexer.db}"
 POLICY="${COPY_POLICY:?Set COPY_POLICY to the isolated testnet Copy Policy contract}"
 RECORDER_ACCOUNT="${COPY_RECORDER_ACCOUNT:?Set COPY_RECORDER_ACCOUNT to the event-recorder signer}"
 RELAYER_ACCOUNT="${COPY_RELAYER_ACCOUNT:?Set COPY_RELAYER_ACCOUNT to the policy relayer signer}"
+LOCK_FILE="${COPY_RELAYER_LOCK_FILE:-${DATABASE_PATH}.copy-relayer.lock}"
+
+# A timer retry or manual invocation must not submit the same pending row in
+# parallel. Soroban replay protection is a last line of defense, not a local
+# job coordination mechanism.
+mkdir -p "$(dirname "$LOCK_FILE")"
+exec 9>"$LOCK_FILE"
+if ! flock -n 9; then
+  echo "Another Copy relayer instance is already running."
+  exit 0
+fi
 
 if [[ "${STELLAR_NETWORK:-testnet}" != "testnet" ]]; then
   echo "Refusing to run: STELLAR_NETWORK must be testnet" >&2
