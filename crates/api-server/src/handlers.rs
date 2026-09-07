@@ -3230,7 +3230,9 @@ async fn lp_profile_uncached(State(state): State<AppState>, Query(q): Query<Addr
 
 const COPY_RECONCILE_BATCH: usize = 500;
 
-const COPY_OP_STATUSES: &[&str] = &["drafted", "skipped", "signed", "executed", "failed", "insufficient", "rejected"];
+// `executed` is reserved for the relayer's receipt reconciliation. Allowing
+// a wallet to self-report it would make the execution history unauditable.
+const COPY_OP_STATUSES: &[&str] = &["drafted", "skipped", "signed", "failed", "insufficient", "rejected"];
 
 const COPY_SESSION_STATUSES: &[&str] = &["active", "paused", "stopped"];
 
@@ -4261,7 +4263,7 @@ async fn set_copy_op_status(
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({
-                "error": "status must be drafted, skipped, signed, executed, failed, insufficient, or rejected",
+                "error": "status must be drafted, skipped, signed, failed, insufficient, or rejected",
                 "code": "bad_status"
             })),
         )

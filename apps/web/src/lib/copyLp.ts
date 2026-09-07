@@ -83,7 +83,8 @@ export type CopyOp = {
   updated_at?: number;
 };
 
-export type CopyOpStatus = Exclude<CopyOp["status"], "pending">;
+// Executed is a relayer receipt, not a client-writable status.
+export type CopyOpStatus = Exclude<CopyOp["status"], "pending" | "executed">;
 
 export type PreparedCopyOp = {
   ready: boolean;

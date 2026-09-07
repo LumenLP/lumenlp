@@ -2581,6 +2581,7 @@ mod tests {
     fn copy_status_transitions_are_fail_closed() {
         assert!(copy_status_transition_allowed("pending", "drafted"));
         assert!(copy_status_transition_allowed("drafted", "signed"));
+        assert!(copy_status_transition_allowed("signed", "executed"));
         assert!(copy_status_transition_allowed("insufficient", "drafted"));
         assert!(!copy_status_transition_allowed("rejected", "signed"));
         assert!(!copy_status_transition_allowed("signed", "drafted"));
