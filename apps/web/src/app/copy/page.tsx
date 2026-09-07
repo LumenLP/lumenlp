@@ -709,7 +709,7 @@ function CopyInner() {
           ) : (
             <div className="copy-queue">
               {ops.map((op) => {
-                const done = ["drafted", "skipped", "rejected", "failed", "insufficient"].includes(op.status);
+                const done = ["drafted", "skipped", "executed", "rejected", "failed", "insufficient"].includes(op.status);
                 const preparedOp = prepared[op.id];
                 const canPrepare = policyReady && session.status === "active";
                 return (
@@ -724,6 +724,16 @@ function CopyInner() {
                     </div>
                     <div>{formatOpQuote(op)}</div>
                     {op.note ? <div className="sign-disabled-note">{op.note}</div> : null}
+                    {op.tx_hash ? (
+                      <a
+                        className="sign-disabled-note"
+                        href={`https://lab.stellar.org/r/testnet/tx/${op.tx_hash}`}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        View confirmed transaction
+                      </a>
+                    ) : null}
                     {preparedOp ? (
                       <div className="sign-disabled-note">
                         Policy intent validated: {preparedOp.method} · session {preparedOp.session_id}

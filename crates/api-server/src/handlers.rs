@@ -3230,7 +3230,7 @@ async fn lp_profile_uncached(State(state): State<AppState>, Query(q): Query<Addr
 
 const COPY_RECONCILE_BATCH: usize = 500;
 
-const COPY_OP_STATUSES: &[&str] = &["drafted", "skipped", "signed", "failed", "insufficient", "rejected"];
+const COPY_OP_STATUSES: &[&str] = &["drafted", "skipped", "signed", "executed", "failed", "insufficient", "rejected"];
 
 const COPY_SESSION_STATUSES: &[&str] = &["active", "paused", "stopped"];
 
@@ -3295,6 +3295,7 @@ fn copy_op_json(op: &CopyOpRow, venue: Option<&str>) -> Value {
         "scaled_quote_xlm": op.scaled_quote_xlm,
         "status": op.status,
         "note": op.note,
+        "tx_hash": op.tx_hash,
         "created_at": op.created_at,
         "updated_at": op.updated_at,
     })
@@ -3416,6 +3417,7 @@ fn reconcile_copy_ops(index_db: &IndexDb, session: &mut CopySessionRow) -> Resul
                 scaled_quote_xlm: draft.scaled_quote_xlm,
                 status,
                 note,
+                tx_hash: None,
                 created_at: now,
                 updated_at: now,
             };
@@ -4259,7 +4261,7 @@ async fn set_copy_op_status(
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({
-                "error": "status must be drafted, skipped, signed, failed, insufficient, or rejected",
+                "error": "status must be drafted, skipped, signed, executed, failed, insufficient, or rejected",
                 "code": "bad_status"
             })),
         )

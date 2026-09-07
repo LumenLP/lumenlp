@@ -76,8 +76,9 @@ export type CopyOp = {
   scaled_amounts: unknown;
   leader_quote_xlm?: number | null;
   scaled_quote_xlm?: number | null;
-  status: "pending" | "drafted" | "skipped" | "signed" | "failed" | "insufficient" | "rejected";
+  status: "pending" | "drafted" | "skipped" | "signed" | "executed" | "failed" | "insufficient" | "rejected";
   note?: string | null;
+  tx_hash?: string | null;
   created_at: number;
   updated_at?: number;
 };

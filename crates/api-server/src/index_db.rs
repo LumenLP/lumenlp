@@ -91,6 +91,7 @@ pub struct CopyOpRow {
     pub scaled_quote_xlm: Option<f64>,
     pub status: String,
     pub note: Option<String>,
+    pub tx_hash: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -135,11 +136,11 @@ fn copy_status_transition_allowed(current: &str, next: &str) -> bool {
         return true;
     }
     match current {
-        "pending" => matches!(next, "drafted" | "skipped" | "failed" | "insufficient" | "rejected"),
+        "pending" => matches!(next, "drafted" | "skipped" | "failed" | "insufficient" | "rejected" | "executed"),
         "drafted" => matches!(next, "signed" | "skipped" | "failed"),
         "insufficient" => matches!(next, "drafted" | "skipped" | "failed"),
-        "signed" => next == "failed",
-        "skipped" | "failed" | "rejected" => false,
+        "signed" => matches!(next, "failed" | "executed"),
+        "skipped" | "failed" | "rejected" | "executed" => false,
         _ => false,
     }
 }
@@ -400,6 +401,7 @@ impl IndexDb {
         self.ensure_column("copy_sessions", "max_daily_quote_xlm", "REAL NOT NULL DEFAULT 0")?;
         self.ensure_column("copy_sessions", "expires_at", "INTEGER")?;
         self.ensure_column("recorder_outbox", "claim_token", "TEXT")?;
+        self.ensure_column("copy_ops", "tx_hash", "TEXT")?;
         Ok(())
     }
 
@@ -742,8 +744,8 @@ impl IndexDb {
             INSERT OR IGNORE INTO copy_ops (
               id, session_id, source_event_id, pool_address, kind, position_key,
               leader_amounts_json, scaled_amounts_json, leader_quote_xlm,
-              scaled_quote_xlm, status, note, created_at, updated_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+              scaled_quote_xlm, status, note, tx_hash, created_at, updated_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, NULL, ?13, ?14)
             "#,
             params![
                 op.id,
@@ -930,7 +932,7 @@ impl IndexDb {
                 r#"
                 SELECT id, session_id, source_event_id, pool_address, kind, position_key,
                        leader_amounts_json, scaled_amounts_json, leader_quote_xlm,
-                       scaled_quote_xlm, status, note, created_at, updated_at
+                       scaled_quote_xlm, status, note, tx_hash, created_at, updated_at
                 FROM copy_ops
                 WHERE session_id = ?1 AND status = ?2
                 ORDER BY created_at DESC
@@ -943,7 +945,7 @@ impl IndexDb {
                 r#"
                 SELECT id, session_id, source_event_id, pool_address, kind, position_key,
                        leader_amounts_json, scaled_amounts_json, leader_quote_xlm,
-                       scaled_quote_xlm, status, note, created_at, updated_at
+                       scaled_quote_xlm, status, note, tx_hash, created_at, updated_at
                 FROM copy_ops
                 WHERE session_id = ?1
                 ORDER BY created_at DESC
@@ -985,7 +987,7 @@ impl IndexDb {
             r#"
             SELECT id, session_id, source_event_id, pool_address, kind, position_key,
                    leader_amounts_json, scaled_amounts_json, leader_quote_xlm,
-                   scaled_quote_xlm, status, note, created_at, updated_at
+                   scaled_quote_xlm, status, note, tx_hash, created_at, updated_at
             FROM copy_ops
             WHERE id = ?1
             "#,
@@ -2418,8 +2420,9 @@ fn map_copy_op_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<CopyOpRow> {
         scaled_quote_xlm: row.get(9)?,
         status: row.get(10)?,
         note: row.get(11)?,
-        created_at: row.get(12)?,
-        updated_at: row.get(13)?,
+        tx_hash: row.get(12)?,
+        created_at: row.get(13)?,
+        updated_at: row.get(14)?,
     })
 }
 
@@ -2810,6 +2813,7 @@ mod tests {
             scaled_quote_xlm: Some(5.0),
             status: "pending".into(),
             note: None,
+            tx_hash: None,
             created_at: 1,
             updated_at: 1,
         };

@@ -169,13 +169,19 @@ if ! output="$(invoke "$RELAYER_ACCOUNT" execute_aquarius_standard_op \
 fi
 echo "$output"
 
+# The Stellar CLI prints the submitted transaction hash in its receipt. Keep
+# it when available so the API can expose an auditable execution link; the
+# operation remains executable-status even if an older CLI omits the hash.
+tx_hash="$(grep -Eio '[0-9a-f]{64}' <<< "$output" | tail -1 || true)"
+
 if ! sqlite3 "$DATABASE_PATH" <<SQL
 BEGIN;
 UPDATE recorder_outbox
    SET status = 'submitted', last_error = NULL, updated_at = strftime('%s','now')
  WHERE source_event_id = '$source_event_id';
 UPDATE copy_ops
-   SET status = 'signed', note = 'testnet relayer submitted policy execution', updated_at = strftime('%s','now')
+   SET status = 'executed', tx_hash = NULLIF('$tx_hash', ''),
+       note = 'testnet relayer confirmed policy execution', updated_at = strftime('%s','now')
  WHERE source_event_id = '$source_event_id' AND status = 'pending';
 COMMIT;
 SQL
