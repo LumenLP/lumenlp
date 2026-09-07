@@ -21,6 +21,7 @@ import { useIdentity } from "@/lib/identity";
 import { newStrategyId, upsertStrategy } from "@/lib/strategies";
 import {
   copyPolicyConfig,
+  copyPolicyTransactionUrl,
   submitPolicyControl,
   type CopyPolicyControl,
 } from "@/lib/copyPolicy";
@@ -663,7 +664,14 @@ function CopyInner() {
             </div>
             {policyTxHash ? (
               <p className="sign-disabled-note">
-                Policy control confirmed on-chain: {shortAddr(policyTxHash)}
+                Policy control confirmed on-chain:{" "}
+                <a
+                  href={copyPolicyTransactionUrl(policy.network, policyTxHash)}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  {shortAddr(policyTxHash)}
+                </a>
               </p>
             ) : null}
             {sessionLive ? (

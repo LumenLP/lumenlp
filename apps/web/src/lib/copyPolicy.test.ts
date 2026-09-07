@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   copyPolicyControlMethod,
   copyPolicyNetworkPassphrase,
+  copyPolicyTransactionUrl,
 } from "./copyPolicy";
 
 describe("copyPolicyControlMethod", () => {
@@ -19,6 +20,14 @@ describe("copyPolicyNetworkPassphrase", () => {
     );
     expect(copyPolicyNetworkPassphrase("public")).toBe(
       "Public Global Stellar Network ; September 2015",
+    );
+  });
+});
+
+describe("copyPolicyTransactionUrl", () => {
+  it("uses the selected Stellar network and safely encodes the hash", () => {
+    expect(copyPolicyTransactionUrl("testnet", "abc/123")).toBe(
+      "https://lab.stellar.org/r/testnet/tx/abc%2F123",
     );
   });
 });

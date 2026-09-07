@@ -32,6 +32,10 @@ export function copyPolicyControlMethod(control: CopyPolicyControl): string {
   return CONTROL_METHODS[control];
 }
 
+export function copyPolicyTransactionUrl(network: CopyPolicyNetwork, hash: string): string {
+  return `https://lab.stellar.org/r/${network}/tx/${encodeURIComponent(hash)}`;
+}
+
 /** Sign a prepared transaction after verifying the wallet is on the configured network. */
 export async function signPreparedPolicyTransaction(xdr: string, address: string) {
   const { ensureWalletKit } = await import("@/lib/wallet-kit");
