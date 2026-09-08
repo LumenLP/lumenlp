@@ -735,7 +735,7 @@ function CopyInner() {
                     {op.tx_hash ? (
                       <a
                         className="sign-disabled-note"
-                        href={`https://lab.stellar.org/r/testnet/tx/${op.tx_hash}`}
+                        href={copyPolicyTransactionUrl(policy.network, op.tx_hash)}
                         target="_blank"
                         rel="noreferrer"
                       >
