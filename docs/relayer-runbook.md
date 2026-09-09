@@ -37,6 +37,9 @@ accepted only when the recorder payload contains one unambiguous reward-token
 address; multi-token or incomplete claim events remain fail-closed. The
 execution call uses coefficient-scaled amounts from `copy_ops`,
 not the raw Leader amounts stored in `recorder_outbox`.
+Deposits scale the event's token inputs. Withdrawals instead scale the event's
+`share_amount` and pass that value as the LP shares to burn; observed token
+outputs are display and quote data, never a substitute for shares.
 
 The helper is intentionally single-instance. It takes an advisory `flock`
 next to the configured SQLite database before reading a pending operation.

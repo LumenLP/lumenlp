@@ -783,9 +783,9 @@ impl IndexDb {
         Ok(rows > 0)
     }
 
-    /// Persist a canonical event exactly once for a future recorder worker.
-    /// The worker is deliberately separate so this API process never needs a
-    /// Soroban signing key.
+    /// Persist a canonical event for a future recorder worker. A still-pending
+    /// row may be refreshed when event normalization improves, but a delivery
+    /// that has reached a policy contract is immutable.
     pub fn enqueue_recorder_event(&self, event: &RecorderEvent) -> Result<bool> {
         let now = chrono::Utc::now().timestamp();
         let amounts_json = serde_json::to_string(&event.amounts)?;
@@ -809,6 +809,35 @@ impl IndexDb {
                 now,
             ],
         )?;
+        if rows == 0 {
+            self.conn.execute(
+                r#"
+                UPDATE recorder_outbox
+                SET leader_address = ?2, pool_address = ?3, kind = ?4,
+                    claim_token = ?5, amounts_json = ?6, quote_stroops = ?7,
+                    ledger = ?8, status = 'pending', last_error = NULL,
+                    created_at = ?9, updated_at = ?10
+                WHERE source_event_id = ?1
+                  AND status IN ('pending', 'cancelled')
+                  AND NOT EXISTS (
+                    SELECT 1 FROM recorder_deliveries
+                    WHERE source_event_id = ?1 AND status = 'recorded'
+                  )
+                "#,
+                params![
+                    event.source_event_id,
+                    event.leader_address,
+                    event.pool_address,
+                    event.kind,
+                    event.claim_token,
+                    amounts_json,
+                    event.quote_stroops.to_string(),
+                    event.ledger,
+                    event.created_at,
+                    now,
+                ],
+            )?;
+        }
         Ok(rows > 0)
     }
 
@@ -2624,6 +2653,24 @@ mod tests {
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].quote_stroops, 129_000_000);
         assert_eq!(pending[0].amounts, vec![100, 200]);
+
+        let mut corrected = event.clone();
+        corrected.amounts = vec![75];
+        corrected.kind = "withdraw".into();
+        assert!(!db.enqueue_recorder_event(&corrected).unwrap());
+        let pending = db.pending_recorder_events(10).unwrap();
+        assert_eq!(pending[0].kind, "withdraw");
+        assert_eq!(pending[0].amounts, vec![75]);
+
+        db.conn
+            .execute(
+                "INSERT INTO recorder_deliveries (source_event_id, contract_address, status, created_at, updated_at) VALUES ('evt-1', 'CPOLICY', 'recorded', 1, 1)",
+                [],
+            )
+            .unwrap();
+        corrected.amounts = vec![999];
+        assert!(!db.enqueue_recorder_event(&corrected).unwrap());
+        assert_eq!(db.pending_recorder_events(10).unwrap()[0].amounts, vec![75]);
 
         let claimed = db.claim_recorder_events(10, 300).unwrap();
         assert_eq!(claimed[0].status, "processing");

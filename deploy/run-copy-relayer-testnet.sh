@@ -115,7 +115,12 @@ if [[ "$kind" == "deposit" ]]; then
   share_amount="0"
 else
   desired_amounts_vec='["0","0"]'
-  share_amount="$(python3 -c 'import json,sys; rows=json.loads(sys.argv[1]); assert rows, "withdraw scaled amounts are empty"; value=str(rows[0].get("amount") if isinstance(rows[0],dict) else rows[0]); assert value.isdigit(), "withdraw share amount must be an unsigned integer"; print(value)' "$scaled_amounts")"
+  if [[ "$kind" == "withdraw" ]] && ! share_amount="$(python3 -c 'import json,sys; source=json.loads(sys.argv[1]); scaled=json.loads(sys.argv[2]); assert isinstance(source,list) and len(source)==1 and str(source[0]).isdigit(), "withdraw recorder payload must contain exactly one LP share amount"; assert isinstance(scaled,list) and len(scaled)==1 and isinstance(scaled[0],dict) and scaled[0].get("unit")=="lp_shares", "withdraw scaled amount must be tagged as LP shares"; value=str(scaled[0].get("amount")); assert value.isdigit(), "withdraw share amount must be an unsigned integer"; print(value)' "$amounts" "$scaled_amounts")"; then
+    sqlite3 "$DATABASE_PATH" "UPDATE copy_ops SET status='rejected', note='withdraw_share_amount_missing: regenerate operation from indexed LP shares', updated_at=strftime('%s','now') WHERE id='$op_id' AND status='pending';" || true
+    echo "Refusing withdrawal: queue payload does not contain canonical LP shares" >&2
+    exit 1
+  fi
+  share_amount="${share_amount:-0}"
 fi
 min_amounts_vec='["0","0"]'
 

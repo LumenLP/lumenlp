@@ -148,7 +148,8 @@ The Copy Engine does not submit arbitrary event data directly to Soroban. For
 an event that passes the follower's off-chain policy checks, the API creates a
 canonical recorder payload and stores it in the `recorder_outbox` table. The
 payload contains the source event identifier, Leader, pool, normalized action,
-integer token amounts, and the quote in stroops. The source event identifier is
+integer deposit token amounts or withdrawal LP shares, and the quote in
+stroops. The source event identifier is
 the idempotency key, so retries cannot create a second recorder event. A future
 recorder worker can consume this queue with a separately controlled signing
 boundary; the API itself does not hold that signing key. The Soroban policy

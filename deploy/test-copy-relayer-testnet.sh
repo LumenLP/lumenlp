@@ -97,4 +97,20 @@ assert_eq submitted "$(sqlite3 "$db" "SELECT status FROM recorder_outbox WHERE s
 assert_eq 1 "$(grep -c 'record_leader_event' "$log")" "recorder call count"
 assert_eq 2 "$(grep -c 'execute_aquarius_standard_op --session_id' "$log")" "execution call count"
 
+sqlite3 "$db" <<'SQL'
+INSERT INTO recorder_outbox VALUES
+  ('event-3', 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF',
+   'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM', 'withdraw', NULL,
+   '["9000","8000"]', '30000000', 125, 'pending', 0, NULL, 4, 4);
+INSERT INTO copy_ops VALUES
+  ('op-d', 'session-a', 'event-3', 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM',
+   'withdraw', 1.5, '[{"token":"CA","amount":"4500"}]', 'pending', NULL, NULL, 4, 4);
+SQL
+if run_relayer 2>/dev/null; then
+  echo "legacy withdrawal unexpectedly reached execution" >&2
+  exit 1
+fi
+assert_eq rejected "$(sqlite3 "$db" "SELECT status FROM copy_ops WHERE id='op-d'")" "legacy withdrawal"
+assert_eq 2 "$(grep -c 'execute_aquarius_standard_op --session_id' "$log")" "execution count after rejected withdrawal"
+
 echo "copy relayer multi-session test passed"

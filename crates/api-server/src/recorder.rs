@@ -46,10 +46,12 @@ pub fn canonical_event(event: &PoolEventRow, leader_address: &str) -> Option<Rec
         _ => return None,
     };
     let derived = event.body.get("derived")?;
-    let amounts = derived
-        .get("token_amounts")
-        .and_then(parse_token_amounts)
-        .or_else(|| claim_amounts(&event.kind, derived))?;
+    let amounts = match event.kind.as_str() {
+        "deposit_liquidity" => derived.get("token_amounts").and_then(parse_token_amounts)?,
+        "withdraw_liquidity" => vec![derived.get("share_amount")?.as_str()?.parse::<u128>().ok()?],
+        "claim_fees" | "claim_protocol_fee" => claim_amounts(&event.kind, derived)?,
+        _ => return None,
+    };
     let claim_token = if kind == "claim" {
         Some(claim_token(&event.kind, derived)?)
     } else {
@@ -153,6 +155,39 @@ mod tests {
         assert_eq!(row.claim_token, None);
         assert_eq!(row.quote_stroops, 129_000_000);
         assert_eq!(row.ledger, 123);
+    }
+
+    #[test]
+    fn canonicalizes_withdraw_as_lp_shares_not_token_outputs() {
+        let row = canonical_event(
+            &event(
+                "withdraw_liquidity",
+                json!({
+                    "share_amount": "75",
+                    "token_amounts": [
+                        {"token": "CA", "amount": "1000"},
+                        {"token": "CB", "amount": "2000"}
+                    ],
+                    "total_quote_xlm": 12.9
+                }),
+            ),
+            "GLEADER",
+        )
+        .unwrap();
+        assert_eq!(row.kind, "withdraw");
+        assert_eq!(row.amounts, vec![75]);
+    }
+
+    #[test]
+    fn rejects_withdraw_without_lp_share_amount() {
+        let row = event(
+            "withdraw_liquidity",
+            json!({
+                "token_amounts": [{"token": "CA", "amount": "1000"}],
+                "total_quote_xlm": 1.0
+            }),
+        );
+        assert!(canonical_event(&row, "GLEADER").is_none());
     }
 
     #[test]

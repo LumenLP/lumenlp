@@ -109,13 +109,17 @@ fn token_amounts_from_claim_protocol_fee(derived: &Value) -> Option<Value> {
 
 fn leader_amounts_for_kind(event_kind: &str, derived: &Value) -> Option<Value> {
     match event_kind {
-        "deposit_liquidity" | "withdraw_liquidity" => {
+        "deposit_liquidity" => {
             let amounts = derived.get("token_amounts")?;
             if amounts.as_array().is_some_and(|rows| !rows.is_empty()) {
                 Some(amounts.clone())
             } else {
                 None
             }
+        }
+        "withdraw_liquidity" => {
+            let amount = derived.get("share_amount")?.as_str()?;
+            Some(json!([{ "unit": "lp_shares", "amount": amount }]))
         }
         "claim_fees" => token_amounts_from_claim_fees(derived),
         "claim_protocol_fee" => token_amounts_from_claim_protocol_fee(derived),
@@ -158,7 +162,15 @@ pub fn build_scaled_op_payload(
     }
 
     let leader_amounts = leader_amounts_for_kind(event_kind, derived)?;
-    let scaled_amounts = scale_token_amounts_json(&leader_amounts, coefficient)?;
+    let scaled_amounts = if event_kind == "withdraw_liquidity" {
+        let amount = leader_amounts.as_array()?.first()?.get("amount")?.as_str()?;
+        json!([{
+            "unit": "lp_shares",
+            "amount": scale_amount_str(amount, coefficient)?,
+        }])
+    } else {
+        scale_token_amounts_json(&leader_amounts, coefficient)?
+    };
 
     let leader_quote_xlm = leader_quote_for_kind(event_kind, derived);
     let scaled_quote_xlm = leader_quote_xlm.map(|quote| scale_quote_xlm(quote, coefficient));
@@ -228,6 +240,43 @@ mod tests {
                 {"token": "CB", "amount": "200"}
             ])
         );
+    }
+
+    #[test]
+    fn build_scaled_op_payload_withdraw_uses_lp_shares_not_token_outputs() {
+        let body = json!({
+            "topic": [{"type":"symbol","value":"withdraw_liquidity"}],
+            "derived": {
+                "share_amount": "1000",
+                "token_amounts": [
+                    {"token": "CA", "amount": "9000"},
+                    {"token": "CB", "amount": "8000"}
+                ],
+                "total_quote_xlm": 30.0
+            }
+        });
+        let draft = build_scaled_op_payload(&body, "CPOOL", 0.25, false).unwrap();
+        assert_eq!(draft.kind, "withdraw");
+        assert_eq!(
+            draft.leader_amounts_json,
+            json!([{"unit": "lp_shares", "amount": "1000"}])
+        );
+        assert_eq!(
+            draft.scaled_amounts_json,
+            json!([{"unit": "lp_shares", "amount": "250"}])
+        );
+    }
+
+    #[test]
+    fn build_scaled_op_payload_rejects_withdraw_without_share_amount() {
+        let body = json!({
+            "topic": [{"type":"symbol","value":"withdraw_liquidity"}],
+            "derived": {
+                "token_amounts": [{"token": "CA", "amount": "9000"}],
+                "total_quote_xlm": 30.0
+            }
+        });
+        assert!(build_scaled_op_payload(&body, "CPOOL", 0.25, false).is_none());
     }
 
     #[test]
