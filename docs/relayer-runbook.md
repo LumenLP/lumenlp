@@ -45,6 +45,14 @@ submitting the same local queue row concurrently; on-chain replay protection
 remains a separate fail-closed safeguard. Set `COPY_RELAYER_LOCK_FILE` only
 when the database directory is not writable by the relayer user.
 
+Recorder delivery is tracked per source event and policy contract, while Copy
+execution is tracked per local operation/session. If several sessions follow
+the same Leader event, the canonical event is recorded once for that policy
+and each session is then executed independently. The outbox event is marked
+submitted only after no pending Copy operation still references it. An event
+that has no pending operation and was never recorded is marked cancelled so it
+does not appear as a stale recorder backlog.
+
 ## Dry run
 
 Run from the repository root with a copy of the index database or the

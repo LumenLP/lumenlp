@@ -136,7 +136,10 @@ fn copy_status_transition_allowed(current: &str, next: &str) -> bool {
         return true;
     }
     match current {
-        "pending" => matches!(next, "drafted" | "skipped" | "failed" | "insufficient" | "rejected" | "executed"),
+        "pending" => matches!(
+            next,
+            "drafted" | "skipped" | "failed" | "insufficient" | "rejected" | "executed"
+        ),
         "drafted" => matches!(next, "signed" | "skipped" | "failed"),
         "insufficient" => matches!(next, "drafted" | "skipped" | "failed"),
         "signed" => matches!(next, "failed" | "executed"),
@@ -311,6 +314,19 @@ impl IndexDb {
             );
             CREATE INDEX IF NOT EXISTS idx_recorder_outbox_status
               ON recorder_outbox(status, created_at ASC);
+
+            CREATE TABLE IF NOT EXISTS recorder_deliveries (
+              source_event_id TEXT NOT NULL,
+              contract_address TEXT NOT NULL,
+              status TEXT NOT NULL,
+              attempts INTEGER NOT NULL DEFAULT 0,
+              last_error TEXT,
+              created_at INTEGER NOT NULL,
+              updated_at INTEGER NOT NULL,
+              PRIMARY KEY (source_event_id, contract_address)
+            );
+            CREATE INDEX IF NOT EXISTS idx_recorder_deliveries_status
+              ON recorder_deliveries(status, created_at ASC);
 
             CREATE TABLE IF NOT EXISTS token_metadata (
               address TEXT PRIMARY KEY,
@@ -2512,6 +2528,7 @@ mod tests {
         assert!(db.table_exists("copy_sessions"));
         assert!(db.table_exists("copy_ops"));
         assert!(db.table_exists("recorder_outbox"));
+        assert!(db.table_exists("recorder_deliveries"));
         assert!(db.table_exists("token_metadata"));
         assert!(db.table_exists("wallet_auth_challenges"));
         assert!(db.table_exists("wallet_auth_tokens"));
