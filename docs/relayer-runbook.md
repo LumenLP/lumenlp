@@ -56,6 +56,12 @@ submitted only after no pending Copy operation still references it. An event
 that has no pending operation and was never recorded is marked cancelled so it
 does not appear as a stale recorder backlog.
 
+Current policy builds expose `copy_executed(session_id, source_event_id)` as a
+read-only recovery receipt. If submission returns an error after the chain has
+already committed the operation, the relayer checks this receipt and repairs
+the local operation status instead of retrying the liquidity action. Older
+policy builds remain fail-closed and require manual receipt reconciliation.
+
 ## Dry run
 
 Run from the repository root with a copy of the index database or the

@@ -258,6 +258,15 @@ impl CopyPolicy {
             .ok_or(Error::EventNotFound)
     }
 
+    /// Report whether a session has consumed a source event. Relayers use this
+    /// read-only receipt after an ambiguous submission result so a successful
+    /// on-chain execution is not left pending in their local queue.
+    pub fn copy_executed(env: Env, session_id: u32, source_event_id: BytesN<32>) -> bool {
+        env.storage()
+            .persistent()
+            .has(&DataKey::Replay(session_id, source_event_id))
+    }
+
     pub fn register_session(
         env: Env,
         session_id: u32,
@@ -1496,6 +1505,7 @@ mod test {
             &10,
             &1,
         );
+        assert!(!CopyPolicyClient::new(&env, &contract).copy_executed(&1, &id));
         CopyPolicyClient::new(&env, &contract).execute_copy_op(&1, &id, &pool, &symbol_short!("deposit"), &10);
         assert_eq!(
             env.events().all(),
@@ -1517,6 +1527,7 @@ mod test {
                 ),
             ]
         );
+        assert!(CopyPolicyClient::new(&env, &contract).copy_executed(&1, &id));
         assert!(CopyPolicyClient::new(&env, &contract)
             .try_execute_copy_op(&1, &id, &pool, &symbol_short!("deposit"), &10)
             .is_err());

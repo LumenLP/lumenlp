@@ -52,8 +52,14 @@ cat >"$bin/stellar" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$STELLAR_TEST_LOG"
 if [[ "$*" == *"--help"* ]]; then
-  printf '  record_leader_event \n  record_claim_event \n  execute_aquarius_standard_op \n'
+  printf '  record_leader_event \n  record_claim_event \n  execute_aquarius_standard_op \n  copy_executed \n'
+elif [[ "$*" == *"copy_executed"* ]]; then
+  printf '%s\n' "${STELLAR_CONSUMED:-false}"
 elif [[ "$*" == *"execute_aquarius_standard_op"* ]]; then
+  if [[ "${STELLAR_FAIL_EXECUTE:-0}" == "1" ]]; then
+    echo "submission response lost" >&2
+    exit 1
+  fi
   printf '%064d\n' 2
 else
   printf '%064d\n' 1
@@ -112,5 +118,23 @@ if run_relayer 2>/dev/null; then
 fi
 assert_eq rejected "$(sqlite3 "$db" "SELECT status FROM copy_ops WHERE id='op-d'")" "legacy withdrawal"
 assert_eq 2 "$(grep -c 'execute_aquarius_standard_op --session_id' "$log")" "execution count after rejected withdrawal"
+
+sqlite3 "$db" <<'SQL'
+INSERT INTO recorder_outbox VALUES
+  ('event-4', 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF',
+   'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM', 'deposit', NULL,
+   '["40","80"]', '12000000', 126, 'pending', 0, NULL, 5, 5);
+INSERT INTO recorder_deliveries VALUES
+  ('event-4', 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM',
+   'recorded', 1, NULL, 5, 5);
+INSERT INTO copy_ops VALUES
+  ('op-e', 'session-a', 'event-4', 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM',
+   'deposit', 0.6, '["20","40"]', 'pending', NULL, NULL, 5, 5);
+SQL
+STELLAR_FAIL_EXECUTE=1 STELLAR_CONSUMED=true run_relayer 2>/dev/null
+assert_eq executed "$(sqlite3 "$db" "SELECT status FROM copy_ops WHERE id='op-e'")" "recovered operation"
+assert_eq "testnet relayer recovered confirmed on-chain execution" "$(sqlite3 "$db" "SELECT note FROM copy_ops WHERE id='op-e'")" "recovery note"
+assert_eq submitted "$(sqlite3 "$db" "SELECT status FROM recorder_outbox WHERE source_event_id='event-4'")" "recovered outbox"
+assert_eq 1 "$(grep -c 'copy_executed --session_id' "$log")" "receipt query count"
 
 echo "copy relayer multi-session test passed"

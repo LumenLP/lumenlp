@@ -531,6 +531,7 @@ The contract exposes these public methods:
 | `record_leader_event(...)` | recorder auth | Store an idempotent canonical source event for later execution. |
 | `record_claim_event(...)` | recorder auth | Store a claim source event together with its exact reward-token address. |
 | `leader_event(source_event_id)` | read | Inspect a recorded source event. |
+| `copy_executed(session_id, source_event_id)` | read | Check the durable per-session replay receipt for relayer reconciliation. |
 | `set_venue_router(venue, router)` | owner auth | Allowlist the Router contract for a supported venue; relayers cannot set it. |
 | `venue_router(venue)` | read | Inspect the configured venue Router or return not configured. |
 | `execute_copy_op(...)` | relayer auth | Validate and record a policy-approved intent without calling a DEX. |

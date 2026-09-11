@@ -168,6 +168,29 @@ invoke() {
     --send yes -- "${@:2}"
 }
 
+reconcile_execution() {
+  local receipt_hash="$1"
+  local receipt_note="$2"
+  sqlite3 "$DATABASE_PATH" <<SQL
+BEGIN;
+UPDATE copy_ops
+   SET status = 'executed', tx_hash = NULLIF('$receipt_hash', ''),
+       note = '$receipt_note', updated_at = strftime('%s','now')
+ WHERE id = '$op_id' AND status = 'pending';
+UPDATE recorder_outbox
+   SET status = CASE
+         WHEN EXISTS (
+           SELECT 1 FROM copy_ops
+            WHERE source_event_id = '$source_event_id' AND status = 'pending'
+         ) THEN 'pending'
+         ELSE 'submitted'
+       END,
+       last_error = NULL, updated_at = strftime('%s','now')
+ WHERE source_event_id = '$source_event_id';
+COMMIT;
+SQL
+}
+
 if [[ "$recorder_status" != "recorded" ]]; then
   sqlite3 "$DATABASE_PATH" \
     "INSERT OR IGNORE INTO recorder_deliveries (source_event_id, contract_address, status, attempts, created_at, updated_at) VALUES ('$source_event_id', '$POLICY', 'pending', 0, strftime('%s','now'), strftime('%s','now'));"
@@ -223,6 +246,23 @@ if ! output="$(invoke "$RELAYER_ACCOUNT" execute_aquarius_standard_op \
   --min_amounts "$min_amounts_vec" \
   --claim_token "${claim_token:-$pool}" 2>&1)"; then
   echo "$output" >&2
+  # A network/CLI failure can happen after the transaction committed. Newer
+  # policy builds expose the replay receipt so local state can be reconciled
+  # without submitting the DEX operation again.
+  if grep -q '^[[:space:]]*copy_executed[[:space:]]' <<< "$SCHEMA"; then
+    consumed="$(stellar contract invoke --id "$POLICY" --source-account "$RELAYER_ACCOUNT" \
+      --rpc-url "$RPC_URL" --network-passphrase "$NETWORK_PASSPHRASE" \
+      --send no -- copy_executed --session_id "$contract_session_id" \
+      --source_event_id "$source_event_key" 2>/dev/null || true)"
+    if [[ "$(tr -d '[:space:]' <<< "$consumed")" == "true" ]]; then
+      if ! reconcile_execution "" "testnet relayer recovered confirmed on-chain execution"; then
+        echo "On-chain Copy is confirmed but local status reconciliation failed" >&2
+        exit 1
+      fi
+      echo "Recovered an already-confirmed testnet Copy execution."
+      exit 0
+    fi
+  fi
   sqlite3 "$DATABASE_PATH" "UPDATE recorder_deliveries SET status='recorded', last_error='execute_copy_op failed', updated_at=strftime('%s','now') WHERE source_event_id='$source_event_id' AND contract_address='$POLICY';" || true
   exit 1
 fi
@@ -233,25 +273,7 @@ echo "$output"
 # operation remains executable-status even if an older CLI omits the hash.
 tx_hash="$(grep -Eio '[0-9a-f]{64}' <<< "$output" | tail -1 || true)"
 
-if ! sqlite3 "$DATABASE_PATH" <<SQL
-BEGIN;
-UPDATE copy_ops
-   SET status = 'executed', tx_hash = NULLIF('$tx_hash', ''),
-       note = 'testnet relayer confirmed policy execution', updated_at = strftime('%s','now')
- WHERE id = '$op_id' AND status = 'pending';
-UPDATE recorder_outbox
-   SET status = CASE
-         WHEN EXISTS (
-           SELECT 1 FROM copy_ops
-            WHERE source_event_id = '$source_event_id' AND status = 'pending'
-         ) THEN 'pending'
-         ELSE 'submitted'
-       END,
-       last_error = NULL, updated_at = strftime('%s','now')
- WHERE source_event_id = '$source_event_id';
-COMMIT;
-SQL
-then
+if ! reconcile_execution "$tx_hash" "testnet relayer confirmed policy execution"; then
   echo "On-chain Copy succeeded but local status reconciliation failed" >&2
   exit 1
 fi

@@ -17,6 +17,10 @@ promotion remains blocked until all downstream authorization paths are tested.
 - Source-event identifiers are replay-protected and successful executions emit
   a `copy` event.
 
+The read-only `copy_executed` entry point exposes the same per-session replay
+marker as a durable reconciliation receipt. It lets a relayer distinguish a
+committed transaction from a submission failure after losing the CLI response.
+
 The current `execute_copy_op` records the policy-approved intent and consumes
 the budget without invoking a DEX. `execute_aquarius_standard_op` adds the
 adapter boundary for standard Aquarius pools: it invokes only `deposit`,
@@ -62,10 +66,10 @@ stellar contract build --package lumenlp-copy-policy --out-dir target/contracts
 ```
 
 The current local build artifact is
-`target/wasm32v1-none/release/lumenlp_copy_policy.wasm`. It was built on
-2026-08-26 with hash:
+`target/contracts/lumenlp_copy_policy.wasm`. It was built on 2026-09-11 with
+size 72,049 bytes and hash:
 
-`3ac2e5657e55b81b3539e2ab0f91ecad07c9f06799474bf3a0c2760052d4e204`
+`fa5da4a6b364312baba51a9c4e30ee41e27b4f14e86c4616c33dc9f90de632c3`
 
 The deployed v3 testnet instance below is the previous promotion-gated build.
 The Soroswap-gated build is deployed separately and remains isolated from
