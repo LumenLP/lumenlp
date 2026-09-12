@@ -528,8 +528,8 @@ The contract exposes these public methods:
 | `resume_session(session_id)` | owner auth | Resume a non-expired session. |
 | `disarm_session(session_id)` | owner auth | Remove the session and its active configuration. |
 | `session(session_id)` | read | Inspect the stored session state. |
-| `record_leader_event(...)` | recorder auth | Store an idempotent canonical source event for later execution. |
-| `record_claim_event(...)` | recorder auth | Store a claim source event together with its exact reward-token address. |
+| `record_leader_event(...)` | recorder auth | Store a canonical source event; exact retries are idempotent and conflicting payloads are rejected. |
+| `record_claim_event(...)` | recorder auth | Store a claim source event with its exact reward token; reject conflicting reuse of its source ID. |
 | `leader_event(source_event_id)` | read | Inspect a recorded source event. |
 | `copy_executed(session_id, source_event_id)` | read | Check the durable per-session replay receipt for relayer reconciliation. |
 | `set_venue_router(venue, router)` | owner auth | Allowlist the Router contract for a supported venue; relayers cannot set it. |

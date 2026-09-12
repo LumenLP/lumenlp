@@ -16,6 +16,9 @@ promotion remains blocked until all downstream authorization paths are tested.
   pool and operation are allowed, and both limits pass.
 - Source-event identifiers are replay-protected and successful executions emit
   a `copy` event.
+- Recorder retries are idempotent only when every authoritative field matches
+  the stored event. Reusing an ID with a different Leader, pool, kind, reward
+  token, amount, quote, or ledger is rejected and never overwrites chain state.
 - Active contract instance/code, sessions, recorded events, and replay markers
   renew to the network's one-year TTL horizon when used by a submitted policy
   transaction.
@@ -75,9 +78,9 @@ stellar contract build --package lumenlp-copy-policy --out-dir target/contracts
 
 The current local build artifact is
 `target/contracts/lumenlp_copy_policy.wasm`. It was built on 2026-09-12 with
-size 73,361 bytes and hash:
+size 73,910 bytes and hash:
 
-`3824b5fe69db408487fec2324218f7df1cc8cbfb925b22eb29ef04bf69bbc2a8`
+`439083b2776a1905a87e590b5451a58fb564d1aa8da91f87bc13d1aae02bef44`
 
 The deployed v3 testnet instance below is the previous promotion-gated build.
 The Soroswap-gated build is deployed separately and remains isolated from

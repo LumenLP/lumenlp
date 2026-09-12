@@ -141,6 +141,25 @@ fn bump_persistent_ttl(env: &Env, key: &DataKey) {
         .extend_ttl(key, POLICY_TTL_THRESHOLD, POLICY_TTL_EXTEND_TO);
 }
 
+fn same_leader_event_payload(
+    event: &LeaderEvent,
+    leader: &Address,
+    pool: &Address,
+    kind: &Symbol,
+    claim_token: &Option<Address>,
+    amounts: &Vec<u128>,
+    quote: i128,
+    ledger: u32,
+) -> bool {
+    event.leader == *leader
+        && event.pool == *pool
+        && event.kind == *kind
+        && event.claim_token == *claim_token
+        && event.amounts == *amounts
+        && event.quote == quote
+        && event.ledger == ledger
+}
+
 #[contract]
 pub struct CopyPolicy;
 
@@ -212,7 +231,10 @@ impl CopyPolicy {
             return Err(Error::InvalidEvent);
         }
         let key = DataKey::LeaderEvent(source_event_id);
-        if env.storage().persistent().has(&key) {
+        if let Some(existing) = env.storage().persistent().get::<_, LeaderEvent>(&key) {
+            if !same_leader_event_payload(&existing, &leader, &pool, &kind, &None, &amounts, quote, ledger) {
+                return Err(Error::EventMismatch);
+            }
             bump_persistent_ttl(&env, &key);
             return Ok(());
         }
@@ -255,7 +277,12 @@ impl CopyPolicy {
             return Err(Error::InvalidEvent);
         }
         let key = DataKey::LeaderEvent(source_event_id);
-        if env.storage().persistent().has(&key) {
+        let kind = symbol_short!("claim");
+        let claim_token = Some(claim_token);
+        if let Some(existing) = env.storage().persistent().get::<_, LeaderEvent>(&key) {
+            if !same_leader_event_payload(&existing, &leader, &pool, &kind, &claim_token, &amounts, quote, ledger) {
+                return Err(Error::EventMismatch);
+            }
             bump_persistent_ttl(&env, &key);
             return Ok(());
         }
@@ -264,8 +291,8 @@ impl CopyPolicy {
             &LeaderEvent {
                 leader,
                 pool,
-                kind: symbol_short!("claim"),
-                claim_token: Some(claim_token),
+                kind,
+                claim_token,
                 amounts,
                 quote,
                 ledger,
@@ -1327,6 +1354,60 @@ mod test {
                     >= POLICY_TTL_EXTEND_TO - 1
             );
         });
+    }
+
+    #[test]
+    fn recorder_accepts_exact_retry_and_rejects_conflicting_payload() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract = env.register(CopyPolicy, ());
+        let owner = Address::generate(&env);
+        let relayer = Address::generate(&env);
+        let recorder = Address::generate(&env);
+        let pool = Address::generate(&env);
+        let other_pool = Address::generate(&env);
+        let event_id = BytesN::from_array(&env, &[43; 32]);
+        let amounts = Vec::from_array(&env, [100u128, 200u128]);
+        let client = CopyPolicyClient::new(&env, &contract);
+
+        client.initialize(&owner, &relayer);
+        client.set_event_recorder(&recorder);
+        client.record_leader_event(&event_id, &owner, &pool, &symbol_short!("deposit"), &amounts, &10, &7);
+        env.ledger().set_timestamp(10);
+        client.record_leader_event(&event_id, &owner, &pool, &symbol_short!("deposit"), &amounts, &10, &7);
+        assert_eq!(client.leader_event(&event_id).recorded_at, 0);
+
+        assert!(client
+            .try_record_leader_event(
+                &event_id,
+                &owner,
+                &other_pool,
+                &symbol_short!("deposit"),
+                &amounts,
+                &10,
+                &7,
+            )
+            .is_err());
+        assert!(client
+            .try_record_leader_event(
+                &event_id,
+                &owner,
+                &pool,
+                &symbol_short!("deposit"),
+                &Vec::from_array(&env, [100u128, 201u128]),
+                &10,
+                &7,
+            )
+            .is_err());
+        assert!(client
+            .try_record_claim_event(&event_id, &owner, &pool, &amounts, &10, &7, &other_pool)
+            .is_err());
+
+        let stored = client.leader_event(&event_id);
+        assert_eq!(stored.pool, pool);
+        assert_eq!(stored.amounts, amounts);
+        assert_eq!(stored.kind, symbol_short!("deposit"));
+        assert_eq!(stored.claim_token, None);
     }
 
     #[test]
