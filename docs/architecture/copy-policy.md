@@ -16,10 +16,18 @@ promotion remains blocked until all downstream authorization paths are tested.
   pool and operation are allowed, and both limits pass.
 - Source-event identifiers are replay-protected and successful executions emit
   a `copy` event.
+- Active contract instance/code, sessions, recorded events, and replay markers
+  renew to the network's one-year TTL horizon when used by a submitted policy
+  transaction.
 
 The read-only `copy_executed` entry point exposes the same per-session replay
 marker as a durable reconciliation receipt. It lets a relayer distinguish a
 committed transaction from a submission failure after losing the CLI response.
+Replay receipts receive a full TTL horizon when created. Session and source
+event reads performed inside an execution renew those entries before the
+operation commits; failed executions roll those renewals back atomically.
+New sessions cannot be registered more than 365 days into the future, keeping
+their maximum authority lifetime within the replay marker's TTL horizon.
 
 The current `execute_copy_op` records the policy-approved intent and consumes
 the budget without invoking a DEX. `execute_aquarius_standard_op` adds the
@@ -66,10 +74,10 @@ stellar contract build --package lumenlp-copy-policy --out-dir target/contracts
 ```
 
 The current local build artifact is
-`target/contracts/lumenlp_copy_policy.wasm`. It was built on 2026-09-11 with
-size 72,049 bytes and hash:
+`target/contracts/lumenlp_copy_policy.wasm`. It was built on 2026-09-12 with
+size 73,361 bytes and hash:
 
-`fa5da4a6b364312baba51a9c4e30ee41e27b4f14e86c4616c33dc9f90de632c3`
+`3824b5fe69db408487fec2324218f7df1cc8cbfb925b22eb29ef04bf69bbc2a8`
 
 The deployed v3 testnet instance below is the previous promotion-gated build.
 The Soroswap-gated build is deployed separately and remains isolated from

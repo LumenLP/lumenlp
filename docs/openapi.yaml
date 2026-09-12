@@ -600,7 +600,7 @@ components:
           items: { type: string }
         max_per_op_quote_xlm: { type: number }
         max_daily_quote_xlm: { type: number }
-        expires_at: { type: integer, format: int64, nullable: true }
+        expires_at: { type: integer, format: int64, nullable: true, description: Unix timestamp later than now and no more than 365 days in the future. }
     UpdateCopySession:
       type: object
       description: contract_address and contract_session_id must be supplied together and are verified on-chain. After binding, coefficient, include_claims, contract address, and session ID are immutable; create a new session to change the on-chain policy identity or terms.

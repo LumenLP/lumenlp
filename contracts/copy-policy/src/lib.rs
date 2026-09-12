@@ -9,6 +9,12 @@ use soroban_sdk::{
 const MAX_POOLS: u32 = 32;
 const COEFFICIENT_SCALE: u128 = 1_000_000;
 const MAX_COEFFICIENT_PPM: u32 = 10_000_000;
+const MAX_SESSION_DURATION_SECS: u64 = 365 * 24 * 60 * 60;
+// Keep policy state live for approximately the network's maximum one-year
+// window. If a network configures a smaller maximum, extension fails closed
+// instead of silently accepting a shorter replay-protection horizon.
+const POLICY_TTL_THRESHOLD: u32 = 1_000_000;
+const POLICY_TTL_EXTEND_TO: u32 = 6_312_000;
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -123,6 +129,18 @@ enum DataKey {
     VenueRouter(Symbol),
 }
 
+fn bump_instance_ttl(env: &Env) {
+    env.storage()
+        .instance()
+        .extend_ttl(POLICY_TTL_THRESHOLD, POLICY_TTL_EXTEND_TO);
+}
+
+fn bump_persistent_ttl(env: &Env, key: &DataKey) {
+    env.storage()
+        .persistent()
+        .extend_ttl(key, POLICY_TTL_THRESHOLD, POLICY_TTL_EXTEND_TO);
+}
+
 #[contract]
 pub struct CopyPolicy;
 
@@ -137,6 +155,7 @@ impl CopyPolicy {
         owner.require_auth();
         env.storage().instance().set(&DataKey::Owner, &owner);
         env.storage().instance().set(&DataKey::Relayer, &relayer);
+        bump_instance_ttl(&env);
         Ok(())
     }
 
@@ -179,6 +198,7 @@ impl CopyPolicy {
         quote: i128,
         ledger: u32,
     ) -> Result<(), Error> {
+        bump_instance_ttl(&env);
         let recorder: Address = env
             .storage()
             .instance()
@@ -193,6 +213,7 @@ impl CopyPolicy {
         }
         let key = DataKey::LeaderEvent(source_event_id);
         if env.storage().persistent().has(&key) {
+            bump_persistent_ttl(&env, &key);
             return Ok(());
         }
         let event = LeaderEvent {
@@ -206,6 +227,7 @@ impl CopyPolicy {
             recorded_at: env.ledger().timestamp(),
         };
         env.storage().persistent().set(&key, &event);
+        bump_persistent_ttl(&env, &key);
         Ok(())
     }
 
@@ -222,6 +244,7 @@ impl CopyPolicy {
         ledger: u32,
         claim_token: Address,
     ) -> Result<(), Error> {
+        bump_instance_ttl(&env);
         let recorder: Address = env
             .storage()
             .instance()
@@ -233,6 +256,7 @@ impl CopyPolicy {
         }
         let key = DataKey::LeaderEvent(source_event_id);
         if env.storage().persistent().has(&key) {
+            bump_persistent_ttl(&env, &key);
             return Ok(());
         }
         env.storage().persistent().set(
@@ -248,6 +272,7 @@ impl CopyPolicy {
                 recorded_at: env.ledger().timestamp(),
             },
         );
+        bump_persistent_ttl(&env, &key);
         Ok(())
     }
 
@@ -338,6 +363,7 @@ impl CopyPolicy {
             || max_per_op_quote <= 0
             || max_daily_quote <= 0
             || expires_at <= env.ledger().timestamp()
+            || expires_at > env.ledger().timestamp().saturating_add(MAX_SESSION_DURATION_SECS)
         {
             return Err(Error::InvalidLimit);
         }
@@ -353,7 +379,9 @@ impl CopyPolicy {
             daily_day: day(env.ledger().timestamp()),
             daily_used_quote: 0,
         };
-        env.storage().persistent().set(&DataKey::Session(session_id), &session);
+        let key = DataKey::Session(session_id);
+        env.storage().persistent().set(&key, &session);
+        bump_persistent_ttl(env, &key);
         Ok(())
     }
 
@@ -1085,6 +1113,7 @@ impl CopyPolicy {
     }
 
     fn owner(env: &Env) -> Result<Address, Error> {
+        bump_instance_ttl(env);
         env.storage()
             .instance()
             .get(&DataKey::Owner)
@@ -1092,6 +1121,7 @@ impl CopyPolicy {
     }
 
     fn relayer(env: &Env) -> Result<Address, Error> {
+        bump_instance_ttl(env);
         env.storage()
             .instance()
             .get(&DataKey::Relayer)
@@ -1099,17 +1129,17 @@ impl CopyPolicy {
     }
 
     fn load_session(env: &Env, session_id: u32) -> Result<Session, Error> {
-        env.storage()
-            .persistent()
-            .get(&DataKey::Session(session_id))
-            .ok_or(Error::SessionNotFound)
+        let key = DataKey::Session(session_id);
+        let session = env.storage().persistent().get(&key).ok_or(Error::SessionNotFound)?;
+        bump_persistent_ttl(env, &key);
+        Ok(session)
     }
 
     fn load_leader_event(env: &Env, source_event_id: &BytesN<32>) -> Result<LeaderEvent, Error> {
-        env.storage()
-            .persistent()
-            .get(&DataKey::LeaderEvent(source_event_id.clone()))
-            .ok_or(Error::EventNotFound)
+        let key = DataKey::LeaderEvent(source_event_id.clone());
+        let event = env.storage().persistent().get(&key).ok_or(Error::EventNotFound)?;
+        bump_persistent_ttl(env, &key);
+        Ok(event)
     }
 
     fn authorize_copy_op(
@@ -1157,9 +1187,9 @@ impl CopyPolicy {
         }
         session.daily_used_quote += quote;
         env.storage().persistent().set(&DataKey::Session(session_id), &session);
-        env.storage()
-            .persistent()
-            .set(&DataKey::Replay(session_id, source_event_id.clone()), &true);
+        let replay_key = DataKey::Replay(session_id, source_event_id.clone());
+        env.storage().persistent().set(&replay_key, &true);
+        bump_persistent_ttl(env, &replay_key);
         Ok(())
     }
 }
@@ -1217,7 +1247,7 @@ mod test {
     use {
         super::*,
         soroban_sdk::{
-            testutils::{Address as _, Events as _, Ledger as _},
+            testutils::{storage::Instance as _, storage::Persistent as _, Address as _, Events as _, Ledger as _},
             vec, Val,
         },
     };
@@ -1233,6 +1263,71 @@ mod test {
 
     #[contract]
     struct MockSoroswapRouter;
+
+    #[test]
+    fn active_policy_state_renews_near_expiry() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract = env.register(CopyPolicy, ());
+        let owner = Address::generate(&env);
+        let relayer = Address::generate(&env);
+        let recorder = Address::generate(&env);
+        let pool = Address::generate(&env);
+        let event_id = BytesN::from_array(&env, &[42; 32]);
+        let client = CopyPolicyClient::new(&env, &contract);
+
+        client.initialize(&owner, &relayer);
+        client.set_event_recorder(&recorder);
+        assert!(client
+            .try_register_session(
+                &41,
+                &owner,
+                &Vec::from_array(&env, [pool.clone()]),
+                &true,
+                &10,
+                &10,
+                &(MAX_SESSION_DURATION_SECS + 1),
+            )
+            .is_err());
+        client.register_session(
+            &42,
+            &owner,
+            &Vec::from_array(&env, [pool.clone()]),
+            &true,
+            &10,
+            &10,
+            &100_000,
+        );
+        client.record_leader_event(
+            &event_id,
+            &owner,
+            &pool,
+            &symbol_short!("deposit"),
+            &Vec::from_array(&env, [100u128]),
+            &10,
+            &1,
+        );
+
+        env.ledger().set_sequence_number(5_500_000);
+        client.execute_copy_op(&42, &event_id, &pool, &symbol_short!("deposit"), &10);
+
+        env.as_contract(&contract, || {
+            assert!(env.storage().instance().get_ttl() >= POLICY_TTL_EXTEND_TO - 1);
+            assert!(env.storage().persistent().get_ttl(&DataKey::Session(42)) >= POLICY_TTL_EXTEND_TO - 1);
+            assert!(
+                env.storage()
+                    .persistent()
+                    .get_ttl(&DataKey::LeaderEvent(event_id.clone()))
+                    >= POLICY_TTL_EXTEND_TO - 1
+            );
+            assert!(
+                env.storage()
+                    .persistent()
+                    .get_ttl(&DataKey::Replay(42, event_id.clone()))
+                    >= POLICY_TTL_EXTEND_TO - 1
+            );
+        });
+    }
 
     #[test]
     fn policy_owner_is_publicly_verifiable() {

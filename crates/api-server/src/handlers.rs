@@ -134,6 +134,11 @@ const WALLET_AUTH_TOKEN_SECS: i64 = 15 * 60;
 const WALLET_AUTH_ADDRESS_COOLDOWN_SECS: i64 = 3;
 const WALLET_AUTH_GLOBAL_WINDOW_SECS: i64 = 60;
 const WALLET_AUTH_GLOBAL_WINDOW_LIMIT: i64 = 300;
+const COPY_MAX_SESSION_SECS: i64 = 365 * 24 * 60 * 60;
+
+fn valid_copy_expiry(expires_at: i64, now: i64) -> bool {
+    expires_at > now && expires_at <= now.saturating_add(COPY_MAX_SESSION_SECS)
+}
 
 fn wallet_bearer_token(headers: &HeaderMap) -> Result<&str, axum::response::Response> {
     headers
@@ -3536,10 +3541,10 @@ async fn create_copy_session(
             .into_response();
     }
     if let Some(expires_at) = body.expires_at {
-        if expires_at <= Utc::now().timestamp() {
+        if !valid_copy_expiry(expires_at, Utc::now().timestamp()) {
             return (
                 StatusCode::BAD_REQUEST,
-                Json(json!({ "error": "expires_at must be in the future", "code": "bad_policy" })),
+                Json(json!({ "error": "expires_at must be within the next 365 days", "code": "bad_policy" })),
             )
                 .into_response();
         }
@@ -4417,6 +4422,14 @@ mod tests {
         assert!(!copy_session_expired(Some(101), 100));
         assert!(copy_session_expired(Some(100), 100));
         assert!(copy_session_expired(Some(99), 100));
+    }
+
+    #[test]
+    fn copy_session_expiry_is_limited_to_ttl_horizon() {
+        let now = 1_000;
+        assert!(!valid_copy_expiry(now, now));
+        assert!(valid_copy_expiry(now + COPY_MAX_SESSION_SECS, now));
+        assert!(!valid_copy_expiry(now + COPY_MAX_SESSION_SECS + 1, now));
     }
 
     #[test]

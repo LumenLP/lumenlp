@@ -12,7 +12,7 @@ LEADER="${LEADER:-alice}"
 POOL="${POOL:?Set POOL to one allowlisted testnet pool or pair}"
 SESSION_ID="${SESSION_ID:-42}"
 EVENT_ID="${EVENT_ID:-0000000000000000000000000000000000000000000000000000000000000042}"
-EXPIRY="${EXPIRY:-2000000000}"
+EXPIRY="${EXPIRY:-$(($(date +%s) + 30 * 24 * 60 * 60))}"
 
 if [[ "${STELLAR_NETWORK:-testnet}" != "testnet" ]]; then
   echo "Refusing to run: STELLAR_NETWORK must be testnet" >&2

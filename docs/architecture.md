@@ -540,6 +540,12 @@ The contract exposes these public methods:
 | `execute_phoenix_xyk_standard_op(...)` | relayer auth | Validate a Phoenix XYK deposit or withdrawal against the explicit XYK pool ABI; Stable pools are not accepted by this entry point. |
 | `execute_phoenix_stable_op(...)` | relayer auth | Validate a Phoenix Stable deposit or withdrawal against the Stable-specific amount and minimum-share ABI. |
 
+Submitted policy operations renew the contract instance/code and touched
+persistent session, source-event, and replay entries to the network's one-year
+TTL horizon. This keeps active sessions live and prevents a replay marker from
+quietly expiring while its session is still expected to enforce it. Read-only
+simulations do not substitute for a submitted renewal transaction.
+
 The `Session` state contains:
 
 ```text
