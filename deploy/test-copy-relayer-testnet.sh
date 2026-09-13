@@ -22,7 +22,8 @@ CREATE TABLE recorder_deliveries (
   updated_at INTEGER, PRIMARY KEY (source_event_id, contract_address)
 );
 CREATE TABLE copy_sessions (
-  id TEXT PRIMARY KEY, contract_address TEXT, contract_session_id INTEGER
+  id TEXT PRIMARY KEY, contract_address TEXT, contract_session_id INTEGER,
+  coefficient REAL NOT NULL
 );
 CREATE TABLE copy_ops (
   id TEXT PRIMARY KEY, session_id TEXT, source_event_id TEXT, pool_address TEXT,
@@ -37,8 +38,9 @@ INSERT INTO recorder_outbox VALUES
    'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM', 'deposit', NULL,
    '["10","20"]', '3000000', 124, 'pending', 0, NULL, 2, 2);
 INSERT INTO copy_sessions VALUES
-  ('session-a', 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM', 41),
-  ('session-b', 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM', 42);
+  ('session-a', 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM', 41, 0.5),
+  ('session-b', 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM', 42, 0.25),
+  ('session-c', 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM', 43, 0.3333339);
 INSERT INTO copy_ops VALUES
   ('op-a', 'session-a', 'event-1', 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM',
    'deposit', 1.5, '["50","100"]', 'pending', NULL, NULL, 1, 1),
@@ -136,5 +138,21 @@ assert_eq executed "$(sqlite3 "$db" "SELECT status FROM copy_ops WHERE id='op-e'
 assert_eq "testnet relayer recovered confirmed on-chain execution" "$(sqlite3 "$db" "SELECT note FROM copy_ops WHERE id='op-e'")" "recovery note"
 assert_eq submitted "$(sqlite3 "$db" "SELECT status FROM recorder_outbox WHERE source_event_id='event-4'")" "recovered outbox"
 assert_eq 1 "$(grep -c 'copy_executed --session_id' "$log")" "receipt query count"
+
+sqlite3 "$db" <<'SQL'
+INSERT INTO recorder_outbox VALUES
+  ('event-5', 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF',
+   'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM', 'deposit', NULL,
+   '["10","20"]', '10000000', 127, 'pending', 0, NULL, 6, 6);
+INSERT INTO copy_ops VALUES
+  ('op-f', 'session-c', 'event-5', 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM',
+   'deposit', 0.3333339, '["3","6"]', 'pending', NULL, NULL, 6, 6);
+SQL
+run_relayer
+assert_eq executed "$(sqlite3 "$db" "SELECT status FROM copy_ops WHERE id='op-f'")" "ppm-rounded quote operation"
+if ! grep -q 'execute_aquarius_standard_op --session_id 43 .*--quote 3333340 ' "$log"; then
+  echo "relayer quote did not match contract ppm rounding" >&2
+  exit 1
+fi
 
 echo "copy relayer multi-session test passed"

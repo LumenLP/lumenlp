@@ -40,6 +40,10 @@ not the raw Leader amounts stored in `recorder_outbox`.
 Deposits scale the event's token inputs. Withdrawals instead scale the event's
 `share_amount` and pass that value as the LP shares to burn; observed token
 outputs are display and quote data, never a substitute for shares.
+The relayer derives the submitted quote directly from the canonical integer
+quote and the session coefficient rounded to policy ppm. It does not convert
+the display-only floating-point scaled quote back into stroops, which could
+otherwise disagree with the contract by one stroop.
 
 The helper is intentionally single-instance. It takes an advisory `flock`
 next to the configured SQLite database before reading a pending operation.

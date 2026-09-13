@@ -59,7 +59,7 @@ SQL
 row="$(sqlite3 -separator '|' "$DATABASE_PATH" \
   "SELECT c.id, o.source_event_id, o.leader_address, o.pool_address, o.kind,
           o.claim_token, o.amounts_json, o.quote_stroops, o.ledger,
-          c.session_id, s.contract_session_id, c.status, c.scaled_quote_xlm,
+          c.session_id, s.contract_session_id, c.status, s.coefficient,
           c.scaled_amounts_json, COALESCE(d.status, 'pending')
      FROM recorder_outbox o
      JOIN copy_ops c ON c.source_event_id = o.source_event_id
@@ -78,7 +78,7 @@ if [[ -z "$row" ]]; then
   exit 0
 fi
 
-IFS='|' read -r op_id source_event_id leader pool kind claim_token amounts quote_stroops ledger session_id db_contract_session_id op_status scaled_quote_xlm scaled_amounts recorder_status <<< "$row"
+IFS='|' read -r op_id source_event_id leader pool kind claim_token amounts quote_stroops ledger session_id db_contract_session_id op_status coefficient scaled_amounts recorder_status <<< "$row"
 if [[ ! "$op_id" =~ ^[A-Za-z0-9._:-]+$ ]]; then
   echo "Unsupported Copy operation ID characters" >&2
   exit 1
@@ -124,7 +124,10 @@ else
 fi
 min_amounts_vec='["0","0"]'
 
-scaled_quote_stroops="$(python3 -c 'import decimal,sys; value=decimal.Decimal(sys.argv[1]); assert value.is_finite() and value>0, "scaled quote must be positive"; print(int((value*decimal.Decimal(10000000)).to_integral_value(rounding=decimal.ROUND_FLOOR)))' "$scaled_quote_xlm")"
+# Mirror the contract's fixed-point calculation exactly. Reconstructing this
+# value from the display-only REAL scaled_quote_xlm can lose one stroop when a
+# coefficient rounds to ppm (for example, 0.3333339 -> 333334 ppm).
+scaled_quote_stroops="$(python3 -c 'import decimal,sys; quote=int(sys.argv[1]); coefficient=decimal.Decimal(sys.argv[2]); assert quote>0, "source quote must be positive"; assert coefficient.is_finite() and coefficient>0, "coefficient must be positive"; ppm=int((coefficient*decimal.Decimal(1000000)).to_integral_value(rounding=decimal.ROUND_HALF_UP)); assert 1<=ppm<=10000000, "coefficient ppm is outside policy bounds"; scaled=quote*ppm//1000000; assert scaled>0, "scaled quote must be positive"; print(scaled)' "$quote_stroops" "$coefficient")"
 
 echo "Copy relayer candidate"
 echo "  source event: $source_event_id"
@@ -136,6 +139,7 @@ echo "  leader:       $leader"
 echo "  pool:         $pool"
 echo "  kind:         $kind"
 echo "  source quote: $quote_stroops stroops"
+echo "  coefficient:  $coefficient"
 echo "  scaled quote: $scaled_quote_stroops stroops"
 echo "  amounts:      $amounts_vec"
 
