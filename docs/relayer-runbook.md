@@ -52,6 +52,11 @@ submitting the same local queue row concurrently; on-chain replay protection
 remains a separate fail-closed safeguard. Set `COPY_RELAYER_LOCK_FILE` only
 when the database directory is not writable by the relayer user.
 
+Only operations belonging to locally active, unexpired sessions are eligible
+for submission. Pending rows for paused, stopped, or expired sessions remain
+auditable but cannot block later active sessions, and their undelivered source
+events are excluded from recorder-backlog health until the session resumes.
+
 Recorder delivery is tracked per source event and policy contract, while Copy
 execution is tracked per local operation/session. If several sessions follow
 the same Leader event, the canonical event is recorded once for that policy

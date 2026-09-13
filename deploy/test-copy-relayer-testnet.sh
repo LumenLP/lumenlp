@@ -23,7 +23,7 @@ CREATE TABLE recorder_deliveries (
 );
 CREATE TABLE copy_sessions (
   id TEXT PRIMARY KEY, contract_address TEXT, contract_session_id INTEGER,
-  coefficient REAL NOT NULL
+  coefficient REAL NOT NULL, status TEXT NOT NULL, expires_at INTEGER
 );
 CREATE TABLE copy_ops (
   id TEXT PRIMARY KEY, session_id TEXT, source_event_id TEXT, pool_address TEXT,
@@ -31,6 +31,12 @@ CREATE TABLE copy_ops (
   note TEXT, tx_hash TEXT, created_at INTEGER, updated_at INTEGER
 );
 INSERT INTO recorder_outbox VALUES
+  ('event-paused', 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF',
+   'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM', 'deposit', NULL,
+   '["1","2"]', '300000', 120, 'pending', 0, NULL, 0, 0),
+  ('event-expired', 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF',
+   'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM', 'deposit', NULL,
+   '["1","2"]', '300000', 121, 'pending', 0, NULL, 0, 0),
   ('event-1', 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF',
    'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM', 'deposit', NULL,
    '["100","200"]', '30000000', 123, 'pending', 0, NULL, 1, 1),
@@ -38,10 +44,16 @@ INSERT INTO recorder_outbox VALUES
    'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM', 'deposit', NULL,
    '["10","20"]', '3000000', 124, 'pending', 0, NULL, 2, 2);
 INSERT INTO copy_sessions VALUES
-  ('session-a', 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM', 41, 0.5),
-  ('session-b', 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM', 42, 0.25),
-  ('session-c', 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM', 43, 0.3333339);
+  ('session-paused', 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM', 40, 0.5, 'paused', NULL),
+  ('session-expired', 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM', 39, 0.5, 'active', 1),
+  ('session-a', 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM', 41, 0.5, 'active', NULL),
+  ('session-b', 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM', 42, 0.25, 'active', NULL),
+  ('session-c', 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM', 43, 0.3333339, 'active', NULL);
 INSERT INTO copy_ops VALUES
+  ('op-paused', 'session-paused', 'event-paused', 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM',
+   'deposit', 0.015, '["1","1"]', 'pending', NULL, NULL, 0, 0),
+  ('op-expired', 'session-expired', 'event-expired', 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM',
+   'deposit', 0.015, '["1","1"]', 'pending', NULL, NULL, 0, 0),
   ('op-a', 'session-a', 'event-1', 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM',
    'deposit', 1.5, '["50","100"]', 'pending', NULL, NULL, 1, 1),
   ('op-b', 'session-b', 'event-1', 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM',
@@ -94,6 +106,11 @@ run_relayer() {
 }
 
 run_relayer
+assert_eq pending "$(sqlite3 "$db" "SELECT status FROM copy_ops WHERE id='op-paused'")" "paused-session operation"
+assert_eq pending "$(sqlite3 "$db" "SELECT status FROM copy_ops WHERE id='op-expired'")" "expired-session operation"
+assert_eq cancelled "$(sqlite3 "$db" "SELECT status FROM recorder_outbox WHERE source_event_id='event-paused'")" "paused-session outbox"
+assert_eq cancelled "$(sqlite3 "$db" "SELECT status FROM recorder_outbox WHERE source_event_id='event-expired'")" "expired-session outbox"
+assert_eq 0 "$(grep -cE 'execute_aquarius_standard_op --session_id (39|40) ' "$log" || true)" "inactive execution count"
 assert_eq executed "$(sqlite3 "$db" "SELECT status FROM copy_ops WHERE id='op-a'")" "first operation"
 assert_eq pending "$(sqlite3 "$db" "SELECT status FROM copy_ops WHERE id='op-b'")" "second operation after first run"
 assert_eq pending "$(sqlite3 "$db" "SELECT status FROM recorder_outbox WHERE source_event_id='event-1'")" "outbox after first run"
@@ -154,5 +171,16 @@ if ! grep -q 'execute_aquarius_standard_op --session_id 43 .*--quote 3333340 ' "
   echo "relayer quote did not match contract ppm rounding" >&2
   exit 1
 fi
+
+sqlite3 "$db" "UPDATE copy_sessions SET status='active' WHERE id='session-paused';"
+if STELLAR_FAIL_EXECUTE=1 STELLAR_CONSUMED=false run_relayer 2>/dev/null; then
+  echo "failed resumed-session execution unexpectedly succeeded" >&2
+  exit 1
+fi
+assert_eq pending "$(sqlite3 "$db" "SELECT status FROM copy_ops WHERE id='op-paused'")" "resumed operation after failure"
+assert_eq pending "$(sqlite3 "$db" "SELECT status FROM recorder_outbox WHERE source_event_id='event-paused'")" "resumed-session outbox after failure"
+run_relayer
+assert_eq executed "$(sqlite3 "$db" "SELECT status FROM copy_ops WHERE id='op-paused'")" "resumed operation"
+assert_eq submitted "$(sqlite3 "$db" "SELECT status FROM recorder_outbox WHERE source_event_id='event-paused'")" "resumed-session outbox"
 
 echo "copy relayer multi-session test passed"

@@ -39,6 +39,17 @@ fi
 # perpetually backlogged once no executable operation references it.
 sqlite3 "$DATABASE_PATH" <<'SQL'
 UPDATE recorder_outbox
+   SET status = 'pending', updated_at = strftime('%s','now')
+ WHERE status = 'cancelled'
+   AND EXISTS (
+     SELECT 1 FROM copy_ops c
+     JOIN copy_sessions s ON s.id = c.session_id
+      WHERE c.source_event_id = recorder_outbox.source_event_id
+        AND c.status = 'pending'
+        AND s.status = 'active'
+        AND (s.expires_at IS NULL OR s.expires_at > strftime('%s','now'))
+   );
+UPDATE recorder_outbox
    SET status = CASE
          WHEN EXISTS (
            SELECT 1 FROM recorder_deliveries d
@@ -51,8 +62,11 @@ UPDATE recorder_outbox
  WHERE status = 'pending'
    AND NOT EXISTS (
      SELECT 1 FROM copy_ops c
+     JOIN copy_sessions s ON s.id = c.session_id
       WHERE c.source_event_id = recorder_outbox.source_event_id
         AND c.status = 'pending'
+        AND s.status = 'active'
+        AND (s.expires_at IS NULL OR s.expires_at > strftime('%s','now'))
    );
 SQL
 
@@ -69,6 +83,8 @@ row="$(sqlite3 -separator '|' "$DATABASE_PATH" \
       AND d.contract_address = s.contract_address
     WHERE c.status = 'pending'
       AND s.contract_address = '$POLICY'
+      AND s.status = 'active'
+      AND (s.expires_at IS NULL OR s.expires_at > strftime('%s','now'))
       AND COALESCE(d.status, 'pending') IN ('pending', 'recorded')
     ORDER BY o.created_at ASC
     LIMIT 1;")"
