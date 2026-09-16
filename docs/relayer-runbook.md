@@ -56,6 +56,10 @@ Only operations belonging to locally active, unexpired sessions are eligible
 for submission. Pending rows for paused, stopped, or expired sessions remain
 auditable but cannot block later active sessions, and their undelivered source
 events are excluded from recorder-backlog health until the session resumes.
+Within one session, pending operations retain source-event order. Across
+sessions, a failed execution moves to the back of the eligible queue so one
+unhealthy policy cannot starve unrelated sessions; its failure remains visible
+on the operation while the shared recorder delivery stays recorded.
 
 Recorder delivery is tracked per source event and policy contract, while Copy
 execution is tracked per local operation/session. If several sessions follow

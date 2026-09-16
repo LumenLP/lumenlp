@@ -86,7 +86,16 @@ row="$(sqlite3 -separator '|' "$DATABASE_PATH" \
       AND s.status = 'active'
       AND (s.expires_at IS NULL OR s.expires_at > strftime('%s','now'))
       AND COALESCE(d.status, 'pending') IN ('pending', 'recorded')
-    ORDER BY o.created_at ASC
+      AND NOT EXISTS (
+        SELECT 1 FROM copy_ops earlier
+         WHERE earlier.session_id = c.session_id
+           AND earlier.status = 'pending'
+           AND (
+             earlier.created_at < c.created_at
+             OR (earlier.created_at = c.created_at AND earlier.id < c.id)
+           )
+      )
+    ORDER BY c.updated_at ASC, c.created_at ASC, c.id ASC
     LIMIT 1;")"
 
 if [[ -z "$row" ]]; then
@@ -283,7 +292,20 @@ if ! output="$(invoke "$RELAYER_ACCOUNT" execute_aquarius_standard_op \
       exit 0
     fi
   fi
-  sqlite3 "$DATABASE_PATH" "UPDATE recorder_deliveries SET status='recorded', last_error='execute_copy_op failed', updated_at=strftime('%s','now') WHERE source_event_id='$source_event_id' AND contract_address='$POLICY';" || true
+  if ! sqlite3 "$DATABASE_PATH" <<SQL
+BEGIN;
+UPDATE copy_ops
+   SET note = 'testnet relayer execution failed; retry pending',
+       updated_at = strftime('%s','now')
+ WHERE id = '$op_id' AND status = 'pending';
+UPDATE recorder_deliveries
+   SET status = 'recorded', last_error = NULL, updated_at = strftime('%s','now')
+ WHERE source_event_id = '$source_event_id' AND contract_address = '$POLICY';
+COMMIT;
+SQL
+  then
+    echo "Execution failed and local retry metadata could not be updated" >&2
+  fi
   exit 1
 fi
 echo "$output"

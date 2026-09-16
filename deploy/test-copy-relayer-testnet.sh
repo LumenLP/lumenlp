@@ -183,4 +183,42 @@ run_relayer
 assert_eq executed "$(sqlite3 "$db" "SELECT status FROM copy_ops WHERE id='op-paused'")" "resumed operation"
 assert_eq submitted "$(sqlite3 "$db" "SELECT status FROM recorder_outbox WHERE source_event_id='event-paused'")" "resumed-session outbox"
 
+sqlite3 "$db" <<'SQL'
+INSERT INTO recorder_outbox VALUES
+  ('event-6', 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF',
+   'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM', 'deposit', NULL,
+   '["60","120"]', '12000000', 128, 'pending', 0, NULL, 7, 7),
+  ('event-7', 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF',
+   'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM', 'deposit', NULL,
+   '["70","140"]', '12000000', 129, 'pending', 0, NULL, 8, 8),
+  ('event-8', 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF',
+   'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM', 'deposit', NULL,
+   '["80","160"]', '12000000', 130, 'pending', 0, NULL, 9, 9);
+INSERT INTO copy_ops VALUES
+  ('op-g', 'session-a', 'event-6', 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM',
+   'deposit', 0.6, '["30","60"]', 'pending', NULL, NULL, 7, 7),
+  ('op-h', 'session-b', 'event-7', 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM',
+   'deposit', 0.3, '["17","35"]', 'pending', NULL, NULL, 8, 8),
+  ('op-i', 'session-a', 'event-8', 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM',
+   'deposit', 0.6, '["40","80"]', 'pending', NULL, NULL, 9, 9);
+SQL
+if STELLAR_FAIL_EXECUTE=1 STELLAR_CONSUMED=false run_relayer 2>/dev/null; then
+  echo "failed queue-head execution unexpectedly succeeded" >&2
+  exit 1
+fi
+assert_eq pending "$(sqlite3 "$db" "SELECT status FROM copy_ops WHERE id='op-g'")" "failed queue head"
+assert_eq "testnet relayer execution failed; retry pending" "$(sqlite3 "$db" "SELECT note FROM copy_ops WHERE id='op-g'")" "failed queue-head note"
+assert_eq "" "$(sqlite3 "$db" "SELECT COALESCE(last_error, '') FROM recorder_deliveries WHERE source_event_id='event-6'")" "recorder delivery after execution failure"
+
+run_relayer
+assert_eq executed "$(sqlite3 "$db" "SELECT status FROM copy_ops WHERE id='op-h'")" "other-session operation after failure"
+assert_eq pending "$(sqlite3 "$db" "SELECT status FROM copy_ops WHERE id='op-g'")" "failed queue head after fair rotation"
+assert_eq pending "$(sqlite3 "$db" "SELECT status FROM copy_ops WHERE id='op-i'")" "same-session successor after fair rotation"
+
+run_relayer
+assert_eq executed "$(sqlite3 "$db" "SELECT status FROM copy_ops WHERE id='op-g'")" "retried queue head"
+assert_eq pending "$(sqlite3 "$db" "SELECT status FROM copy_ops WHERE id='op-i'")" "same-session successor before head completion"
+run_relayer
+assert_eq executed "$(sqlite3 "$db" "SELECT status FROM copy_ops WHERE id='op-i'")" "same-session successor after head completion"
+
 echo "copy relayer multi-session test passed"
